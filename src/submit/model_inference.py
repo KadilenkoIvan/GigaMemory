@@ -1,18 +1,71 @@
+import os
+import sys
+import subprocess
+from pathlib import Path
 from collections import defaultdict
 from dataclasses import asdict
-from typing import List
+from typing import Dict, List, Tuple
+
+
+def _bootstrap_offline_dependencies() -> None:
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+    current_dir = Path(__file__).resolve().parent  # submit/
+    # Support both repository layout (src/submit/...) and final submit root (submit/)
+    # Try local libs first; also probe one level up if present
+    candidate_dirs = [
+        current_dir / "libs",
+        current_dir.parent / "libs",
+    ]
+    libs_dir = next((d for d in candidate_dirs if d.exists() and d.is_dir()), None)
+    if not libs_dir:
+        return
+
+    archives = list(libs_dir.glob("*.whl")) + list(libs_dir.glob("*.tar.gz"))
+    if not archives:
+        return
+
+    for pkg in sorted(archives):
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--no-index", "--find-links", str(libs_dir), str(pkg)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except Exception:
+            # Продолжить, даже если какой-то пакет не установился
+            pass
+
+
+_bootstrap_offline_dependencies()
 
 from transformers import AutoTokenizer
-#from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams
 
 from models import Message
 from submit_interface import ModelWithMemory
+
+# RAG components (relative imports inside submit package)
+from .rag.chunker import chunk_dialogue
+from .rag.embedder import Embedder
+from .rag.indexer import MemoryIndex
 
 
 class SubmitModelWithMemory(ModelWithMemory):
 
     def __init__(self, model_path: str) -> None:
+        # In-memory raw message store
         self.basic_memory = defaultdict(list)
+        # Track per-dialogue sequential message index for stable chunk_id
+        self._dialogue_msg_counters: Dict[str, int] = defaultdict(int)
+
+        # RAG config
+        self._chunk_tokens: int = 500
+        self._chunk_overlap: int = 50
+
+        # Model
         self.model_path = model_path
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
@@ -21,33 +74,129 @@ class SubmitModelWithMemory(ModelWithMemory):
         except Exception as e:
             raise RuntimeError(f"Ошибка загрузки модели {self.model_path}: {str(e)}")
 
+        # RAG runtime: embedder and FAISS index (lazy dim detection)
+        # Force embedder to use local path if provided via env or submit/rag/models
+        self._embedder = Embedder()
+        dim = len(self._embedder.encode(["test"])[0])
+        self._index = MemoryIndex(dim=dim)
+
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
+        # Append to raw memory
         self.basic_memory[dialogue_id] += messages
 
+        # Incrementally add to FAISS index with chunking and metadata
+        entries: List[dict] = []
+        entry_texts: List[str] = []
+
+        # Determine starting sequential message index for this dialogue
+        msg_seq_start = self._dialogue_msg_counters[dialogue_id]
+
+        for local_idx, msg in enumerate(messages):
+            msg_seq_idx = msg_seq_start + local_idx
+            base_text = f"{msg.role}: {msg.content}"
+            chunks = chunk_dialogue([base_text], max_tokens=self._chunk_tokens, overlap=self._chunk_overlap)
+            for ch_idx, ch_text in enumerate(chunks):
+                entries.append({
+                    "dialogue_id": dialogue_id,
+                    "chunk_id": f"{msg_seq_idx}:{ch_idx}",
+                    "role": msg.role,
+                    "text": ch_text,
+                })
+                entry_texts.append(ch_text)
+
+        # Advance dialogue counter by number of newly seen messages
+        self._dialogue_msg_counters[dialogue_id] += len(messages)
+
+        if entry_texts:
+            embeddings = self._embedder.encode(entry_texts)
+            self._index.add_entries(embeddings, entries)
+
+    def _search_dialogue_context(self, dialogue_id: str, question: str, k: int = 5) -> List[dict]:
+        """Retrieve top-k entries from the index restricted to the given dialogue_id."""
+        if not self._index.data:
+            return []
+
+        # Get more candidates and filter by dialogue_id
+        query_emb = self._embedder.encode([question])
+        # Ask for more to allow post-filtering
+        raw_k = min(len(self._index.data), max(k * 5, k))
+        D, I = self._index.search(query_emb, raw_k)
+
+        candidates: List[Tuple[float, dict]] = []
+        for idx, score in zip(I[0], D[0]):
+            if 0 <= idx < len(self._index.data):
+                entry = self._index.data[idx]
+                if entry.get("dialogue_id") == dialogue_id:
+                    candidates.append((float(score), entry))
+
+        # Sort by score desc (FAISS returns already sorted, but after filtering enforce order)
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return [e for _, e in candidates[:k]]
+
     def extract(self, dialogue_id: str) -> List[Message]:
-        memory = self.basic_memory.get(dialogue_id, [])
-        memory = [asdict(msg) for msg in memory]
-        memory = "\n".join([f"{msg['role']}: {msg['content']}" for msg in memory])
-        system_memory_prompt = "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход твоя история общения с пользователем." \
-                               "Пользователь разрешил использовать ее для ответа на вопрос. Используй историю диалога, чтобы ответить на вопрос.\n" \
-                               f"История диалога: \n{memory}"
+        # Build system prompt from top-k retrieved context for this dialogue
+        # Fallback to raw memory if index is empty
+        retrieved = self._search_dialogue_context(dialogue_id, question="", k=5)
+        if not retrieved:
+            memory = self.basic_memory.get(dialogue_id, [])
+            serialized = [asdict(msg) for msg in memory]
+            memory_text = "\n".join([f"{m['role']}: {m['content']}" for m in serialized])
+        else:
+            memory_text = "\n".join([f"{e.get('role')}: {e.get('text')}" for e in retrieved])
 
-        context_with_memory = [Message('system', system_memory_prompt)]
-
-        return context_with_memory
+        system_memory_prompt = (
+            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход твоя история общения с пользователем."
+            "Пользователь разрешил использовать ее для ответа на вопрос. Используй историю диалога, чтобы ответить на вопрос.\n"
+            f"История диалога: \n{memory_text}"
+        )
+        return [Message('system', system_memory_prompt)]
 
     def clear_memory(self, dialogue_id: str) -> None:
+        # Clear raw memory and counters
         self.basic_memory[dialogue_id] = []
+        self._dialogue_msg_counters[dialogue_id] = 0
+
+        # Remove dialogue entries from the index by rebuilding it
+        if not self._index.data:
+            return
+        remaining = [e for e in self._index.data if e.get("dialogue_id") != dialogue_id]
+        # Rebuild in-memory index from remaining entries
+        texts = [e.get("text", "") for e in remaining]
+        if texts:
+            embeddings = self._embedder.encode(texts)
+            # Reset index
+            dim = len(embeddings[0])
+            self._index = MemoryIndex(dim=dim)
+            self._index.add_entries(embeddings, remaining)
+        else:
+            # No entries remain
+            dim = len(self._embedder.encode(["test"])[0])
+            self._index = MemoryIndex(dim=dim)
 
     def answer_to_question(self, dialogue_id: str, question: str) -> str:
+        # 1) Rephrase the question for retrieval (query rewriting)
+        try:
+            rewritten = self._rewrite_query(dialogue_id, question)
+            retrieval_query = rewritten if rewritten else question
+        except Exception:
+            retrieval_query = question
+
+        # 2) Retrieve top-k relevant chunks for this dialogue and rewritten question
+        top_entries = self._search_dialogue_context(dialogue_id, retrieval_query, k=5)
+        context_text = "\n".join([f"{e.get('role')}: {e.get('text')}" for e in top_entries])
+
         user_promt = "Отвечай КРАТКО без предложений и размышлений, используй ТОЛЬКО ОДНО предложение для ответа.\n"
-        context = self.extract(dialogue_id)
+        system_prompt = (
+            "Используй релевантные фрагменты из памяти (RAG) ниже для ответа.\n"
+            f"Память (top-k):\n{context_text}\n"
+        )
+
+        context = [Message(role='system', content=system_prompt)]
         context.append(Message(
             role="user",
             content=user_promt + question
         ))
         answer = self._inference(context)
-
         return answer
 
     def _inference(self, messages: List[Message]) -> str:
@@ -63,3 +212,20 @@ class SubmitModelWithMemory(ModelWithMemory):
 
         except Exception as e:
             return f"Ошибка при инференсе локальной модели: {str(e)}"
+
+    def _rewrite_query(self, dialogue_id: str, question: str) -> str:
+        """
+        Переформулирует исходный вопрос в короткий запрос для поиска по памяти (RAG).
+        Сохраняет ключевые сущности, имена, числа. Не добавляет новых фактов.
+        """
+        instruction = (
+            "Переформулируй вопрос в краткий поисковый запрос для извлечения релевантных фрагментов из памяти (RAG). Не используй размышления."
+            "Сохраняй имена, числа и факты. Не добавляй новых сведений."
+            "Ответ верни одной строкой без пояснений."
+        )
+        context = [
+            Message(role='system', content=instruction),
+            Message(role='user', content=question),
+        ]
+        rewritten = self._inference(context)
+        return rewritten.strip()

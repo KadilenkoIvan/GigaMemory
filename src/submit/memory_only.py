@@ -1,11 +1,18 @@
+import sys
+from pathlib import Path
 from collections import defaultdict
 from dataclasses import asdict
 from typing import Dict, List
 import json
 
+# Ensure `src` is on sys.path when running this file directly
+_this_dir = Path(__file__).resolve()
+_src_dir = _this_dir.parents[1]  # .../src
+if str(_src_dir) not in sys.path:
+    sys.path.insert(0, str(_src_dir))
+
 from models import Message, Dialog
 from submit_interface import ModelWithMemory
-# avoid Windows cp1251 issues by reading with UTF-8 locally
 
 def _read_utf8(file_path: str) -> List[Dialog]:
     with open(file_path, "r", encoding="utf-8") as file:
@@ -68,20 +75,22 @@ def simulate_memory_from_file(input_file: str) -> Dict[str, str]:
 
 if __name__ == "__main__":
     import argparse
-    from rag.chunker import chunk_dialogue
-    from rag.embedder import Embedder
-    from rag.indexer import MemoryIndex
-    from rag.retriever import Retriever
+    from submit.rag.chunker import chunk_dialogue
+    from submit.rag.embedder import Embedder
+    from submit.rag.indexer import MemoryIndex
+    from submit.rag.retriever import Retriever
 
     parser = argparse.ArgumentParser(description="Simulate memory without LLM and optionally build/search RAG index")
     parser.add_argument("input_file", type=str, nargs="?", help="Path to jsonl dialogues file (required for build)")
     parser.add_argument("--max_preview", type=int, default=500, help="Max characters to print per dialog")
     # RAG options
     parser.add_argument("--build_index", action="store_true", help="Build FAISS index from dialogues")
-    parser.add_argument("--index_path", type=str, default="rag/index.faiss", help="Path to FAISS index file")
+    parser.add_argument("--index_path", type=str, default="src/submit/rag/index.faiss", help="Path to FAISS index file")
     parser.add_argument("--query", type=str, default=None, help="Query to search over built/loaded index")
     parser.add_argument("--k", type=int, default=5, help="Top-k results to retrieve")
     parser.add_argument("--embedder_model", type=str, default="all-MiniLM-L6-v2", help="SentenceTransformer model name")
+    parser.add_argument("--chunk_tokens", type=int, default=500, help="Max tokens (words) per chunk when building index")
+    parser.add_argument("--chunk_overlap", type=int, default=50, help="Overlap (words) between consecutive chunks")
     args = parser.parse_args()
 
     # Always: if input_file provided, show memory simulation preview
@@ -103,7 +112,7 @@ if __name__ == "__main__":
             messages = d.get_messages()
             for msg_idx, m in enumerate(messages):
                 base_text = f"{m.role}: {m.content}"
-                chunks = chunk_dialogue([base_text], max_tokens=500)
+                chunks = chunk_dialogue([base_text], max_tokens=args.chunk_tokens, overlap=args.chunk_overlap)
                 for ch_idx, ch_text in enumerate(chunks):
                     entries.append({
                         "dialogue_id": d.id,
