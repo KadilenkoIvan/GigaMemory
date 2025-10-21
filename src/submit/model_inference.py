@@ -132,9 +132,9 @@ class SubmitModelWithMemory(ModelWithMemory):
                     filtered_messages.append(current_msg)
                     
                     # Save corresponding assistant message if it exists
-                    if i + 1 < len(messages) and messages[i + 1].role == "assistant":
-                        filtered_messages.append(messages[i + 1])
-                        i += 1  # Skip assistant message in next iteration
+                    # if i + 1 < len(messages) and messages[i + 1].role == "assistant":
+                    #     filtered_messages.append(messages[i + 1])
+                    #     i += 1  # Skip assistant message in next iteration
             
             i += 1
         
@@ -201,7 +201,7 @@ class SubmitModelWithMemory(ModelWithMemory):
         # Format facts into readable text
         facts_text = ""
         if facts:
-            facts_text = "Структурированная информация о пользователе:\n"
+            facts_text = ""
             for category, values in facts.items():
                 facts_text += f"- {category}: {', '.join(values)}\n"
         

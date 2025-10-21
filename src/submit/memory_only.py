@@ -97,12 +97,12 @@ class MemoryOnlyModel(ModelWithMemory):
                     filtered_messages.append(current_msg)
                     
                     # Save corresponding assistant message if it exists
-                    if i + 1 < len(messages) and messages[i + 1].role == "assistant":
-                        filtered_messages.append(messages[i + 1])
-                        print(f"DST-✔️: Also saving assistant response: '{messages[i + 1].content[:200]}...'")
-                        i += 1  # Skip assistant message in next iteration
+            #         if i + 1 < len(messages) and messages[i + 1].role == "assistant":
+            #             filtered_messages.append(messages[i + 1])
+            #             print(f"DST-✔️: Also saving assistant response: '{messages[i + 1].content[:200]}...'")
+            #             i += 1  # Skip assistant message in next iteration
             
-            i += 1
+            # i += 1
         
         # If no messages to save after filtering, return early
         if not filtered_messages:
@@ -131,7 +131,7 @@ class MemoryOnlyModel(ModelWithMemory):
         # Format facts into readable text
         facts_text = ""
         if facts:
-            facts_text = "Структурированная информация о пользователе:\n"
+            facts_text = ""
             for category, values in facts.items():
                 facts_text += f"- {category}: {', '.join(values)}\n"
         
@@ -142,7 +142,7 @@ class MemoryOnlyModel(ModelWithMemory):
         
         system_memory_prompt = (
             "Тест без LLM. Ниже — накопленная структурированная информация и история диалога (после фильтрации DST).\n\n"
-            f"{facts_text}\n"
+            f"Структурированная информация о пользователе:\n{facts_text}\n"
             f"История диалога:\n{memory_text}"
         )
         return [Message(role="system", content=system_memory_prompt)]
@@ -197,10 +197,12 @@ if __name__ == "__main__":
     # Always: if input_file provided, show memory simulation preview
     if args.input_file:
         results = simulate_memory_from_file(args.input_file)
-        for did, text in results.items():
-            print(did)
-            preview = text[: args.max_preview]
-            print(preview, "..." if len(text) > len(preview) else "")
+        with open("memory_only_results.txt", "w", encoding="utf-8") as f:
+            for did, text in results.items():
+                f.write(f"{did}\n{text}\n")
+                print(did)
+                preview = text[: args.max_preview]
+                print(preview, "..." if len(text) > len(preview) else "")
 
     # Build index if requested
     if args.build_index:
