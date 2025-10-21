@@ -14,6 +14,14 @@ if str(_src_dir) not in sys.path:
 from models import Message, Dialog
 from submit_interface import ModelWithMemory
 
+# Import DST processor
+try:
+    from submit.DST.dst_processor import DSTProcessor, merge_facts
+except ImportError:
+    print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
+    DSTProcessor = None
+    merge_facts = None
+
 def _read_utf8(file_path: str) -> List[Dialog]:
     with open(file_path, "r", encoding="utf-8") as file:
         dialogs_data = [json.loads(line) for line in file]
@@ -24,24 +32,117 @@ class MemoryOnlyModel(ModelWithMemory):
 
     def __init__(self) -> None:
         self.basic_memory = defaultdict(list)
+        # Structured facts store per dialogue: {dialogue_id: {category: [values]}}
+        self.facts_memory: Dict[str, Dict[str, List[str]]] = defaultdict(dict)
+        # Initialize DST processor if available
+        self.dst_processor = None
+        if DSTProcessor is not None:
+            try:
+                self.dst_processor = DSTProcessor()
+                print("DST processor initialized successfully")
+            except Exception as e:
+                error_msg = f"Failed to initialize DST processor: {str(e)}"
+                print(error_msg)
+                import sys
+                sys.exit(121)  # Выход с кодом 121 при ошибке инициализации DST
+        else:
+            print("DST processor not found. Exiting with code 121.")
+            import sys
+            sys.exit(121)  # Выход с кодом 121, если DST процессор не найден
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
-        self.basic_memory[dialogue_id] += messages
+        # Filter messages using DST processor if available and extract structured facts
+        # DST checks only user messages, but saves both user and assistant messages from the pair
+        filtered_messages = []
+        
+        # Process messages in pairs (user, assistant)
+        i = 0
+        while i < len(messages):
+            current_msg = messages[i]
+            
+            # Find user message and its corresponding assistant response
+            if current_msg.role == "user":
+                # Check with DST if user message should be saved
+                should_save = False
+                reason = ""
+                
+                if self.dst_processor is not None:
+                    try:
+                        should_save, reason = self.dst_processor.should_save_message(current_msg)
+                        if should_save:
+                            print(f"DST-✔️: Saving message: '{current_msg.content[:200]}...' - {reason}")
+                            
+                            # Extract structured facts
+                            extracted_facts = self.dst_processor.extract_facts(current_msg)
+                            if extracted_facts:
+                                print(f"DST-🔍: Extracted facts: {extracted_facts}")
+                                # Merge new facts with existing facts
+                                self.facts_memory[dialogue_id] = merge_facts(
+                                    self.facts_memory[dialogue_id], 
+                                    extracted_facts
+                                )
+                                print(f"DST-💾: Updated facts for dialogue {dialogue_id}: {self.facts_memory[dialogue_id]}")
+                        else:
+                            print(f"DST-❌: Skipping message: '{current_msg.content[:200]}...' - {reason}")
+                    except Exception as e:
+                        print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
+                        should_save = True
+                else:
+                    # If DST processor is not available, save all user messages
+                    should_save = True
+                    print(f"No DST: Saving user message by default: '{current_msg.content[:200]}...'")
+                
+                if should_save:
+                    # Save user message
+                    filtered_messages.append(current_msg)
+                    
+                    # Save corresponding assistant message if it exists
+                    if i + 1 < len(messages) and messages[i + 1].role == "assistant":
+                        filtered_messages.append(messages[i + 1])
+                        print(f"DST-✔️: Also saving assistant response: '{messages[i + 1].content[:200]}...'")
+                        i += 1  # Skip assistant message in next iteration
+            
+            i += 1
+        
+        # If no messages to save after filtering, return early
+        if not filtered_messages:
+            print("No messages to save after DST filtering")
+            return
+            
+        # Append filtered messages to memory
+        self.basic_memory[dialogue_id] += filtered_messages
+        print(f"Added {len(filtered_messages)} messages to memory for dialogue {dialogue_id}")
 
     def clear_memory(self, dialogue_id: str) -> None:
         self.basic_memory[dialogue_id] = []
+        self.facts_memory[dialogue_id] = {}
+        print(f"Cleared memory for dialogue {dialogue_id}")
 
     def answer_to_question(self, dialogue_id: str, question: str) -> str:
         # В тестовом режиме модель не вызывается. Возвращаем заглушку.
         num_msgs = len(self.basic_memory.get(dialogue_id, []))
-        return f"[MEMORY_ONLY] msgs={num_msgs}; q='{question[:200]}'"
+        num_facts = len(self.facts_memory.get(dialogue_id, {}))
+        return f"[MEMORY_ONLY] msgs={num_msgs}; facts={num_facts}; q='{question[:200]}'"
 
     def extract(self, dialogue_id: str) -> List[Message]:
+        # Build system prompt from structured facts
+        facts = self.facts_memory.get(dialogue_id, {})
+        
+        # Format facts into readable text
+        facts_text = ""
+        if facts:
+            facts_text = "Структурированная информация о пользователе:\n"
+            for category, values in facts.items():
+                facts_text += f"- {category}: {', '.join(values)}\n"
+        
+        # Also include raw conversation history
         memory = self.basic_memory.get(dialogue_id, [])
         serialized = [asdict(msg) for msg in memory]
         memory_text = "\n".join([f"{m['role']}: {m['content']}" for m in serialized])
+        
         system_memory_prompt = (
-            "Тест без LLM. Ниже — накопленная история диалога.\n"
+            "Тест без LLM. Ниже — накопленная структурированная информация и история диалога (после фильтрации DST).\n\n"
+            f"{facts_text}\n"
             f"История диалога:\n{memory_text}"
         )
         return [Message(role="system", content=system_memory_prompt)]
@@ -82,10 +183,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Simulate memory without LLM and optionally build/search RAG index")
     parser.add_argument("input_file", type=str, nargs="?", help="Path to jsonl dialogues file (required for build)")
-    parser.add_argument("--max_preview", type=int, default=500, help="Max characters to print per dialog")
+    parser.add_argument("--max_preview", type=int, default=2000, help="Max characters to print per dialog")
     # RAG options
     parser.add_argument("--build_index", action="store_true", help="Build FAISS index from dialogues")
-    parser.add_argument("--index_path", type=str, default="src/submit/rag/index.faiss", help="Path to FAISS index file")
+    parser.add_argument("--index_path", type=str, default="src/submit/rag/index.npy", help="Path to FAISS index file")
     parser.add_argument("--query", type=str, default=None, help="Query to search over built/loaded index")
     parser.add_argument("--k", type=int, default=5, help="Top-k results to retrieve")
     parser.add_argument("--embedder_model", type=str, default="all-MiniLM-L6-v2", help="SentenceTransformer model name")

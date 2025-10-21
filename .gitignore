@@ -216,3 +216,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 torch-2.8.0-cp313-cp313-win_amd64.whl
+**/models/
+*.zip
