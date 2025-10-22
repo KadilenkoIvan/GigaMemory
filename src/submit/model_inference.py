@@ -42,7 +42,7 @@ def _bootstrap_offline_dependencies() -> None:
 _bootstrap_offline_dependencies()
 
 from transformers import AutoTokenizer
-#from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams
 
 from models import Message
 from submit_interface import ModelWithMemory
