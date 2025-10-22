@@ -22,7 +22,9 @@ class SubmitModelWithMemory(ModelWithMemory):
             raise RuntimeError(f"Ошибка загрузки модели {self.model_path}: {str(e)}")
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
-        self.basic_memory[dialogue_id] += messages
+        # Save only user messages
+        user_messages = [msg for msg in messages if msg.role == "user"] # ИЗМЕНЕНО
+        self.basic_memory[dialogue_id] += user_messages # ИЗМЕНЕНО
 
     def extract(self, dialogue_id: str) -> List[Message]:
         memory = self.basic_memory.get(dialogue_id, [])
