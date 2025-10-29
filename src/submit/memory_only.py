@@ -15,11 +15,11 @@ from models import Message, Dialog
 from submit_interface import ModelWithMemory
 
 # Import DST processor
-try:
-    from submit.DST.dst_processor import DSTProcessor
-except ImportError:
-    print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
-    DSTProcessor = None
+# try:
+from submit.DST.dst_processor import DSTProcessor
+# except ImportError:
+#     print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
+#     DSTProcessor = None
 
 def _read_utf8(file_path: str) -> List[Dialog]:
     with open(file_path, "r", encoding="utf-8") as file:
@@ -63,25 +63,28 @@ class MemoryOnlyModel(ModelWithMemory):
                 
                 if self.dst_processor is not None:
                     try:
-                        should_save, reason = self.dst_processor.should_save_message(msg)
+                        last5 = [m.content for m in self.basic_memory.get(dialogue_id, []) if m.role == "user"][-5:]
+                        memory_summary = "\n".join(last5)
+                        should_save, reason = self.dst_processor.should_save_message(msg, memory_summary)
                         if should_save:
-                            print(f"DST-✔️: Saving message: '{msg.content[:200]}...' - {reason}")
-                            # In memory_only mode: Simulate fact extraction with placeholder
-                            # In real system, main LLM would extract facts here
-                            print(f"LLM-🔍: [SIMULATED] Would extract facts from: '{msg.content[:100]}...'")
+                            print(f"DST-✔️: Saving message: '{msg.content}")
                         else:
-                            print(f"DST-❌: Skipping message: '{msg.content[:200]}...' - {reason}")
+                            print(f"DST-❌: Skipping message: '{msg.content}")
                     except Exception as e:
                         print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
                         should_save = True
                 else:
                     # If DST processor is not available, save all user messages
                     should_save = True
-                    print(f"No DST: Saving user message by default: '{msg.content[:200]}...'")
+                    print(f"No DST: Saving user message by default: '{msg.content}'")
                 
                 if should_save:
-                    # Save only user message (no assistant response)
-                    filtered_messages.append(msg)
+                    # Save only user message (no assistant response) with indices
+                    session_id = msg.session_id or "unknown"
+                    existing = self.basic_memory.get(dialogue_id, [])
+                    next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+                    augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+                    filtered_messages.append(augmented)
         
         # If no messages to save after filtering, return early
         if not filtered_messages:
@@ -91,6 +94,14 @@ class MemoryOnlyModel(ModelWithMemory):
         # Append filtered messages to memory
         self.basic_memory[dialogue_id] += filtered_messages
         print(f"Added {len(filtered_messages)} messages to memory for dialogue {dialogue_id}")
+
+    # Optional: helper to keep parity with main model (not used above to preserve batch append)
+    def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
+        session_id = msg.session_id or "unknown"
+        existing = self.basic_memory.get(dialogue_id, [])
+        next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+        augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+        self.basic_memory[dialogue_id].append(augmented)
 
     def clear_memory(self, dialogue_id: str) -> None:
         self.basic_memory[dialogue_id] = []

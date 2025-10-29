@@ -56,29 +56,29 @@ from .rag.indexer import MemoryIndex
 from .DST.dst_processor import DSTProcessor
 
 
-def _merge_facts(existing_facts: Dict[str, List[str]], new_facts: Dict[str, List[str]]) -> Dict[str, List[str]]:
-    """
-    Merge new facts into existing facts dictionary without overwriting.
+# def _merge_facts(existing_facts: Dict[str, List[str]], new_facts: Dict[str, List[str]]) -> Dict[str, List[str]]:
+#     """
+#     Merge new facts into existing facts dictionary without overwriting.
     
-    Args:
-        existing_facts: Current facts dictionary
-        new_facts: New facts to add
+#     Args:
+#         existing_facts: Current facts dictionary
+#         new_facts: New facts to add
         
-    Returns:
-        Merged facts dictionary
-    """
-    merged = existing_facts.copy()
+#     Returns:
+#         Merged facts dictionary
+#     """
+#     merged = existing_facts.copy()
     
-    for category, values in new_facts.items():
-        if category in merged:
-            # Создаём set один раз и добавляем только уникальные
-            existing_set = set(merged[category])
-            new_unique = [v for v in values if v not in existing_set]
-            merged[category].extend(new_unique)
-        else:
-            merged[category] = values.copy()
+#     for category, values in new_facts.items():
+#         if category in merged:
+#             # Создаём set один раз и добавляем только уникальные
+#             existing_set = set(merged[category])
+#             new_unique = [v for v in values if v not in existing_set]
+#             merged[category].extend(new_unique)
+#         else:
+#             merged[category] = values.copy()
     
-    return merged
+#     return merged
 
 
 class SubmitModelWithMemory(ModelWithMemory):
@@ -86,8 +86,8 @@ class SubmitModelWithMemory(ModelWithMemory):
     def __init__(self, model_path: str) -> None:
         # In-memory raw message store
         self.basic_memory = defaultdict(list)
-        # Structured facts store per dialogue: {dialogue_id: {category: [values]}}
-        self.facts_memory: Dict[str, Dict[str, List[str]]] = defaultdict(dict)
+        # Structured facts/summarization disabled — DST only decides save/skip
+        # self.facts_memory: Dict[str, Dict[str, List[str]]] = defaultdict(dict)
         # Track per-dialogue sequential message index for stable chunk_id
         self._dialogue_msg_counters: Dict[str, int] = defaultdict(int)
 
@@ -119,48 +119,21 @@ class SubmitModelWithMemory(ModelWithMemory):
             sys.exit(121)  # Выход с кодом 121 при ошибке инициализации DST
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
-        # Filter messages using DST and extract facts using main LLM
-        # DST checks only user messages (true/false)
-        # Main LLM extracts structured facts from important messages
-        filtered_messages = []
-        
+        # DST-only filtering. Save full user messages with indices; no summarization/extraction.
         for msg in messages:
-            # Only process user messages with DST
-            if msg.role == "user":
-                should_save = False
-                
-                if self._dst_processor is not None:
-                    try:
-                        should_save, _ = self._dst_processor.should_save_message(msg)
-                        
-                        # If message is important, extract facts using main LLM
-                        if should_save:
-                            try:
-                                extracted_facts = self._extract_facts_with_llm(msg.content)
-                                # Merge new facts with existing facts
-                                self.facts_memory[dialogue_id] = _merge_facts(
-                                    self.facts_memory[dialogue_id],
-                                    extracted_facts
-                                )
-                            except Exception as e:
-                                print(f"Warning: Fact extraction failed: {str(e)}. Skipping fact extraction.")
-                    except Exception as e:
-                        print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
-                        should_save = True
-                else:
-                    # If DST processor is not available, save all user messages
+            if msg.role != "user":
+                continue
+            should_save = True if self._dst_processor is None else False
+            if self._dst_processor is not None:
+                try:
+                    last5 = [m.content for m in self.basic_memory.get(dialogue_id, []) if m.role == "user"][-5:]
+                    memory_summary = "\n".join(last5)
+                    should_save, _ = self._dst_processor.should_save_message(msg, memory_summary)
+                except Exception as e:
+                    print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
                     should_save = True
-                
-                if should_save:
-                    # Save only user message (no assistant response)
-                    filtered_messages.append(msg)
-        
-        # If no messages to save after filtering, return early
-        if not filtered_messages:
-            return
-            
-        # Append to raw memory (only filtered messages)
-        self.basic_memory[dialogue_id] += filtered_messages
+            if should_save:
+                self._save_full_message_with_indices(dialogue_id, msg)
 
         # Incrementally add to FAISS index with chunking and metadata
         # entries: List[dict] = []
@@ -212,15 +185,8 @@ class SubmitModelWithMemory(ModelWithMemory):
         return [e for _, e in candidates[:k]]
 
     def extract(self, dialogue_id: str) -> List[Message]:
-        # Build system prompt from structured facts
-        facts = self.facts_memory.get(dialogue_id, {})
-        
-        # Format facts into readable text
+        # Facts/summarization disabled — rely on raw history only
         facts_text = ""
-        if facts:
-            facts_text = ""
-            for category, values in facts.items():
-                facts_text += f"- {category}: {', '.join(values)}\n"
         
         # Also include raw conversation history
         memory = self.basic_memory.get(dialogue_id, [])
@@ -228,9 +194,11 @@ class SubmitModelWithMemory(ModelWithMemory):
         memory_text = "\n".join([f"{m['role']}: {m['content']}" for m in serialized])
 
         system_memory_prompt = (
-            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход структурированная информация о пользователе и история общения.\n"
-            "Пользователь разрешил использовать эту информацию для ответа на вопрос.\n\n"
-            f"Информация о пользователе:\n{facts_text}\n"
+            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход история общения пользователя с важной информацией о нём.\n"
+            "Пользователь разрешил использовать эту информацию для ответа на вопрос. Если в предоставленной информации нет ответа на вопрос, скажи что ты не знаешь.\n\n"
+            "Полная информация может находиться в нескольких сообщениях. Используй все сообщения для ответа на вопрос."
+            "ВАЖНО: Память упорядочена по времени (от старых к новым). В сообщениях есть два числа, записанных в формате: [сессия : сообщение в сессии]"
+            "Если информация противоречит друг другу, используй БОЛЕЕ ПОЗДНИЕ сообщения - они актуальнее и заменяют старые. Наиболее приоритетные сообщения имеют больший номер сессии, и сообщения в сесии.\n\n"
             f"История диалога:\n{memory_text}"
         )
         return [Message('system', system_memory_prompt)]
@@ -240,7 +208,7 @@ class SubmitModelWithMemory(ModelWithMemory):
         self.basic_memory[dialogue_id] = []
         self._dialogue_msg_counters[dialogue_id] = 0
         # Clear structured facts
-        self.facts_memory[dialogue_id] = {}
+        #self.facts_memory[dialogue_id] = {}
 
         # Remove dialogue entries from the index by rebuilding it
         if not self._index.data:
@@ -258,6 +226,14 @@ class SubmitModelWithMemory(ModelWithMemory):
             # No entries remain
             dim = len(self._embedder.encode(["test"])[0])
             self._index = MemoryIndex(dim=dim)
+
+    def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
+        """Save the full message, augmenting content with session and message indices."""
+        session_id = msg.session_id or "unknown"
+        existing = self.basic_memory.get(dialogue_id, [])
+        next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+        augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+        self.basic_memory[dialogue_id].append(augmented)
 
     def answer_to_question(self, dialogue_id: str, question: str) -> str:
         # 1) Rephrase the question for retrieval (query rewriting)
@@ -305,116 +281,116 @@ class SubmitModelWithMemory(ModelWithMemory):
         except Exception as e:
             return f"Ошибка при инференсе локальной модели: {str(e)}"
     
-    def _extract_facts_with_llm(self, message_content: str) -> Dict[str, List[str]]:
-        """
-        Extract structured facts from user message using main LLM.
+    # def _extract_facts_with_llm(self, message_content: str) -> Dict[str, List[str]]:
+    #     """
+    #     Extract structured facts from user message using main LLM.
         
-        Args:
-            message_content: The content of the user message
+    #     Args:
+    #         message_content: The content of the user message
             
-        Returns:
-            Dictionary with extracted facts in format {category: [values]}
-        """
-        system_prompt = """Ты — модуль извлечения структурированной информации из реплик пользователя.
-                    Твоя задача — вычленить важную информацию о пользователе и представить её в формате "категория: значение".
+    #     Returns:
+    #         Dictionary with extracted facts in format {category: [values]}
+    #     """
+    #     system_prompt = """Ты — модуль извлечения структурированной информации из реплик пользователя.
+    #                 Твоя задача — вычленить важную информацию о пользователе и представить её в формате "категория: значение".
 
-                    Категории информации:
-                    - интересы: увлечения и интересы пользователя
-                    - хобби: занятия в свободное время
-                    - спорт: спортивные увлечения
-                    - работа: профессия, род занятий
-                    - место_жительства: город, страна
-                    - возраст: возраст пользователя
-                    - привычки: регулярные действия, привычки
-                    - планы: намерения, будущие действия
-                    - факты: любые другие важные факты о пользователе
-                    - имя: имя пользователя
-                    - семья: информация о семье (жена, муж, дети и т.д.)
-                    - питомцы: домашние животные
-                    - образование: учебные заведения, специальность
-                    - навыки: умения, навыки
-                    - предпочтения: предпочтения в еде, музыке и т.д.
+    #                 Категории информации:
+    #                 - интересы: увлечения и интересы пользователя
+    #                 - хобби: занятия в свободное время
+    #                 - спорт: спортивные увлечения
+    #                 - работа: профессия, род занятий
+    #                 - место_жительства: город, страна
+    #                 - возраст: возраст пользователя
+    #                 - привычки: регулярные действия, привычки
+    #                 - планы: намерения, будущие действия
+    #                 - факты: любые другие важные факты о пользователе
+    #                 - имя: имя пользователя
+    #                 - семья: информация о семье (жена, муж, дети и т.д.)
+    #                 - питомцы: домашние животные
+    #                 - образование: учебные заведения, специальность
+    #                 - навыки: умения, навыки
+    #                 - предпочтения: предпочтения в еде, музыке и т.д.
 
-                    Инструкции:
-                    1. Извлекай ТОЛЬКО явную информацию из реплики.
-                    2. Формат ответа: каждая категория с новой строки в формате "категория: значение1, значение2".
-                    3. Если в реплике несколько категорий, выведи все.
-                    4. Если категория не подходит, используй "факты".
-                    5. Не добавляй пояснений, только факты в указанном формате.
+    #                 Инструкции:
+    #                 1. Извлекай ТОЛЬКО явную информацию из реплики.
+    #                 2. Формат ответа: каждая категория с новой строки в формате "категория: значение1, значение2".
+    #                 3. Если в реплике несколько категорий, выведи все.
+    #                 4. Если категория не подходит, используй "факты".
+    #                 5. Не добавляй пояснений, только факты в указанном формате.
 
-                    Примеры:
+    #                 Примеры:
 
-                    Пользователь: "Я футболист."
-                    Твой ответ:
-                    спорт: футбол
+    #                 Пользователь: "Я футболист."
+    #                 Твой ответ:
+    #                 спорт: футбол
 
-                    Пользователь: "Классно! Возьму его с собой на баскетбол"
-                    Твой ответ:
-                    спорт: баскетбол
+    #                 Пользователь: "Классно! Возьму его с собой на баскетбол"
+    #                 Твой ответ:
+    #                 спорт: баскетбол
 
-                    Пользователь: "Завтра пойду на пробежку, а потом встречусь с друзьями"
-                    Твой ответ:
-                    спорт: бег
-                    планы: встреча с друзьями
+    #                 Пользователь: "Завтра пойду на пробежку, а потом встречусь с друзьями"
+    #                 Твой ответ:
+    #                 спорт: бег
+    #                 планы: встреча с друзьями
 
-                    Пользователь: "Я в Москву переехал, не думал что тут такие квартиры дорогие"
-                    Твой ответ:
-                    место_жительства: Москва
+    #                 Пользователь: "Я в Москву переехал, не думал что тут такие квартиры дорогие"
+    #                 Твой ответ:
+    #                 место_жительства: Москва
 
-                    Пользователь: "У меня есть кот Барсик и собака Лайка"
-                    Твой ответ:
-                    питомцы: кот Барсик, собака Лайка
-                    """
+    #                 Пользователь: "У меня есть кот Барсик и собака Лайка"
+    #                 Твой ответ:
+    #                 питомцы: кот Барсик, собака Лайка
+    #                 """
         
-        user_prompt = f"Реплика пользователя: \"{message_content}\""
+    #     user_prompt = f"Реплика пользователя: \"{message_content}\""
         
-        # Call main LLM for extraction
-        messages = [
-            Message(role='system', content=system_prompt),
-            Message(role='user', content=user_prompt)
-        ]
+    #     # Call main LLM for extraction
+    #     messages = [
+    #         Message(role='system', content=system_prompt),
+    #         Message(role='user', content=user_prompt)
+    #     ]
         
-        response = self._inference(messages)
+    #     response = self._inference(messages)
         
-        # Parse response into facts dictionary
-        facts = self._parse_facts_response(response)
+    #     # Parse response into facts dictionary
+    #     facts = self._parse_facts_response(response)
         
-        return facts
+    #     return facts
     
-    def _parse_facts_response(self, response: str) -> Dict[str, List[str]]:
-        """
-        Parse LLM response into structured facts dictionary.
+    # def _parse_facts_response(self, response: str) -> Dict[str, List[str]]:
+    #     """
+    #     Parse LLM response into structured facts dictionary.
         
-        Args:
-            response: The LLM's response with facts
+    #     Args:
+    #         response: The LLM's response with facts
             
-        Returns:
-            Dictionary with facts in format {category: [values]}
-        """
-        facts: Dict[str, List[str]] = {}
+    #     Returns:
+    #         Dictionary with facts in format {category: [values]}
+    #     """
+    #     facts: Dict[str, List[str]] = {}
         
-        # Parse line by line
-        lines = response.strip().split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line or ':' not in line:
-                continue
+    #     # Parse line by line
+    #     lines = response.strip().split('\n')
+    #     for line in lines:
+    #         line = line.strip()
+    #         if not line or ':' not in line:
+    #             continue
             
-            # Split by first colon
-            parts = line.split(':', 1)
-            if len(parts) != 2:
-                continue
+    #         # Split by first colon
+    #         parts = line.split(':', 1)
+    #         if len(parts) != 2:
+    #             continue
             
-            category = parts[0].strip().lower()
-            values_str = parts[1].strip()
+    #         category = parts[0].strip().lower()
+    #         values_str = parts[1].strip()
             
-            # Split values by comma
-            values = [v.strip() for v in values_str.split(',') if v.strip()]
+    #         # Split values by comma
+    #         values = [v.strip() for v in values_str.split(',') if v.strip()]
             
-            if values:
-                facts[category] = values
+    #         if values:
+    #             facts[category] = values
         
-        return facts
+    #     return facts
 
     def _rewrite_query(self, dialogue_id: str, question: str) -> str:
         """
