@@ -217,4 +217,5 @@ __marimo__/
 
 torch-2.8.0-cp313-cp313-win_amd64.whl
 **/models/
+**/models2/
 *.zip

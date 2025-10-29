@@ -16,10 +16,11 @@ from submit_interface import ModelWithMemory
 
 # Import DST processor
 try:
-    from submit.DST.dst_processor import DSTProcessor
+    from DST.dst_processor import DSTProcessor, DSTAction
 except ImportError:
     print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
     DSTProcessor = None
+    DSTAction = None
 
 def _read_utf8(file_path: str) -> List[Dialog]:
     with open(file_path, "r", encoding="utf-8") as file:
@@ -31,8 +32,8 @@ class MemoryOnlyModel(ModelWithMemory):
 
     def __init__(self) -> None:
         self.basic_memory = defaultdict(list)
-        # Structured facts store per dialogue: {dialogue_id: {category: [values]}}
-        self.facts_memory: Dict[str, Dict[str, List[str]]] = defaultdict(dict)
+        # Summarized facts store per dialogue: {dialogue_id: [fact1, fact2, ...]}
+        self.facts_memory: Dict[str, List[str]] = defaultdict(list)
         # Initialize DST processor if available
         self.dst_processor = None
         if DSTProcessor is not None:
@@ -50,69 +51,88 @@ class MemoryOnlyModel(ModelWithMemory):
             sys.exit(121)  # Выход с кодом 121, если DST процессор не найден
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
-        # Filter messages using DST processor if available
-        # DST checks only user messages (true/false)
-        # Fact extraction would use main LLM (but in test mode we skip it)
-        filtered_messages = []
+        # Process messages using DST with memory history (test mode)
+        # DST determines action: NO_ACTION, UPDATE, or DELETE_AND_UPDATE
+        # In test mode, we simulate LLM fact extraction
         
         for msg in messages:
             # Only process user messages with DST
-            if msg.role == "user":
-                should_save = False
-                reason = ""
-                
-                if self.dst_processor is not None:
-                    try:
-                        should_save, reason = self.dst_processor.should_save_message(msg)
-                        if should_save:
-                            print(f"DST-✔️: Saving message: '{msg.content[:200]}...' - {reason}")
-                            # In memory_only mode: Simulate fact extraction with placeholder
-                            # In real system, main LLM would extract facts here
-                            print(f"LLM-🔍: [SIMULATED] Would extract facts from: '{msg.content[:100]}...'")
-                        else:
-                            print(f"DST-❌: Skipping message: '{msg.content[:200]}...' - {reason}")
-                    except Exception as e:
-                        print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
-                        should_save = True
-                else:
-                    # If DST processor is not available, save all user messages
-                    should_save = True
-                    print(f"No DST: Saving user message by default: '{msg.content[:200]}...'")
-                
-                if should_save:
-                    # Save only user message (no assistant response)
-                    filtered_messages.append(msg)
-        
-        # If no messages to save after filtering, return early
-        if not filtered_messages:
-            print("No messages to save after DST filtering")
-            return
+            if msg.role != "user":
+                continue
             
-        # Append filtered messages to memory
-        self.basic_memory[dialogue_id] += filtered_messages
-        print(f"Added {len(filtered_messages)} messages to memory for dialogue {dialogue_id}")
+            if self.dst_processor is None:
+                # Fallback: save all user messages
+                self._save_full_message_with_indices(dialogue_id, msg)
+                print(f"No DST: Saving user message by default: '{msg.content}...'")
+                continue
+            
+            try:
+                # Determine action based on the current message and up to 5 last saved user messages
+                last5 = [m.content for m in self.basic_memory.get(dialogue_id, []) if m.role == "user"][-5:]
+                memory_summary = "\n".join(last5)
+                action, reason = self.dst_processor.determine_action(msg.content, memory_summary)
+                
+                if action == DSTAction.NO_ACTION:
+                    print(f"DST-❌ NO_ACTION: '{msg.content}' - {reason}")
+                    continue
+                
+                elif action == DSTAction.UPDATE:
+                    print(f"DST-✔️ UPDATE: '{msg.content}' - {reason}")
+                    # Save full message without summarization
+                    self._save_full_message_with_indices(dialogue_id, msg)
+                        
+            except Exception as e:
+                print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
+                self._save_full_message_with_indices(dialogue_id, msg)
+    
+    def _format_memory_for_dst(self, dialogue_id: str) -> str:
+        """
+        Format current memory into concise summary for DST (test mode).
+        
+        Args:
+            dialogue_id: The dialogue identifier
+            
+        Returns:
+            Formatted memory string
+        """
+        facts = self.facts_memory.get(dialogue_id, [])
+        if not facts:
+            return ""
+        
+        # Join all facts with semicolons
+        return "; ".join(facts)
 
     def clear_memory(self, dialogue_id: str) -> None:
         self.basic_memory[dialogue_id] = []
-        self.facts_memory[dialogue_id] = {}
+        self.facts_memory[dialogue_id] = []
         print(f"Cleared memory for dialogue {dialogue_id}")
+
+    def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
+        """Save the full message, augmenting content with session and message indices."""
+        session_id = msg.session_id or "unknown"
+        # Determine next message index for this dialogue/session
+        existing = self.basic_memory.get(dialogue_id, [])
+        next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id) + 1
+        # Augment content
+        augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+        self.basic_memory[dialogue_id].append(augmented)
 
     def answer_to_question(self, dialogue_id: str, question: str) -> str:
         # В тестовом режиме модель не вызывается. Возвращаем заглушку.
         num_msgs = len(self.basic_memory.get(dialogue_id, []))
-        num_facts = len(self.facts_memory.get(dialogue_id, {}))
+        num_facts = len(self.facts_memory.get(dialogue_id, []))
         return f"[MEMORY_ONLY] msgs={num_msgs}; facts={num_facts}; q='{question[:200]}'"
 
     def extract(self, dialogue_id: str) -> List[Message]:
-        # Build system prompt from structured facts
-        facts = self.facts_memory.get(dialogue_id, {})
+        # Build system prompt from summarized facts
+        facts = self.facts_memory.get(dialogue_id, [])
         
         # Format facts into readable text
         facts_text = ""
         if facts:
-            facts_text = "Структурированная информация о пользователе (извлечена основной LLM):\n"
-            for category, values in facts.items():
-                facts_text += f"- {category}: {', '.join(values)}\n"
+            facts_text = "Краткие факты о пользователе (суммаризированы DST):\n"
+            for i, fact in enumerate(facts, 1):
+                facts_text += f"{i}. {fact}\n"
         
         # Also include raw conversation history
         memory = self.basic_memory.get(dialogue_id, [])
@@ -120,7 +140,8 @@ class MemoryOnlyModel(ModelWithMemory):
         memory_text = "\n".join([f"{m['role']}: {m['content']}" for m in serialized])
         
         system_memory_prompt = (
-            "Тест без LLM. Ниже — накопленная структурированная информация и история диалога (после фильтрации DST).\n\n"
+            "Тест без LLM. Ниже — накопленная краткая информация и история диалога (после фильтрации DST).\n\n"
+            "ВАЖНО: Факты упорядочены по времени (от старых к новым). Более поздние факты актуальнее и заменяют старые.\n\n"
             f"{facts_text}\n"
             f"История диалога:\n{memory_text}"
         )

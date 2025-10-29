@@ -6,7 +6,7 @@ from sentence_transformers import SentenceTransformer
 
 
 class Embedder:
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-mpnet-base-v2"):
         """
         Инициализирует эмбеддер в офлайн-режиме:
         - Если переменная окружения RAG_EMBEDDER_PATH указывает на локальную папку модели — используем её.
