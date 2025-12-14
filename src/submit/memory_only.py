@@ -16,11 +16,10 @@ from submit_interface import ModelWithMemory
 
 # Import DST processor
 try:
-    from submit.DST.dst_processor import DSTProcessor, merge_facts
+    from submit.DST.dst_processor import DSTProcessor
 except ImportError:
     print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
     DSTProcessor = None
-    merge_facts = None
 
 def _read_utf8(file_path: str) -> List[Dialog]:
     with open(file_path, "r", encoding="utf-8") as file:
@@ -51,58 +50,37 @@ class MemoryOnlyModel(ModelWithMemory):
             sys.exit(121)  # Выход с кодом 121, если DST процессор не найден
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
-        # Filter messages using DST processor if available and extract structured facts
-        # DST checks only user messages, but saves both user and assistant messages from the pair
+        # Filter messages using DST processor if available.
+        # Save only user messages, augmented with [session:msg_index].
         filtered_messages = []
         
-        # Process messages in pairs (user, assistant)
-        i = 0
-        while i < len(messages):
-            current_msg = messages[i]
-            
-            # Find user message and its corresponding assistant response
-            if current_msg.role == "user":
-                # Check with DST if user message should be saved
-                should_save = False
-                reason = ""
-                
-                if self.dst_processor is not None:
-                    try:
-                        should_save, reason = self.dst_processor.should_save_message(current_msg)
-                        if should_save:
-                            print(f"DST-✔️: Saving message: '{current_msg.content[:200]}...' - {reason}")
-                            
-                            # Extract structured facts
-                            extracted_facts = self.dst_processor.extract_facts(current_msg)
-                            if extracted_facts:
-                                print(f"DST-🔍: Extracted facts: {extracted_facts}")
-                                # Merge new facts with existing facts
-                                self.facts_memory[dialogue_id] = merge_facts(
-                                    self.facts_memory[dialogue_id], 
-                                    extracted_facts
-                                )
-                                print(f"DST-💾: Updated facts for dialogue {dialogue_id}: {self.facts_memory[dialogue_id]}")
-                        else:
-                            print(f"DST-❌: Skipping message: '{current_msg.content[:200]}...' - {reason}")
-                    except Exception as e:
-                        print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
-                        should_save = True
-                else:
-                    # If DST processor is not available, save all user messages
+        for current_msg in messages:
+            if current_msg.role != "user":
+                continue
+            should_save = False
+            reason = ""
+            if self.dst_processor is not None:
+                try:
+                    should_save, reason = self.dst_processor.should_save_message(current_msg)
+                    if should_save:
+                        print(f"DST-✔️: Saving message: '{current_msg.content}'")
+                    else:
+                        print(f"DST-❌: Skipping message: '{current_msg.content}'")
+                except Exception as e:
+                    print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
                     should_save = True
-                    print(f"No DST: Saving user message by default: '{current_msg.content[:200]}...'")
-                
-                if should_save:
-                    # Save user message
-                    filtered_messages.append(current_msg)
-                    
-                    # Save corresponding assistant message if it exists
-                    if i + 1 < len(messages) and messages[i + 1].role == "assistant":
-                        filtered_messages.append(messages[i + 1])
-                        print(f"DST-✔️: Also saving assistant response: '{messages[i + 1].content[:200]}...'")
-                        i += 1  # Skip assistant message in next iteration
+            else:
+                # If DST processor is not available, save all user messages
+                should_save = True
+                print(f"No DST: Saving user message by default: '{current_msg.content}'")
             
-            i += 1
+            if should_save:
+                # Save only user message (no assistant) with indices
+                session_id = current_msg.session_id or "unknown"
+                existing = self.basic_memory.get(dialogue_id, [])
+                next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == current_msg.session_id and m.role == 'user') + 1
+                augmented = Message(role=current_msg.role, content=f"[{session_id}:{next_idx}] {current_msg.content}", session_id=current_msg.session_id)
+                filtered_messages.append(augmented)
         
         # If no messages to save after filtering, return early
         if not filtered_messages:
@@ -183,7 +161,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Simulate memory without LLM and optionally build/search RAG index")
     parser.add_argument("input_file", type=str, nargs="?", help="Path to jsonl dialogues file (required for build)")
-    parser.add_argument("--max_preview", type=int, default=2000, help="Max characters to print per dialog")
+    parser.add_argument("--max_preview", type=int, default=20000000, help="Max characters to print per dialog")
     # RAG options
     parser.add_argument("--build_index", action="store_true", help="Build FAISS index from dialogues")
     parser.add_argument("--index_path", type=str, default="src/submit/rag/index.npy", help="Path to FAISS index file")
@@ -199,7 +177,7 @@ if __name__ == "__main__":
         results = simulate_memory_from_file(args.input_file)
         for did, text in results.items():
             print(did)
-            preview = text[: args.max_preview]
+            preview = text
             print(preview, "..." if len(text) > len(preview) else "")
 
     # Build index if requested

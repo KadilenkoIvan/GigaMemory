@@ -29,15 +29,12 @@ class DSTProcessor:
         self.model_path = model_path
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path, 
-                trust_remote_code=True,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
-            ).to(self.device)
-        except Exception as e:
-            raise RuntimeError(f"Ошибка загрузки модели DST {self.model_path}: {str(e)}")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path, 
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+        ).to(self.device)
     
     def should_save_message(self, message: Message) -> Tuple[bool, str]:
         """
@@ -100,7 +97,7 @@ class DSTProcessor:
                     Твоя задача — анализировать каждую реплику пользователя и решать, стоит ли сохранять её как важную информацию о пользователе.
 
                     Действия:
-                    - "true" — если реплика содержит информацию о пользователе: его интересы, хобби, род занятий, спортивные увлечения, место проживания, возраст, привычки, вредные привычки, намерения, планы, факты о себе, возможные будущие действия. Даже если это выражено неявно, например: "О, это хороший совет, попробую взять его с собой на футбол." это важно, т.к. пользователь занимается футболом. 
+                    - "true" — если реплика содержит информацию о пользователе: его интересы, хобби, род занятий, спортивные увлечения, место проживания, возраст, упоминания родственников и друзей, имущество пользователся, транспорт, привычки, вредные привычки, намерения, планы, факты о себе, возможные будущие действия. Даже если это выражено неявно, например: "О, это хороший совет, попробую взять его с собой на футбол." это важно, т.к. пользователь занимается футболом. 
                     - "false" — если реплика не содержит информации о пользователе (например, пустые фразы, шутки, общие вопросы, комментарии без фактов).
 
                     Инструкции:

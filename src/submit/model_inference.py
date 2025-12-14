@@ -42,15 +42,15 @@ def _bootstrap_offline_dependencies() -> None:
 _bootstrap_offline_dependencies()
 
 from transformers import AutoTokenizer
-#from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams
 
 from models import Message
 from submit_interface import ModelWithMemory
 
 # RAG components (relative imports inside submit package)
-from .rag.chunker import chunk_dialogue
-from .rag.embedder import Embedder
-from .rag.indexer import MemoryIndex
+# from .rag.chunker import chunk_dialogue
+# from .rag.embedder import Embedder
+# from .rag.indexer import MemoryIndex
 
 # DST component
 from .DST.dst_processor import DSTProcessor, merge_facts
@@ -62,13 +62,13 @@ class SubmitModelWithMemory(ModelWithMemory):
         # In-memory raw message store (original messages)
         self.basic_memory = defaultdict(list)
         # Structured facts store per dialogue: {dialogue_id: {category: [values]}}
-        self.facts_memory: Dict[str, Dict[str, List[str]]] = defaultdict(dict)
+        #self.facts_memory: Dict[str, Dict[str, List[str]]] = defaultdict(dict)
         # Track per-dialogue sequential message index for stable chunk_id
         self._dialogue_msg_counters: Dict[str, int] = defaultdict(int)
 
         # RAG config
-        self._chunk_tokens: int = 500
-        self._chunk_overlap: int = 50
+        # self._chunk_tokens: int = 500
+        # self._chunk_overlap: int = 50
 
         # Model
         self.model_path = model_path
@@ -81,17 +81,12 @@ class SubmitModelWithMemory(ModelWithMemory):
 
         # RAG runtime: embedder and FAISS index (lazy dim detection)
         # Force embedder to use local path if provided via env or submit/rag/models
-        self._embedder = Embedder()
-        dim = len(self._embedder.encode(["test"])[0])
-        self._index = MemoryIndex(dim=dim)
+        # self._embedder = Embedder()
+        # dim = len(self._embedder.encode(["test"])[0])
+        # self._index = MemoryIndex(dim=dim)
         
         # Initialize DST processor
-        try:
-            self._dst_processor = DSTProcessor()
-        except Exception as e:
-            error_msg = f"Failed to initialize DST processor: {str(e)}"
-            print(error_msg)
-            sys.exit(121)  # Выход с кодом 121 при ошибке инициализации DST
+        self._dst_processor = DSTProcessor()
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
         # Filter messages using DST processor and extract structured facts
@@ -99,51 +94,21 @@ class SubmitModelWithMemory(ModelWithMemory):
         filtered_messages = []
         
         # Process messages in pairs (user, assistant)
-        i = 0
-        while i < len(messages):
-            current_msg = messages[i]
-            
-            # Find user message and its corresponding assistant response
-            if current_msg.role == "user":
-                # Check with DST if user message should be saved
-                should_save = False
+        for msg in messages:
+            if msg.role != "user":
+                continue
                 
-                if self._dst_processor is not None:
-                    try:
-                        should_save, _ = self._dst_processor.should_save_message(current_msg)
-                        
-                        # If message contains important info, extract structured facts
-                        if should_save:
-                            extracted_facts = self._dst_processor.extract_facts(current_msg)
-                            # Merge new facts with existing facts
-                            self.facts_memory[dialogue_id] = merge_facts(
-                                self.facts_memory[dialogue_id], 
-                                extracted_facts
-                            )
-                    except Exception as e:
-                        print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
-                        should_save = True
-                else:
-                    # If DST processor is not available, save all user messages
+            if self._dst_processor is not None:
+                try:
+                    should_save, _ = self._dst_processor.should_save_message(current_msg)
+                except Exception as e:
+                    print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
                     should_save = True
-                
-                if should_save:
-                    # Save user message
-                    filtered_messages.append(current_msg)
-                    
-                    # Save corresponding assistant message if it exists
-                    if i + 1 < len(messages) and messages[i + 1].role == "assistant":
-                        filtered_messages.append(messages[i + 1])
-                        i += 1  # Skip assistant message in next iteration
+            else:
+                should_save = True
             
-            i += 1
-        
-        # If no messages to save after filtering, return early
-        if not filtered_messages:
-            return
-            
-        # Append to raw memory (only filtered messages)
-        self.basic_memory[dialogue_id] += filtered_messages
+            if should_save:
+                self._save_full_message_with_indices(dialogue_id, msg)
 
         # Incrementally add to FAISS index with chunking and metadata
         # entries: List[dict] = []
@@ -171,6 +136,13 @@ class SubmitModelWithMemory(ModelWithMemory):
         # if entry_texts:
         #     embeddings = self._embedder.encode(entry_texts)
         #     self._index.add_entries(embeddings, entries)
+    def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
+        """Save the full message, augmenting content with session and message indices."""
+        session_id = msg.session_id or "unknown"
+        existing = self.basic_memory.get(dialogue_id, [])
+        next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+        augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+        self.basic_memory[dialogue_id].append(augmented)
 
     def _search_dialogue_context(self, dialogue_id: str, question: str, k: int = 5) -> List[dict]:
         """Retrieve top-k entries from the index restricted to the given dialogue_id."""
@@ -196,14 +168,14 @@ class SubmitModelWithMemory(ModelWithMemory):
 
     def extract(self, dialogue_id: str) -> List[Message]:
         # Build system prompt from structured facts
-        facts = self.facts_memory.get(dialogue_id, {})
+        # facts = self.facts_memory.get(dialogue_id, {})
         
-        # Format facts into readable text
-        facts_text = ""
-        if facts:
-            facts_text = "Структурированная информация о пользователе:\n"
-            for category, values in facts.items():
-                facts_text += f"- {category}: {', '.join(values)}\n"
+        # # Format facts into readable text
+        # facts_text = ""
+        # if facts:
+        #     facts_text = "Структурированная информация о пользователе:\n"
+        #     for category, values in facts.items():
+        #         facts_text += f"- {category}: {', '.join(values)}\n"
         
         # Also include raw conversation history
         memory = self.basic_memory.get(dialogue_id, [])
@@ -211,9 +183,13 @@ class SubmitModelWithMemory(ModelWithMemory):
         memory_text = "\n".join([f"{m['role']}: {m['content']}" for m in serialized])
 
         system_memory_prompt = (
-            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход структурированная информация о пользователе и история общения.\n"
-            "Пользователь разрешил использовать эту информацию для ответа на вопрос.\n\n"
-            f"Информация о пользователе:\n{facts_text}\n"
+            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход история общения пользователя с его сообщениями, которые содержат информацию о нём.\n"
+            "Пользователь разрешил использовать эту информацию для ответа на вопрос. Если в предоставленной информации нет ответа на вопрос, скажи что ты не знаешь."
+            "НО! Помни, информация может быть в представлена косвенной. Например, \"Хороший совет, возьму его с собой на футбол\" - здесь прямо не говорится, что пользователь занимается футболом, но это упоминается косвенно, значит - пользователь занимается футболом.\n\n"
+            "Полная информация может находиться в нескольких сообщениях. Используй все сообщения с информацией, относящейся к вопросу для ответа.\n"
+            "ВАЖНО: Память упорядочена по времени (от старых к новым). В сообщениях есть два числа, записанных в формате: [сессия : сообщение в сессии]"
+            "Если информация противоречит друг другу, используй БОЛЕЕ ПОЗДНИЕ сообщения - они актуальнее и заменяют старые. Наиболее приоритетные сообщения имеют больший номер сессии, и сообщения в сессии."
+            "НО! так стоит делать, ТОЛЬКО если пользователь напрямую упомянул в одном из сообщений, что прошлая информация устарела, или это видно из контеста, иначе, это дополняющая друг друга информация.\n\n"
             f"История диалога:\n{memory_text}"
         )
         return [Message('system', system_memory_prompt)]
@@ -223,24 +199,24 @@ class SubmitModelWithMemory(ModelWithMemory):
         self.basic_memory[dialogue_id] = []
         self._dialogue_msg_counters[dialogue_id] = 0
         # Clear structured facts
-        self.facts_memory[dialogue_id] = {}
+        #self.facts_memory[dialogue_id] = {}
 
         # Remove dialogue entries from the index by rebuilding it
-        if not self._index.data:
-            return
-        remaining = [e for e in self._index.data if e.get("dialogue_id") != dialogue_id]
-        # Rebuild in-memory index from remaining entries
-        texts = [e.get("text", "") for e in remaining]
-        if texts:
-            embeddings = self._embedder.encode(texts)
-            # Reset index
-            dim = len(embeddings[0])
-            self._index = MemoryIndex(dim=dim)
-            self._index.add_entries(embeddings, remaining)
-        else:
-            # No entries remain
-            dim = len(self._embedder.encode(["test"])[0])
-            self._index = MemoryIndex(dim=dim)
+        # if not self._index.data:
+        #     return
+        # remaining = [e for e in self._index.data if e.get("dialogue_id") != dialogue_id]
+        # # Rebuild in-memory index from remaining entries
+        # texts = [e.get("text", "") for e in remaining]
+        # if texts:
+        #     embeddings = self._embedder.encode(texts)
+        #     # Reset index
+        #     dim = len(embeddings[0])
+        #     self._index = MemoryIndex(dim=dim)
+        #     self._index.add_entries(embeddings, remaining)
+        # else:
+        #     # No entries remain
+        #     dim = len(self._embedder.encode(["test"])[0])
+        #     self._index = MemoryIndex(dim=dim)
 
     def answer_to_question(self, dialogue_id: str, question: str) -> str:
         # 1) Rephrase the question for retrieval (query rewriting)
