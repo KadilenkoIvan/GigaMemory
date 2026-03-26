@@ -15,7 +15,7 @@ from models import Message, Dialog
 from submit_interface import ModelWithMemory
 
 # Import DST processor
-# try:
+
 from submit.DST.dst_processor import DSTProcessor
 # except ImportError:
 #     print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")

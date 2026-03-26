@@ -48,9 +48,9 @@ from models import Message
 from submit_interface import ModelWithMemory
 
 # RAG components (relative imports inside submit package)
-from .rag.chunker import chunk_dialogue
-from .rag.embedder import Embedder
-from .rag.indexer import MemoryIndex
+# from .rag.chunker import chunk_dialogue
+# from .rag.embedder import Embedder
+# from .rag.indexer import MemoryIndex
 
 # DST component
 from .DST.dst_processor import DSTProcessor
@@ -92,8 +92,8 @@ class SubmitModelWithMemory(ModelWithMemory):
         self._dialogue_msg_counters: Dict[str, int] = defaultdict(int)
 
         # RAG config
-        self._chunk_tokens: int = 500
-        self._chunk_overlap: int = 50
+        # self._chunk_tokens: int = 500
+        # self._chunk_overlap: int = 50
 
         # Model
         self.model_path = model_path
@@ -106,17 +106,12 @@ class SubmitModelWithMemory(ModelWithMemory):
 
         # RAG runtime: embedder and FAISS index (lazy dim detection)
         # Force embedder to use local path if provided via env or submit/rag/models
-        self._embedder = Embedder()
-        dim = len(self._embedder.encode(["test"])[0])
-        self._index = MemoryIndex(dim=dim)
+        # self._embedder = Embedder()
+        # dim = len(self._embedder.encode(["test"])[0])
+        # self._index = MemoryIndex(dim=dim)
         
         # Initialize DST processor
-        try:
-            self._dst_processor = DSTProcessor()
-        except Exception as e:
-            error_msg = f"Failed to initialize DST processor: {str(e)}"
-            print(error_msg)
-            sys.exit(121)  # Выход с кодом 121 при ошибке инициализации DST
+        self._dst_processor = DSTProcessor()
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
         # DST-only filtering. Save full user messages with indices; no summarization/extraction.
@@ -161,6 +156,13 @@ class SubmitModelWithMemory(ModelWithMemory):
         # if entry_texts:
         #     embeddings = self._embedder.encode(entry_texts)
         #     self._index.add_entries(embeddings, entries)
+    def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
+        """Save the full message, augmenting content with session and message indices."""
+        session_id = msg.session_id or "unknown"
+        existing = self.basic_memory.get(dialogue_id, [])
+        next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+        augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+        self.basic_memory[dialogue_id].append(augmented)
 
     def _search_dialogue_context(self, dialogue_id: str, question: str, k: int = 5) -> List[dict]:
         """Retrieve top-k entries from the index restricted to the given dialogue_id."""
@@ -194,11 +196,13 @@ class SubmitModelWithMemory(ModelWithMemory):
         memory_text = "\n".join([f"{m['role']}: {m['content']}" for m in serialized])
 
         system_memory_prompt = (
-            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход история общения пользователя с важной информацией о нём.\n"
-            "Пользователь разрешил использовать эту информацию для ответа на вопрос. Если в предоставленной информации нет ответа на вопрос, скажи что ты не знаешь.\n\n"
-            "Полная информация может находиться в нескольких сообщениях. Используй все сообщения для ответа на вопрос."
+            "Твоя задача - ответить на вопрос пользователя. Для этого тебе подается на вход история общения пользователя с его сообщениями, которые содержат информацию о нём.\n"
+            "Пользователь разрешил использовать эту информацию для ответа на вопрос. Если в предоставленной информации нет ответа на вопрос, скажи что ты не знаешь."
+            "НО! Помни, информация может быть в представлена косвенной. Например, \"Хороший совет, возьму его с собой на футбол\" - здесь прямо не говорится, что пользователь занимается футболом, но это упоминается косвенно, значит - пользователь занимается футболом.\n\n"
+            "Полная информация может находиться в нескольких сообщениях. Используй все сообщения с информацией, относящейся к вопросу для ответа.\n"
             "ВАЖНО: Память упорядочена по времени (от старых к новым). В сообщениях есть два числа, записанных в формате: [сессия : сообщение в сессии]"
-            "Если информация противоречит друг другу, используй БОЛЕЕ ПОЗДНИЕ сообщения - они актуальнее и заменяют старые. Наиболее приоритетные сообщения имеют больший номер сессии, и сообщения в сесии.\n\n"
+            "Если информация противоречит друг другу, используй БОЛЕЕ ПОЗДНИЕ сообщения - они актуальнее и заменяют старые. Наиболее приоритетные сообщения имеют больший номер сессии, и сообщения в сессии."
+            "НО! так стоит делать, ТОЛЬКО если пользователь напрямую упомянул в одном из сообщений, что прошлая информация устарела, или это видно из контеста, иначе, это дополняющая друг друга информация.\n\n"
             f"История диалога:\n{memory_text}"
         )
         return [Message('system', system_memory_prompt)]
@@ -211,21 +215,21 @@ class SubmitModelWithMemory(ModelWithMemory):
         #self.facts_memory[dialogue_id] = {}
 
         # Remove dialogue entries from the index by rebuilding it
-        if not self._index.data:
-            return
-        remaining = [e for e in self._index.data if e.get("dialogue_id") != dialogue_id]
-        # Rebuild in-memory index from remaining entries
-        texts = [e.get("text", "") for e in remaining]
-        if texts:
-            embeddings = self._embedder.encode(texts)
-            # Reset index
-            dim = len(embeddings[0])
-            self._index = MemoryIndex(dim=dim)
-            self._index.add_entries(embeddings, remaining)
-        else:
-            # No entries remain
-            dim = len(self._embedder.encode(["test"])[0])
-            self._index = MemoryIndex(dim=dim)
+        # if not self._index.data:
+        #     return
+        # remaining = [e for e in self._index.data if e.get("dialogue_id") != dialogue_id]
+        # # Rebuild in-memory index from remaining entries
+        # texts = [e.get("text", "") for e in remaining]
+        # if texts:
+        #     embeddings = self._embedder.encode(texts)
+        #     # Reset index
+        #     dim = len(embeddings[0])
+        #     self._index = MemoryIndex(dim=dim)
+        #     self._index.add_entries(embeddings, remaining)
+        # else:
+        #     # No entries remain
+        #     dim = len(self._embedder.encode(["test"])[0])
+        #     self._index = MemoryIndex(dim=dim)
 
     def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
         """Save the full message, augmenting content with session and message indices."""

@@ -29,15 +29,12 @@ class DSTProcessor:
         self.model_path = model_path
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path, 
-                trust_remote_code=True,
-                torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
-            ).to(self.device)
-        except Exception as e:
-            raise RuntimeError(f"Ошибка загрузки модели DST {self.model_path}: {str(e)}")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path, 
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+        ).to(self.device)
     
     def should_save_message(self, message: Message, memory_summary: str) -> Tuple[bool, str]:
         """
@@ -104,6 +101,7 @@ class DSTProcessor:
                     Тебе передаётся история сообщений пользователя.
 
                     Действия:
+
                     - "true" - если реплика содержит информацию о пользователе: его интересы, имена, упоминания друзей или родственников, факты о друзьях или родственниках, хобби, род занятий, спортивные увлечения, имущество пользователя, его машина, место проживания, возраст, привычки, вредные привычки, намерения, планы, факты о себе, возможные будущие действия, пользователь перестал чем-то заниматься, поменял увлечения, уволился с работы и т.д. Даже если это выражено неявно.
                     - "false" - в сообщении НЕТ новой информации о пользователе (вопросы, эмоции, благодарности, общие фразы, запрос на выполнение задачи, без упоминания личной информации). Если информация которая есть в этом сообщении, повторяет информацию из истории, то его не нужно сохранять. НО, если в сообщения помимо повторённой информации, есть так же новая информация о пользователе, его нужно сохранить.
 
