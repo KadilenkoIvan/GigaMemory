@@ -20,3 +20,14 @@ class PipelineConfig:
     llm_mode: str = "stub"
     llm_api_url: str = ""
     llm_api_key: str = ""
+
+    # Slot decision model config (Meno-Lite style)
+    # If True -> use stub logic for slot decisions.
+    # If False -> use slot decision model.
+    slot_use_stub: bool = False
+    slot_model_path: str = "models/Meno-Lite-0.1"
+    slot_max_slots_per_message: int = 5
+    # Behavior when model says create_new=false but slot doesn't exist:
+    # - "create_new": create slot automatically
+    # - "skip": skip this decision
+    slot_missing_existing_policy: str = "create_new"

@@ -9,6 +9,7 @@ from .embedder import TextEmbedder
 from .llm_client import FinalLLMClient
 from .models import MemoryFact, Message
 from .retriever import MemoryRetriever
+from .slot_client import SlotDecisionClient
 from .vector_store import InMemoryVectorStore
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,16 @@ class DSTMemoryPipeline:
             model_path=config.importance_model_path,
             threshold=config.importance_threshold,
         )
-        self.dst = DSTManager()
+        slot_client = SlotDecisionClient(
+            use_stub=config.slot_use_stub,
+            model_path=config.slot_model_path,
+            max_slots=config.slot_max_slots_per_message,
+            max_retries=1,
+        )
+        self.dst = DSTManager(
+            slot_client=slot_client,
+            missing_existing_policy=config.slot_missing_existing_policy,
+        )
         self.embedder = TextEmbedder()
         self.store = InMemoryVectorStore()
         self.retriever = MemoryRetriever(store=self.store, embedder=self.embedder)
@@ -70,14 +80,17 @@ class DSTMemoryPipeline:
         if not facts:
             logger.debug("index_facts skipped empty facts")
             return
-        texts = [f"{f.slot}: {f.value}" for f in facts]
+        # Index by slot name only. Message texts are stored in metadata.
+        texts = [f.slot for f in facts]
         vectors = self.embedder.encode(texts)
         logger.info("Indexing facts dialogue_id=%s count=%d", dialogue_id, len(facts))
         for fact, vec in zip(facts, vectors):
             payload = {
                 "dialogue_id": dialogue_id,
                 "slot": fact.slot,
+                "slot_name": fact.slot,
                 "value": fact.value,
+                "message_text": fact.value,
                 "source_text": fact.source_text,
                 "created_at_step": fact.created_at_step,
                 "updated_at_step": fact.updated_at_step,
@@ -105,13 +118,13 @@ class DSTMemoryPipeline:
         hits = self.retriever.search(
             dialogue_id=dialogue_id, query=question, top_k=self.config.retrieval_top_k
         )
-        facts = self.dst.active_facts(dialogue_id)
+        memory_slots = self.dst.slots_with_messages(dialogue_id)
         return {
             "dialogue_id": dialogue_id,
             "question": question,
             "use_memory": self.should_use_memory(question),
             "retrieved": hits,
-            "active_facts": [asdict(f) for f in facts],
+            "memory_slots": memory_slots,
         }
 
     def answer(self, dialogue_id: str, question: str) -> str:
