@@ -15,11 +15,11 @@ from models import Message, Dialog
 from submit_interface import ModelWithMemory
 
 # Import DST processor
-try:
-    from submit.DST.dst_processor import DSTProcessor
-except ImportError:
-    print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
-    DSTProcessor = None
+
+from submit.DST.dst_processor import DSTProcessor
+# except ImportError:
+#     print("Warning: Could not import DSTProcessor. DST functionality will be disabled.")
+#     DSTProcessor = None
 
 def _read_utf8(file_path: str) -> List[Dialog]:
     with open(file_path, "r", encoding="utf-8") as file:
@@ -50,37 +50,41 @@ class MemoryOnlyModel(ModelWithMemory):
             sys.exit(121)  # Выход с кодом 121, если DST процессор не найден
 
     def write_to_memory(self, messages: List[Message], dialogue_id: str) -> None:
-        # Filter messages using DST processor if available.
-        # Save only user messages, augmented with [session:msg_index].
+        # Filter messages using DST processor if available
+        # DST checks only user messages (true/false)
+        # Fact extraction would use main LLM (but in test mode we skip it)
         filtered_messages = []
         
-        for current_msg in messages:
-            if current_msg.role != "user":
-                continue
-            should_save = False
-            reason = ""
-            if self.dst_processor is not None:
-                try:
-                    should_save, reason = self.dst_processor.should_save_message(current_msg)
-                    if should_save:
-                        print(f"DST-✔️: Saving message: '{current_msg.content}'")
-                    else:
-                        print(f"DST-❌: Skipping message: '{current_msg.content}'")
-                except Exception as e:
-                    print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
+        for msg in messages:
+            # Only process user messages with DST
+            if msg.role == "user":
+                should_save = False
+                reason = ""
+                
+                if self.dst_processor is not None:
+                    try:
+                        last5 = [m.content for m in self.basic_memory.get(dialogue_id, []) if m.role == "user"][-5:]
+                        memory_summary = "\n".join(last5)
+                        should_save, reason = self.dst_processor.should_save_message(msg, memory_summary)
+                        if should_save:
+                            print(f"DST-✔️: Saving message: '{msg.content}")
+                        else:
+                            print(f"DST-❌: Skipping message: '{msg.content}")
+                    except Exception as e:
+                        print(f"Warning: DST processing failed: {str(e)}. Saving message by default.")
+                        should_save = True
+                else:
+                    # If DST processor is not available, save all user messages
                     should_save = True
-            else:
-                # If DST processor is not available, save all user messages
-                should_save = True
-                print(f"No DST: Saving user message by default: '{current_msg.content}'")
-            
-            if should_save:
-                # Save only user message (no assistant) with indices
-                session_id = current_msg.session_id or "unknown"
-                existing = self.basic_memory.get(dialogue_id, [])
-                next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == current_msg.session_id and m.role == 'user') + 1
-                augmented = Message(role=current_msg.role, content=f"[{session_id}:{next_idx}] {current_msg.content}", session_id=current_msg.session_id)
-                filtered_messages.append(augmented)
+                    print(f"No DST: Saving user message by default: '{msg.content}'")
+                
+                if should_save:
+                    # Save only user message (no assistant response) with indices
+                    session_id = msg.session_id or "unknown"
+                    existing = self.basic_memory.get(dialogue_id, [])
+                    next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+                    augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+                    filtered_messages.append(augmented)
         
         # If no messages to save after filtering, return early
         if not filtered_messages:
@@ -90,6 +94,14 @@ class MemoryOnlyModel(ModelWithMemory):
         # Append filtered messages to memory
         self.basic_memory[dialogue_id] += filtered_messages
         print(f"Added {len(filtered_messages)} messages to memory for dialogue {dialogue_id}")
+
+    # Optional: helper to keep parity with main model (not used above to preserve batch append)
+    def _save_full_message_with_indices(self, dialogue_id: str, msg: Message) -> None:
+        session_id = msg.session_id or "unknown"
+        existing = self.basic_memory.get(dialogue_id, [])
+        next_idx = sum(1 for m in existing if getattr(m, 'session_id', None) == msg.session_id and m.role == 'user') + 1
+        augmented = Message(role=msg.role, content=f"[{session_id}:{next_idx}] {msg.content}", session_id=msg.session_id)
+        self.basic_memory[dialogue_id].append(augmented)
 
     def clear_memory(self, dialogue_id: str) -> None:
         self.basic_memory[dialogue_id] = []
@@ -109,7 +121,7 @@ class MemoryOnlyModel(ModelWithMemory):
         # Format facts into readable text
         facts_text = ""
         if facts:
-            facts_text = "Структурированная информация о пользователе:\n"
+            facts_text = "Структурированная информация о пользователе (извлечена основной LLM):\n"
             for category, values in facts.items():
                 facts_text += f"- {category}: {', '.join(values)}\n"
         
@@ -161,7 +173,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Simulate memory without LLM and optionally build/search RAG index")
     parser.add_argument("input_file", type=str, nargs="?", help="Path to jsonl dialogues file (required for build)")
-    parser.add_argument("--max_preview", type=int, default=20000000, help="Max characters to print per dialog")
+    parser.add_argument("--max_preview", type=int, default=20000, help="Max characters to print per dialog")
     # RAG options
     parser.add_argument("--build_index", action="store_true", help="Build FAISS index from dialogues")
     parser.add_argument("--index_path", type=str, default="src/submit/rag/index.npy", help="Path to FAISS index file")
@@ -175,10 +187,12 @@ if __name__ == "__main__":
     # Always: if input_file provided, show memory simulation preview
     if args.input_file:
         results = simulate_memory_from_file(args.input_file)
-        for did, text in results.items():
-            print(did)
-            preview = text
-            print(preview, "..." if len(text) > len(preview) else "")
+        with open("memory_only_simulation.txt", "w") as f:
+            for did, text in results.items():
+                print(did)
+                f.write(text)
+                preview = text[: args.max_preview]
+                print(preview, "..." if len(text) > len(preview) else "")
 
     # Build index if requested
     if args.build_index:
