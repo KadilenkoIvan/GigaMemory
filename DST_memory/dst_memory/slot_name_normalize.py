@@ -4,10 +4,34 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
+from collections import namedtuple
 from functools import lru_cache
 from typing import Sequence
+
+
+def _patch_inspect_for_pymorphy2() -> None:
+    """
+    pymorphy2 uses inspect.getargspec, removed in Python 3.11+.
+    Must run before `from pymorphy2 import MorphAnalyzer`.
+    """
+    if hasattr(inspect, "getargspec"):
+        return
+    try:
+        from inspect import ArgSpec  # type: ignore[attr-defined]
+    except ImportError:
+        ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "keywords", "defaults"])
+
+    def getargspec(func):  # noqa: ANN001
+        spec = inspect.getfullargspec(func)
+        return ArgSpec(spec.args, spec.varargs, spec.varkw, spec.defaults)
+
+    inspect.getargspec = getargspec  # type: ignore[attr-defined]
+
+
+_patch_inspect_for_pymorphy2()
 
 logger = logging.getLogger(__name__)
 
