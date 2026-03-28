@@ -8,9 +8,11 @@
 - Подключен классификатор значимости сообщений из:
   - `message_important_learning/best_model-full_tune`
 - Добавлен отдельный клиент для модели слотов (`Meno-Lite`-style):
-  - получает список существующих слотов + строгое системное задание + user-сообщение
-  - возвращает JSON-решения по слотам (`create_new`, `slot_name`)
-  - поддерживает до 5 решений на сообщение (с требованием минимизировать число слотов)
+  - получает список существующих слотов + системный промпт + user-сообщение
+  - модель возвращает JSON с массивом строк `slot_assignments` (только имена широких категорий)
+  - имена приводятся к lower case, нормализуются (pymorphy2; при необходимости pyspellchecker ru)
+  - новый слот создаётся, если такого имени ещё нет в состоянии; иначе запись добавляется в существующий слот
+  - до 5 имён на сообщение (с требованием минимизировать число слотов)
 - Реализован in-memory векторный стор как отдельный модуль:
   - `dst_memory/vector_store.py`
 - Реализован оркестратор пайплайна:
@@ -32,6 +34,7 @@
 - `dst_memory/classifier.py` — бинарный классификатор значимости.
 - `dst_memory/dst_manager.py` — менеджер слотов (upsert + заглушка delete policy).
 - `dst_memory/slot_client.py` — клиент модели принятия решения по слотам.
+- `dst_memory/slot_name_normalize.py` — нормализация имён слотов (pymorphy2 / pyspellchecker).
 - `dst_memory/embedder.py` — эмбеддинги.
 - `dst_memory/vector_store.py` — in-memory vector DB.
 - `dst_memory/retriever.py` — retrieval по векторному стору.
@@ -92,10 +95,7 @@ python DST_memory/run.py --slot-use-stub --no-final-llm pipeline interactive --d
 
 - `--slot-use-stub` — использовать заглушку вместо модели слотов.
 - `--slot-model-path` — путь до модели слотов (по умолчанию `models/Meno-Lite-0.1`).
-- `--slot-max-slots-per-message` — максимум JSON-решений на сообщение (по умолчанию `5`).
-- `--slot-missing-existing-policy` — поведение, если `create_new=false`, но слот отсутствует:
-  - `create_new` (создать слот),
-  - `skip` (пропустить решение).
+- `--slot-max-slots-per-message` — максимум имён слотов на сообщение (по умолчанию `5`).
 
 ### 4) Подробный запуск с реальной slot-моделью
 
@@ -132,7 +132,6 @@ GigaMemory/
 python DST_memory/run.py \
   --slot-model-path DST_memory/models/Meno-Lite-0.1 \
   --slot-max-slots-per-message 5 \
-  --slot-missing-existing-policy create_new \
   --no-final-llm \
   pipeline jsonl \
   --dataset-path dataset_generation/GigaMemory_data/format_example_short.jsonl \

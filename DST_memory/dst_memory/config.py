@@ -27,7 +27,3 @@ class PipelineConfig:
     slot_use_stub: bool = False
     slot_model_path: str = "models/Meno-Lite-0.1"
     slot_max_slots_per_message: int = 5
-    # Behavior when model says create_new=false but slot doesn't exist:
-    # - "create_new": create slot automatically
-    # - "skip": skip this decision
-    slot_missing_existing_policy: str = "create_new"

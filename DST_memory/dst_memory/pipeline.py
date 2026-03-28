@@ -35,10 +35,7 @@ class DSTMemoryPipeline:
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
         )
-        self.dst = DSTManager(
-            slot_client=slot_client,
-            missing_existing_policy=config.slot_missing_existing_policy,
-        )
+        self.dst = DSTManager(slot_client=slot_client)
         self.embedder = TextEmbedder()
         self.store = InMemoryVectorStore()
         self.retriever = MemoryRetriever(store=self.store, embedder=self.embedder)

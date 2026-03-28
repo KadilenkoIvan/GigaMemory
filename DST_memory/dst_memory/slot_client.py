@@ -8,6 +8,11 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from .slot_name_normalize import (
+    normalize_slot_label,
+    resolve_slot_key_to_existing,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +61,7 @@ def resolve_slot_model_path(model_path: str) -> str:
 
 @dataclass
 class SlotDecision:
-    create_new: bool
+    """Имя слота после нормализации; создание/добавление решает DSTManager по state.slots."""
     slot_name: str
 
 
@@ -97,14 +102,12 @@ class SlotDecisionClient:
             logger.info("Slot model loaded on device=%s", model_device)
         else:
             logger.info("Slot decision client in STUB mode")
-            # In stub mode model/tokenizer are intentionally not initialized.
             self.tokenizer = None
             self.model = None
 
     def decide_slots(self, existing_slots: List[str], user_message: str) -> List[SlotDecision]:
         if self.use_stub:
-            # Stub behavior mirrors old logic: one generic slot.
-            return [SlotDecision(create_new=True, slot_name="facts")]
+            return [SlotDecision(slot_name="facts")]
 
         prompt_system = self._build_system_prompt(existing_slots)
         messages = [
@@ -116,22 +119,45 @@ class SlotDecisionClient:
         for attempt in range(1, tries + 1):
             raw = self._generate(messages)
             logger.info("Slot model raw response attempt=%d: %s", attempt, raw)
-            decisions = self._parse_json_decisions(raw)
+            raw_names = self._parse_slot_names_from_response(raw)
+            if not raw_names:
+                logger.warning("Failed to parse slot names attempt=%d/%d", attempt, tries)
+                continue
+
+            decisions = self._finalize_decisions(existing_slots, raw_names)
             if decisions:
                 logger.info(
-                    "Slot model parsed decisions attempt=%d: %s",
+                    "Slot model decisions attempt=%d: %s",
                     attempt,
-                    [
-                        {"create_new": d.create_new, "slot_name": d.slot_name}
-                        for d in decisions[: self.max_slots]
-                    ],
+                    [d.slot_name for d in decisions],
                 )
-                logger.info("Slot decisions parsed count=%d attempt=%d", len(decisions), attempt)
-                return decisions[: self.max_slots]
-            logger.warning("Failed to parse slot decisions attempt=%d/%d", attempt, tries)
+                return decisions
 
-        # No fallback by request: skip message on parse failure.
         return []
+
+    def _finalize_decisions(
+        self, existing_slots: List[str], raw_names: List[str]
+    ) -> List[SlotDecision]:
+        """Нормализация имён, сопоставление с уже существующими ключами, дедуп."""
+        canonical_existing: List[str] = list(existing_slots)
+        seen: set[str] = set()
+        out: List[SlotDecision] = []
+
+        for name in raw_names:
+            normalized = normalize_slot_label(name)
+            if not normalized:
+                continue
+            resolved = resolve_slot_key_to_existing(canonical_existing, normalized)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            out.append(SlotDecision(slot_name=resolved))
+            if resolved not in canonical_existing:
+                canonical_existing.append(resolved)
+            if len(out) >= self.max_slots:
+                break
+
+        return out
 
     def _generate(self, messages: List[Dict[str, str]]) -> str:
         if not self._is_model_ready or self.tokenizer is None or self.model is None:
@@ -165,46 +191,36 @@ class SlotDecisionClient:
         max_s = self.max_slots
         return (
             "Ты модуль управления слотами долгосрочной памяти пользователя.\n"
-            "Тебе передан список существующих слотов и новое сообщение пользователя.\n\n"
-            "ВАЖНО: в одном сообщении пользователя может быть несколько разных тем. "
-            f"Ты можешь (и должен при необходимости) вернуть НЕСКОЛЬКО слотов сразу — "
-            f"до {max_s} элементов в массиве slot_assignments.\n"
-            "Если смысл касается только одной темы — верни ровно один элемент в массиве.\n\n"
-            "Существующие слоты:\n"
+            "Тебе передан список уже существующих слотов и новое сообщение пользователя.\n\n"
+            "ВАЖНО — широкие категории, не узкие:\n"
+            "Слот — это ОБЩАЯ тема (еда, спорт, семья, работа, здоровье, транспорт, хобби, питомцы, …), "
+            "а не отдельный ингредиент, бренд или мелкий факт (не «эстрагон», «базилик», «маршрут 12» — "
+            "для рецептов и покупок используй «еда» или «покупки» и т.п.).\n"
+            "Имена слотов — 1–3 слова, русский язык, обобщающие.\n\n"
+            "В одном сообщении может быть несколько тем — тогда верни несколько имён слотов (до "
+            f"{max_s}), по одному на тему. Минимизируй число слотов: если смысл укладывается в "
+            "уже существующий слот из списка — выбери ЕГО имя.\n\n"
+            "Существующие слоты (если подходит одно из имён — укажи его):\n"
             f"{slots_text}\n\n"
-            "Верни РОВНО один JSON-объект (без текста до или после). Формат:\n"
+            "Ответ — РОВНО один JSON-объект, без markdown и без текста вокруг:\n"
             "{\n"
-            '  "slot_assignments": [\n'
-            '    {"create_new": false, "slot_name": "краткое имя слота"},\n'
-            "    ...\n"
-            "  ]\n"
+            '  "slot_assignments": ["имя слота 1", "имя слота 2"]\n'
             "}\n\n"
-            "Поле create_new: boolean true/false (не строка).\n"
-            "Правила:\n"
-            f"1) В slot_assignments от 1 до {max_s} объектов.\n"
-            "2) МИНИМИЗИРУЙ число слотов: новый слот только если фраза явно не укладывается в существующие.\n"
-            "3) slot_name: lower case, русский язык, кратко (1–3 слова).\n"
-            "4) Для уже существующего слота: create_new=false и точное имя из списка (в lower case).\n"
-            "5) Несколько разных тем в одной реплике — несколько элементов в slot_assignments.\n"
-            "6) Не используй markdown и не оборачивай ответ в ```.\n\n"
-            "Few-shot примеры:\n"
-            "Пример 1 (один слот):\n"
+            "slot_assignments — массив СТРОК: только названия слотов, без полей create_new и без вложенных объектов.\n"
+            "Если тема одна — массив из одной строки.\n\n"
+            "Примеры:\n"
             "Существующие: [\"питомцы\", \"семья\"]\n"
             "Сообщение: \"У моего кота Барсика опять линька\"\n"
-            "Ответ:\n"
-            '{"slot_assignments":[{"create_new":false,"slot_name":"питомцы"}]}\n\n'
-            "Пример 2 (новый слот):\n"
+            '{"slot_assignments":["питомцы"]}\n\n'
             "Существующие: [\"работа\"]\n"
             "Сообщение: \"Я начал готовиться к марафону\"\n"
-            "Ответ:\n"
-            '{"slot_assignments":[{"create_new":true,"slot_name":"спорт"}]}\n\n'
-            "Пример 3 (несколько слотов в одном сообщении):\n"
+            '{"slot_assignments":["спорт"]}\n\n'
+            "Существующие: [\"еда\"]\n"
+            "Сообщение: \"Добавь в салат эстрагон и лимон\"\n"
+            '{"slot_assignments":["еда"]}\n\n'
             "Существующие: [\"семья\", \"хобби\"]\n"
-            "Сообщение: \"В субботу поедем с женой в горы, а вечером почитаю книгу\"\n"
-            "Ответ:\n"
-            '{"slot_assignments":['
-            '{"create_new":false,"slot_name":"семья"},'
-            '{"create_new":false,"slot_name":"хобби"}]}'
+            "Сообщение: \"В субботу поедем с женой в горы, вечером почитаю книгу\"\n"
+            '{"slot_assignments":["семья","хобби"]}'
         )
 
     @staticmethod
@@ -236,99 +252,100 @@ class SlotDecisionClient:
         return None
 
     @staticmethod
-    def _coerce_create_new(value: Any) -> Optional[bool]:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            if value == 1:
-                return True
-            if value == 0:
-                return False
+    def _extract_first_balanced_json_array(text: str) -> Optional[str]:
+        start = text.find("[")
+        if start < 0:
             return None
-        if isinstance(value, str):
-            v = value.strip().lower()
-            if v in ("true", "1", "yes", "да"):
-                return True
-            if v in ("false", "0", "no", "нет"):
-                return False
+        depth = 0
+        for i in range(start, len(text)):
+            c = text[i]
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
         return None
 
-    def _parse_assignment_items(self, items: List[Any]) -> List[SlotDecision]:
-        out: List[SlotDecision] = []
-        seen_slots: set[str] = set()
+    @staticmethod
+    def _extract_slot_names_from_list(items: List[Any]) -> List[str]:
+        out: List[str] = []
         for item in items:
-            if not isinstance(item, dict):
-                continue
-            if "slot_name" not in item:
-                continue
-            slot_name = str(item["slot_name"]).strip().lower()
-            if not slot_name or slot_name in seen_slots:
-                continue
-            if "create_new" not in item:
-                continue
-            create_new = self._coerce_create_new(item["create_new"])
-            if create_new is None:
-                continue
-            seen_slots.add(slot_name)
-            out.append(SlotDecision(create_new=create_new, slot_name=slot_name))
+            if isinstance(item, str):
+                s = item.strip()
+                if s:
+                    out.append(s)
+            elif isinstance(item, dict) and "slot_name" in item:
+                s = str(item["slot_name"]).strip()
+                if s:
+                    out.append(s)
         return out
 
-    def _parse_envelope_object(self, obj: Any) -> List[SlotDecision]:
+    def _names_from_parsed_json(self, obj: Any) -> List[str]:
         if isinstance(obj, list):
-            return self._parse_assignment_items(obj)
+            return self._extract_slot_names_from_list(obj)
         if not isinstance(obj, dict):
             return []
         for key in ("slot_assignments", "slots", "decisions"):
             raw = obj.get(key)
             if isinstance(raw, list):
-                return self._parse_assignment_items(raw)
+                return self._extract_slot_names_from_list(raw)
         return []
 
-    def _parse_legacy_line_objects(self, text: str) -> List[SlotDecision]:
+    def _parse_legacy_line_objects(self, text: str) -> List[str]:
         chunks = re.findall(r"\{[^{}]*\}", text, flags=re.DOTALL)
-        out: List[SlotDecision] = []
-        seen_slots: set[str] = set()
+        out: List[str] = []
+        seen: set[str] = set()
         for chunk in chunks:
             try:
                 obj = json.loads(chunk)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(obj, dict):
+            if not isinstance(obj, dict) or "slot_name" not in obj:
                 continue
-            if "create_new" not in obj or "slot_name" not in obj:
+            s = str(obj["slot_name"]).strip()
+            if not s or s in seen:
                 continue
-            slot_name = str(obj["slot_name"]).strip().lower()
-            if not slot_name or slot_name in seen_slots:
-                continue
-            create_new = self._coerce_create_new(obj["create_new"])
-            if create_new is None:
-                create_new_raw = str(obj["create_new"]).strip().lower()
-                create_new = create_new_raw == "true"
-            seen_slots.add(slot_name)
-            out.append(SlotDecision(create_new=create_new, slot_name=slot_name))
+            seen.add(s)
+            out.append(s)
         return out
 
-    def _parse_json_decisions(self, text: str) -> List[SlotDecision]:
+    def _parse_slot_names_from_response(self, text: str) -> List[str]:
         cleaned = self._strip_markdown_fence(text)
 
-        for candidate in (cleaned, self._extract_first_balanced_json_object(cleaned) or ""):
+        for candidate in (
+            cleaned,
+            self._extract_first_balanced_json_object(cleaned) or "",
+            self._extract_first_balanced_json_array(cleaned) or "",
+        ):
             if not candidate:
                 continue
             try:
                 obj = json.loads(candidate)
             except json.JSONDecodeError:
                 continue
-            decisions = self._parse_envelope_object(obj)
-            if decisions:
-                return decisions[: self.max_slots]
+            names = self._names_from_parsed_json(obj)
+            if names:
+                return names[: self.max_slots]
 
         extracted = self._extract_first_balanced_json_object(cleaned)
         if extracted:
             try:
                 obj = json.loads(extracted)
-                decisions = self._parse_envelope_object(obj)
-                if decisions:
-                    return decisions[: self.max_slots]
+                names = self._names_from_parsed_json(obj)
+                if names:
+                    return names[: self.max_slots]
+            except json.JSONDecodeError:
+                pass
+
+        arr = self._extract_first_balanced_json_array(cleaned)
+        if arr:
+            try:
+                obj = json.loads(arr)
+                if isinstance(obj, list):
+                    names = self._extract_slot_names_from_list(obj)
+                    if names:
+                        return names[: self.max_slots]
             except json.JSONDecodeError:
                 pass
 

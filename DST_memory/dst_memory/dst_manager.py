@@ -13,14 +13,9 @@ class DSTManager:
     TODO: replace slot extraction and delete decision with stronger LLM logic.
     """
 
-    def __init__(
-        self,
-        slot_client: SlotDecisionClient,
-        missing_existing_policy: str = "create_new",
-    ):
+    def __init__(self, slot_client: SlotDecisionClient):
         self._states: Dict[str, DialogueMemoryState] = {}
         self.slot_client = slot_client
-        self.missing_existing_policy = missing_existing_policy
 
     def get_state(self, dialogue_id: str) -> DialogueMemoryState:
         if dialogue_id not in self._states:
@@ -50,20 +45,6 @@ class DSTManager:
         for decision in slot_decisions:
             slot = decision.slot_name
             value = user_text
-            if (not decision.create_new) and slot not in state.slots:
-                if self.missing_existing_policy == "skip":
-                    logger.info(
-                        "Skip unknown existing slot dialogue_id=%s slot=%s policy=skip",
-                        dialogue_id,
-                        slot,
-                    )
-                    continue
-                logger.info(
-                    "Unknown existing slot converted to create_new dialogue_id=%s slot=%s",
-                    dialogue_id,
-                    slot,
-                )
-
             if slot not in state.slots:
                 state.slots[slot] = []
             rec = FactRecord(

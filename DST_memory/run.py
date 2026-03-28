@@ -34,7 +34,6 @@ def build_pipeline(args: argparse.Namespace):
         slot_use_stub=args.slot_use_stub,
         slot_model_path=args.slot_model_path,
         slot_max_slots_per_message=args.slot_max_slots_per_message,
-        slot_missing_existing_policy=args.slot_missing_existing_policy,
     )
     return DSTMemoryPipeline(cfg)
 
@@ -58,10 +57,7 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
         max_slots=args.slot_max_slots_per_message,
         max_retries=1,
     )
-    dst = DSTManager(
-        slot_client=slot_client,
-        missing_existing_policy=args.slot_missing_existing_policy,
-    )
+    dst = DSTManager(slot_client=slot_client)
     created = dst.upsert_from_message(args.dialogue_id, args.text)
     print(json.dumps([asdict(x) for x in created], ensure_ascii=False, indent=2))
 
@@ -196,12 +192,6 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slot-use-stub", action="store_true")
     parser.add_argument("--slot-model-path", type=str, default="models/Meno-Lite-0.1")
     parser.add_argument("--slot-max-slots-per-message", type=int, default=5)
-    parser.add_argument(
-        "--slot-missing-existing-policy",
-        type=str,
-        default="create_new",
-        choices=["create_new", "skip"],
-    )
 
     sub = parser.add_subparsers(required=True)
 
