@@ -130,7 +130,7 @@ def cmd_pipeline_jsonl(args: argparse.Namespace) -> None:
                 "question": question,
                 "use_memory": compact_answer.get("use_memory"),
                 "retrieved": compact_answer.get("retrieved", []),
-                "memory_slots": compact_answer.get("memory_slots", {}),
+                "memory_slots": compact_answer.get("memory_slots", []),
             }
         )
         pipeline.clear_memory(dialogue_id)

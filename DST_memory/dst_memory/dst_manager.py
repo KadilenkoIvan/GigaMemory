@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Any, Dict, List
 import logging
 
 from .models import DialogueMemoryState, FactRecord, MemoryFact
@@ -119,24 +119,25 @@ class DSTManager:
                     )
         return result
 
-    def slots_with_messages(self, dialogue_id: str) -> Dict[str, List[dict]]:
+    def slots_with_messages(self, dialogue_id: str) -> List[Dict[str, Any]]:
         """
-        Returns memory grouped by slots:
-        {
-          "slot name": [
-            {"message_text": "...", "source_text": "...", ...},
-            ...
-          ]
-        }
+        Memory as an ordered list of slots; each slot holds a list of saved
+        user messages (full message text per FactRecord, in chronological
+        append order for that slot).
+
+        [
+          {"slot": "имя слота", "messages": [ {...}, ... ]},
+          ...
+        ]
         """
         state = self.get_state(dialogue_id)
-        grouped: Dict[str, List[dict]] = {}
+        result: List[Dict[str, Any]] = []
         for slot, records in state.slots.items():
-            grouped[slot] = []
+            messages: List[dict] = []
             for rec in records:
                 if not rec.is_active:
                     continue
-                grouped[slot].append(
+                messages.append(
                     {
                         "message_text": rec.value,
                         "source_text": rec.source_text,
@@ -145,7 +146,8 @@ class DSTManager:
                         "is_active": rec.is_active,
                     }
                 )
-        return grouped
+            result.append({"slot": slot, "messages": messages})
+        return result
 
     def clear_dialogue(self, dialogue_id: str) -> None:
         logger.info("Clearing DST state dialogue_id=%s", dialogue_id)
