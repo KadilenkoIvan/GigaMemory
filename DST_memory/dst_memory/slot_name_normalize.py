@@ -1,5 +1,6 @@
 """
-Нормализация имён слотов: lower case, pymorphy2 (леммы), опционально pyspellchecker (ru).
+Нормализация имён слотов: очистка от мусора, pymorphy2 (леммы),
+только слова, известные словарю; опционально pyspellchecker (ru).
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ import re
 from collections import namedtuple
 from functools import lru_cache
 from typing import Sequence
+
+logger = logging.getLogger(__name__)
 
 
 def _patch_inspect_for_pymorphy2() -> None:
@@ -33,11 +36,110 @@ def _patch_inspect_for_pymorphy2() -> None:
 
 _patch_inspect_for_pymorphy2()
 
-logger = logging.getLogger(__name__)
-
 _morph = None
 _spell_ru = None
 _spell_ru_failed = False
+
+# Подчёркивания и дефисы → пробел; дальше остаются только буквы и пробелы.
+_DASH_UNDERSCORE = re.compile(r"[_\-–—]+")
+# Всё, кроме букв (в т.ч. цифры, пунктуация) → пробел.
+_NON_LETTER = re.compile(r"[^a-zA-Zа-яА-ЯёЁ]+", re.UNICODE)
+
+# Максимум слов в имени слота (широкие категории); длинные «предложения» обрезаем.
+MAX_SLOT_WORDS = 3
+# Склейки без пробелов и мусор обычно длиннее.
+MAX_TOKEN_LEN = 32
+
+# Стоп-слова: служебная лексика и типичный мусор из «развёрнутых» ответов модели.
+RU_STOPWORDS = frozenset(
+    {
+        "и",
+        "в",
+        "во",
+        "на",
+        "по",
+        "под",
+        "над",
+        "при",
+        "про",
+        "для",
+        "без",
+        "из",
+        "к",
+        "ко",
+        "о",
+        "об",
+        "от",
+        "до",
+        "за",
+        "с",
+        "со",
+        "у",
+        "а",
+        "но",
+        "или",
+        "как",
+        "что",
+        "чтобы",
+        "это",
+        "этот",
+        "эта",
+        "эти",
+        "тот",
+        "та",
+        "те",
+        "быть",
+        "есть",
+        "был",
+        "была",
+        "были",
+        "будет",
+        "являться",
+        "является",
+        "часть",
+        "весь",
+        "вся",
+        "всё",
+        "все",
+        "всего",
+        "который",
+        "которая",
+        "которое",
+        "которые",
+        "какой",
+        "какая",
+        "мой",
+        "моя",
+        "моё",
+        "твой",
+        "его",
+        "её",
+        "их",
+        "наш",
+        "ваш",
+        "такой",
+        "также",
+        "ещё",
+        "еще",
+        "уже",
+        "не",
+        "ни",
+        "нет",
+        "да",
+        "ли",
+        "бы",
+        "же",
+        "то",
+        "тем",
+        "тут",
+        "там",
+        "где",
+        "когда",
+        "если",
+        "либо",
+        "пусть",
+    }
+)
 
 
 def _get_morph():
@@ -65,19 +167,37 @@ def _get_spell_ru():
     return _spell_ru
 
 
-def _normalize_token_ru(token: str) -> str:
+def _sanitize_slot_string(text: str) -> str:
+    """Нижний регистр, _ и дефисы → пробел, убрать цифры и пунктуацию, схлопнуть пробелы."""
+    t = str(text).strip().lower()
+    t = _DASH_UNDERSCORE.sub(" ", t)
+    t = _NON_LETTER.sub(" ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _lemma_if_known(word: str) -> str:
     """
-    Одно слово: lower, опечатки (если есть ru spellchecker), лемма pymorphy2.
-    Если слово «неизвестно» морфологии — пробуем исправление, снова pymorphy2;
-    если всё ещё не то — возвращаем последний вариант как есть.
+    Возвращает нормальную форму только если слово «есть» в словаре pymorphy2
+    (после опционального исправления орфографии). Иначе пустая строка.
     """
-    word = token.strip().lower()
+    word = word.strip().lower()
     if not word:
         return ""
+    if len(word) > MAX_TOKEN_LEN:
+        return ""
+
     morph = _get_morph()
-    if morph.word_is_known(word):
-        p = morph.parse(word)
-        return p[0].normal_form if p else word
+
+    def lemma_of(w: str) -> str:
+        if not morph.word_is_known(w):
+            return ""
+        p = morph.parse(w)
+        return p[0].normal_form if p else ""
+
+    lem = lemma_of(word)
+    if lem:
+        return lem
 
     spell = _get_spell_ru()
     if spell is not None:
@@ -87,35 +207,43 @@ def _normalize_token_ru(token: str) -> str:
             logger.debug("spellchecker.correction failed: %s", e)
             fixed = None
         if fixed and fixed != word:
-            if morph.word_is_known(fixed):
-                p = morph.parse(fixed)
-                return p[0].normal_form if p else fixed
-            p2 = morph.parse(fixed)
-            if p2:
-                return p2[0].normal_form
+            lem = lemma_of(fixed)
+            if lem:
+                return lem
 
-    p = morph.parse(word)
-    if p:
-        return p[0].normal_form
-    return word
-
-
-_TOKEN_RE = re.compile(r"[\w\-]+", re.UNICODE)
+    return ""
 
 
 def normalize_slot_label(text: str) -> str:
     """
-    Полное имя слота: lower, разбиение на токены (буквы/цифры/дефис),
-    нормализация каждого токена, склейка через пробел.
+    Имя слота: очистка, только известные слова (леммы), без стоп-слов, максимум MAX_SLOT_WORDS слов.
+    Склейки без пробелов («едапоиск») и бессмысленные длинные токены отбрасываются.
     """
     if not text or not str(text).strip():
         return ""
-    raw = str(text).strip().lower()
+
+    clean = _sanitize_slot_string(text)
+    if not clean:
+        return ""
+
     parts: list[str] = []
-    for m in _TOKEN_RE.finditer(raw):
-        t = _normalize_token_ru(m.group(0))
-        if t:
-            parts.append(t)
+    seen_lemmas: set[str] = set()
+
+    for raw_tok in clean.split():
+        if len(raw_tok) > MAX_TOKEN_LEN:
+            continue
+        lem = _lemma_if_known(raw_tok)
+        if not lem:
+            continue
+        if lem in RU_STOPWORDS:
+            continue
+        if lem in seen_lemmas:
+            continue
+        seen_lemmas.add(lem)
+        parts.append(lem)
+        if len(parts) >= MAX_SLOT_WORDS:
+            break
+
     return " ".join(parts).strip()
 
 
