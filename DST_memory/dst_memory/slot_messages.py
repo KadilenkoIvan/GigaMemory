@@ -27,21 +27,27 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
             "верни пустой список.\n"
             "Используй существующие слоты дословно. "
             "Новый слот — только если ни один не подходит. "
-            "Слот — 1–3 слова-существительных (широкая категория, не конкретная вещь). "
+            "Слот — одно ключевое слово-существительное (широкая категория). "
+            "Второе слово добавляй только если без него смысл категории теряется. "
+            "Плохо: «личный интерес», «сфера хобби», «домашний питомец». "
+            "Хорошо: «интересы», «хобби», «питомцы». "
             "Ответ — только JSON."
         )
 
     few_shot = [
+        # Личное отношение → слот
         {
             "role": "user",
             "content": user_turn("обожаю эстрагон, кладу его вообще везде", ["еда"]),
         },
         {"role": "assistant", "content": '{"slot_assignments":["еда"]}'},
+        # Просто действие без личной окраски → пусто
         {
             "role": "user",
             "content": user_turn("добавил эстрагон в соус", ["еда"]),
         },
         {"role": "assistant", "content": '{"slot_assignments":[]}'},
+        # Личные обстоятельства → несколько слотов
         {
             "role": "user",
             "content": user_turn(
@@ -50,11 +56,13 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
             ),
         },
         {"role": "assistant", "content": '{"slot_assignments":["работа","здоровье"]}'},
+        # Нейтральный вопрос → пусто
         {
             "role": "user",
             "content": user_turn("а что, завтра дождь будет?", ["хобби"]),
         },
         {"role": "assistant", "content": '{"slot_assignments":[]}'},
+        # Личный питомец → лаконичный слот (не "домашний питомец")
         {
             "role": "user",
             "content": user_turn(
@@ -63,6 +71,15 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
             ),
         },
         {"role": "assistant", "content": '{"slot_assignments":["питомцы"]}'},
+        # Новый слот с размытым сообщением → одно слово, не "личный интерес"
+        {
+            "role": "user",
+            "content": user_turn(
+                "люблю читать про историю, особенно про средневековье", ["работа"]
+            ),
+        },
+        {"role": "assistant", "content": '{"slot_assignments":["хобби"]}'},
+        # Несколько сфер одновременно
         {
             "role": "user",
             "content": user_turn(
@@ -71,11 +88,13 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
             ),
         },
         {"role": "assistant", "content": '{"slot_assignments":["семья","спорт"]}'},
+        # Новый слот (не было в списке)
         {
             "role": "user",
             "content": user_turn("купил велик, теперь каждое утро катаюсь до работы", []),
         },
         {"role": "assistant", "content": '{"slot_assignments":["спорт","транспорт"]}'},
+        # Короткая нейтральная реплика → пусто
         {
             "role": "user",
             "content": user_turn("окей, понял", ["работа"]),

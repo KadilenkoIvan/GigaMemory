@@ -92,7 +92,9 @@ class SlotDecisionClient:
             )
             self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
             self.model = AutoModelForCausalLM.from_pretrained(
-                resolved, trust_remote_code=True
+                resolved,
+                trust_remote_code=True,
+                torch_dtype=torch.float16,
             ).to(self.device)
             self.model.eval()
             self._is_model_ready = True
