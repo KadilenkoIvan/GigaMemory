@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from .slot_messages import build_messages
 from .slot_name_normalize import (
     normalize_slot_label,
     resolve_slot_key_to_existing,
@@ -109,29 +110,25 @@ class SlotDecisionClient:
         if self.use_stub:
             return [SlotDecision(slot_name="facts")]
 
-        prompt_system = self._build_system_prompt(existing_slots)
-        messages = [
-            {"role": "system", "content": prompt_system},
-            {"role": "user", "content": user_message},
-        ]
+        messages = build_messages(user_message, self.max_slots, existing_slots)
 
         tries = self.max_retries + 1
         for attempt in range(1, tries + 1):
             raw = self._generate(messages)
             logger.info("Slot model raw response attempt=%d: %s", attempt, raw)
             raw_names = self._parse_slot_names_from_response(raw)
-            if not raw_names:
-                logger.warning("Failed to parse slot names attempt=%d/%d", attempt, tries)
+            if raw_names is None:
+                logger.warning("Failed to parse slot JSON attempt=%d/%d", attempt, tries)
                 continue
 
             decisions = self._finalize_decisions(existing_slots, raw_names)
-            if decisions:
-                logger.info(
-                    "Slot model decisions attempt=%d: %s",
-                    attempt,
-                    [d.slot_name for d in decisions],
-                )
-                return decisions
+            logger.info(
+                "Slot model attempt=%d parsed=%s decisions=%s",
+                attempt,
+                raw_names,
+                [d.slot_name for d in decisions],
+            )
+            return decisions
 
         return []
 
@@ -193,35 +190,19 @@ class SlotDecisionClient:
         result = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         return result.strip()
 
-    def _build_system_prompt(self, existing_slots: List[str]) -> str:
-        slots_text = ", ".join(existing_slots) if existing_slots else "<пусто>"
-        max_s = self.max_slots
-        return (
-            "Ты классификатор тем. Твоя единственная задача — определить, к каким слотам относится сообщение.\n\n"
-            "СЛОТ = широкая категория жизни человека.\n"
-            "Правильно: еда, спорт, семья, работа, здоровье, транспорт, хобби, питомцы, финансы, покупки.\n"
-            "Неправильно: эстрагон, маршрут 12, iPhone 15 — слишком узко.\n\n"
-            "ПРАВИЛА (выполняй все):\n"
-            "1. Имя слота: 1–3 отдельных русских слова-метки (существительные/категории), не предложение и не описание.\n"
-            "   Запрещено: склеивать слова без пробела, вставлять глаголы и связку («являться», «часть» и другие).\n"
-            f"2. Максимум слотов в ответе: {max_s}.\n"
-            "3. Если подходит существующий слот — используй его имя точно как написано в списке.\n"
-            "4. Новый слот создавай только если ни один существующий не подходит.\n"
-            "5. Не объясняй выбор. Не добавляй текст вне JSON.\n\n"
-            "СУЩЕСТВУЮЩИЕ СЛОТЫ:\n"
-            f"{slots_text}\n\n"
-            "ФОРМАТ ОТВЕТА — строго этот JSON и ничего больше:\n"
-            '{"slot_assignments":["слот1","слот2"]}\n\n'
-            "ПРИМЕРЫ:\n"
-            "Слоты: [питомцы, семья] | Сообщение: У кота Барсика линька\n"
-            '→ {"slot_assignments":["питомцы"]}\n\n'
-            "Слоты: [работа] | Сообщение: Начал готовиться к марафону\n"
-            '→ {"slot_assignments":["спорт"]}\n\n'
-            "Слоты: [семья, хобби] | Сообщение: В субботу едем с женой в горы, вечером почитаю книгу\n"
-            '→ {"slot_assignments":["семья","хобби"]}\n\n'
-            "Слоты: [] | Сообщение: Купил новый велосипед\n"
-            '→ {"slot_assignments":["хобби"]}\n'
-        )
+    def _coerce_to_slot_list(self, obj: Any) -> Optional[List[str]]:
+        """Возвращает список имён слотов или None, если структура не распознана."""
+        if isinstance(obj, dict):
+            for key in ("slot_assignments", "slots", "decisions"):
+                if key in obj:
+                    v = obj[key]
+                    if isinstance(v, list):
+                        return self._extract_slot_names_from_list(v)
+                    return None
+            return None
+        if isinstance(obj, list):
+            return self._extract_slot_names_from_list(obj)
+        return None
 
     @staticmethod
     def _strip_markdown_fence(text: str) -> str:
@@ -281,17 +262,6 @@ class SlotDecisionClient:
                     out.append(s)
         return out
 
-    def _names_from_parsed_json(self, obj: Any) -> List[str]:
-        if isinstance(obj, list):
-            return self._extract_slot_names_from_list(obj)
-        if not isinstance(obj, dict):
-            return []
-        for key in ("slot_assignments", "slots", "decisions"):
-            raw = obj.get(key)
-            if isinstance(raw, list):
-                return self._extract_slot_names_from_list(raw)
-        return []
-
     def _parse_legacy_line_objects(self, text: str) -> List[str]:
         chunks = re.findall(r"\{[^{}]*\}", text, flags=re.DOTALL)
         out: List[str] = []
@@ -310,30 +280,27 @@ class SlotDecisionClient:
             out.append(s)
         return out
 
-    def _parse_slot_names_from_response(self, text: str) -> List[str]:
+    def _parse_slot_names_from_response(self, text: str) -> Optional[List[str]]:
+        """Список слотов, [] если модель явно вернула пустой список; None при ошибке разбора."""
         cleaned = self._strip_markdown_fence(text)
 
-        for candidate in (
-            cleaned,
-            self._extract_first_balanced_json_object(cleaned) or "",
-            self._extract_first_balanced_json_array(cleaned) or "",
-        ):
+        for candidate in (cleaned, self._extract_first_balanced_json_object(cleaned) or ""):
             if not candidate:
                 continue
             try:
                 obj = json.loads(candidate)
             except json.JSONDecodeError:
                 continue
-            names = self._names_from_parsed_json(obj)
-            if names:
+            names = self._coerce_to_slot_list(obj)
+            if names is not None:
                 return names[: self.max_slots]
 
         extracted = self._extract_first_balanced_json_object(cleaned)
         if extracted:
             try:
                 obj = json.loads(extracted)
-                names = self._names_from_parsed_json(obj)
-                if names:
+                names = self._coerce_to_slot_list(obj)
+                if names is not None:
                     return names[: self.max_slots]
             except json.JSONDecodeError:
                 pass
@@ -343,11 +310,11 @@ class SlotDecisionClient:
             try:
                 obj = json.loads(arr)
                 if isinstance(obj, list):
-                    names = self._extract_slot_names_from_list(obj)
-                    if names:
-                        return names[: self.max_slots]
+                    return self._extract_slot_names_from_list(obj)[: self.max_slots]
             except json.JSONDecodeError:
                 pass
 
         legacy = self._parse_legacy_line_objects(text)
-        return legacy[: self.max_slots]
+        if legacy:
+            return legacy[: self.max_slots]
+        return None
