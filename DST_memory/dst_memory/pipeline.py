@@ -40,7 +40,10 @@ class DSTMemoryPipeline:
         self.store = InMemoryVectorStore()
         self.retriever = MemoryRetriever(store=self.store, embedder=self.embedder)
         self.final_llm = FinalLLMClient(
-            mode=config.llm_mode, api_url=config.llm_api_url, api_key=config.llm_api_key
+            mode=config.llm_mode,
+            api_url=config.llm_api_url,
+            api_key=config.llm_api_key,
+            temperature=config.llm_temperature,
         )
 
     def write_to_memory(self, dialogue_id: str, message: Message) -> Dict:

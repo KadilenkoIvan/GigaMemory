@@ -27,3 +27,7 @@ class PipelineConfig:
     slot_use_stub: bool = False
     slot_model_path: str = "models/Meno-Lite-0.1"
     slot_max_slots_per_message: int = 5
+    # Генерация слотов: greedy + temperature=0 в slot_client (детерминированный выбор токена).
+
+    # Финальная LLM (когда будут реализованы local/api): temperature=0 для воспроизводимости.
+    llm_temperature: float = 0.0

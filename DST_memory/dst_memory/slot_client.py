@@ -176,12 +176,19 @@ class SlotDecisionClient:
             add_generation_prompt=True,
         )
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
+        # Детерминированно: greedy (do_sample=False). temperature/top_p при sampling не используются.
+        # Полная стохастическая стабильность на GPU не гарантируется без torch.use_deterministic_algorithms (редко нужно).
+        eos_id = getattr(self.tokenizer, "eos_token_id", None)
+        pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 max_new_tokens=300,
                 do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
+                temperature=0.0,
+                top_p=1.0,
+                pad_token_id=pad_id,
+                eos_token_id=eos_id,
             )
         result = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
         return result.strip()

@@ -31,6 +31,7 @@ def build_pipeline(args: argparse.Namespace):
         llm_mode=args.llm_mode,
         llm_api_url=args.llm_api_url,
         llm_api_key=args.llm_api_key,
+        llm_temperature=args.llm_temperature,
         slot_use_stub=args.slot_use_stub,
         slot_model_path=args.slot_model_path,
         slot_max_slots_per_message=args.slot_max_slots_per_message,
@@ -187,6 +188,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llm-mode", type=str, default="stub", choices=["stub", "local", "api"])
     parser.add_argument("--llm-api-url", type=str, default="")
     parser.add_argument("--llm-api-key", type=str, default="")
+    parser.add_argument(
+        "--llm-temperature",
+        type=float,
+        default=0.0,
+        help="Temperature for final LLM (local/api); 0 = greedy/deterministic. Slot model always uses greedy.",
+    )
     parser.add_argument("--no-final-llm", action="store_true")
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument("--slot-use-stub", action="store_true")
