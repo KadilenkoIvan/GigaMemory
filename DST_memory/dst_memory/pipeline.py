@@ -9,7 +9,9 @@ from .embedder import TextEmbedder
 from .llm_client import FinalLLMClient
 from .models import MemoryFact, Message
 from .retriever import MemoryRetriever
+from .serving import LocalHFServing
 from .slot_client import SlotDecisionClient
+from .slot_update_client import SlotUpdateClient
 from .vector_store import InMemoryVectorStore
 
 logger = logging.getLogger(__name__)
@@ -29,13 +31,20 @@ class DSTMemoryPipeline:
             model_path=config.importance_model_path,
             threshold=config.importance_threshold,
         )
+        slot_serving = None
+        if not config.slot_use_stub:
+            slot_serving = LocalHFServing(config.slot_model_path)
         slot_client = SlotDecisionClient(
             use_stub=config.slot_use_stub,
             model_path=config.slot_model_path,
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
         )
-        self.dst = DSTManager(slot_client=slot_client)
+        slot_update = SlotUpdateClient(
+            serving=slot_serving,
+            max_retries=1,
+        )
+        self.dst = DSTManager(slot_client=slot_client, slot_update=slot_update)
         self.embedder = TextEmbedder()
         self.store = InMemoryVectorStore()
         self.retriever = MemoryRetriever(store=self.store, embedder=self.embedder)

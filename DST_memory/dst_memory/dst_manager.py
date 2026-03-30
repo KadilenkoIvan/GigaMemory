@@ -3,6 +3,7 @@ import logging
 
 from .models import DialogueMemoryState, FactRecord, MemoryFact
 from .slot_client import SlotDecisionClient
+from .slot_update_client import SlotOperation, SlotUpdateClient
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +14,10 @@ class DSTManager:
     TODO: replace slot extraction and delete decision with stronger LLM logic.
     """
 
-    def __init__(self, slot_client: SlotDecisionClient):
+    def __init__(self, slot_client: SlotDecisionClient, slot_update: SlotUpdateClient):
         self._states: Dict[str, DialogueMemoryState] = {}
         self.slot_client = slot_client
+        self.slot_update = slot_update
 
     def get_state(self, dialogue_id: str) -> DialogueMemoryState:
         if dialogue_id not in self._states:
@@ -44,34 +46,120 @@ class DSTManager:
         created: List[MemoryFact] = []
         for decision in slot_decisions:
             slot = decision.slot_name
-            value = user_text
             if slot not in state.slots:
                 state.slots[slot] = []
-            rec = FactRecord(
-                value=value,
-                source_text=user_text,
-                created_at_step=state.step,
-                updated_at_step=state.step,
-                is_active=True,
-            )
-            state.slots[slot].append(rec)
-            logger.info(
-                "DST upsert fact dialogue_id=%s slot=%s value_preview=%s",
-                dialogue_id,
-                slot,
-                value[:80],
-            )
-            created.append(
-                MemoryFact(
-                    slot=slot,
-                    value=value,
-                    source_text=user_text,
+            existing = [
+                {"id": r.record_id, "value": r.value}
+                for r in state.slots[slot]
+                if r.is_active
+            ]
+            ops = self.slot_update.plan_operations(slot, existing, user_text)
+            self._apply_operations(state, slot, ops, user_text, created)
+        return created
+
+    def _apply_operations(
+        self,
+        state: DialogueMemoryState,
+        slot: str,
+        ops: List[SlotOperation],
+        source_text: str,
+        out_facts: List[MemoryFact],
+    ) -> None:
+        if slot not in state.slots:
+            state.slots[slot] = []
+
+        by_id: Dict[int, FactRecord] = {
+            r.record_id: r for r in state.slots[slot] if r.is_active
+        }
+
+        for op in ops:
+            if op.op == "add" and op.value:
+                rid = state.next_record_id
+                state.next_record_id += 1
+                rec = FactRecord(
+                    record_id=rid,
+                    value=op.value,
+                    source_text=source_text,
                     created_at_step=state.step,
                     updated_at_step=state.step,
                     is_active=True,
                 )
-            )
-        return created
+                state.slots[slot].append(rec)
+                logger.info(
+                    "DST add dialogue_id=%s slot=%s id=%d value_preview=%s",
+                    state.dialogue_id,
+                    slot,
+                    rid,
+                    op.value[:80],
+                )
+                out_facts.append(
+                    MemoryFact(
+                        slot=slot,
+                        record_id=rid,
+                        value=op.value,
+                        source_text=source_text,
+                        created_at_step=state.step,
+                        updated_at_step=state.step,
+                        is_active=True,
+                    )
+                )
+            elif op.op == "update" and op.record_id is not None and op.value:
+                rec = by_id.get(op.record_id)
+                if not rec:
+                    logger.info(
+                        "DST update skipped (unknown id) dialogue_id=%s slot=%s id=%s",
+                        state.dialogue_id,
+                        slot,
+                        op.record_id,
+                    )
+                    continue
+                rec.value = op.value
+                rec.source_text = source_text
+                rec.updated_at_step = state.step
+                logger.info(
+                    "DST update dialogue_id=%s slot=%s id=%d value_preview=%s",
+                    state.dialogue_id,
+                    slot,
+                    op.record_id,
+                    op.value[:80],
+                )
+                out_facts.append(
+                    MemoryFact(
+                        slot=slot,
+                        record_id=op.record_id,
+                        value=op.value,
+                        source_text=source_text,
+                        created_at_step=rec.created_at_step,
+                        updated_at_step=rec.updated_at_step,
+                        is_active=True,
+                    )
+                )
+            elif op.op == "delete" and op.record_id is not None:
+                rec = by_id.get(op.record_id)
+                if not rec:
+                    logger.info(
+                        "DST delete skipped (unknown id) dialogue_id=%s slot=%s id=%s",
+                        state.dialogue_id,
+                        slot,
+                        op.record_id,
+                    )
+                    continue
+                rec.is_active = False
+                rec.source_text = source_text
+                rec.updated_at_step = state.step
+                logger.info(
+                    "DST delete dialogue_id=%s slot=%s id=%d",
+                    state.dialogue_id,
+                    slot,
+                    op.record_id,
+                )
+            else:
+                logger.debug(
+                    "DST op ignored dialogue_id=%s slot=%s op=%s",
+                    state.dialogue_id,
+                    slot,
+                    op,
+                )
 
     def delete_with_stub_policy(self, dialogue_id: str, user_text: str) -> None:
         """
@@ -91,6 +179,7 @@ class DSTManager:
                     result.append(
                         MemoryFact(
                             slot=slot,
+                            record_id=rec.record_id,
                             value=rec.value,
                             source_text=rec.source_text,
                             created_at_step=rec.created_at_step,
@@ -120,6 +209,7 @@ class DSTManager:
                     continue
                 messages.append(
                     {
+                        "record_id": rec.record_id,
                         "message_text": rec.value,
                         "source_text": rec.source_text,
                         "created_at_step": rec.created_at_step,
