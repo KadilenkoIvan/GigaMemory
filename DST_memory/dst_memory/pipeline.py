@@ -36,14 +36,11 @@ class DSTMemoryPipeline:
             slot_serving = LocalHFServing(config.slot_model_path)
         slot_client = SlotDecisionClient(
             use_stub=config.slot_use_stub,
-            model_path=config.slot_model_path,
+            serving=slot_serving,
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
         )
-        slot_update = SlotUpdateClient(
-            serving=slot_serving,
-            max_retries=1,
-        )
+        slot_update = SlotUpdateClient(serving=slot_serving, max_retries=1)
         self.dst = DSTManager(slot_client=slot_client, slot_update=slot_update)
         self.embedder = TextEmbedder()
         self.store = InMemoryVectorStore()

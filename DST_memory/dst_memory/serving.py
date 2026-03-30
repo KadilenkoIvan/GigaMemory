@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .slot_client import resolve_slot_model_path
+from .slot_model_path import resolve_slot_model_path
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,7 @@ class SlotOperation:
 
 
 class SlotUpdateClient:
-    def __init__(self, serving: LocalHFServing, max_retries: int = 1):
+    def __init__(self, serving: Optional[LocalHFServing] = None, max_retries: int = 1):
         self.serving = serving
         self.max_retries = max_retries
 
@@ -27,6 +27,14 @@ class SlotUpdateClient:
         existing_records: List[Dict[str, Any]],
         user_message: str,
     ) -> List[SlotOperation]:
+        if self.serving is None:
+            logger.info("SlotUpdate STUB: add(full message) slot=%s", slot_name)
+            return (
+                [SlotOperation(op="add", value=user_message.strip())]
+                if user_message.strip()
+                else []
+            )
+
         messages = build_update_messages(slot_name, existing_records, user_message)
 
         raw = self._generate_with_retries(messages)
