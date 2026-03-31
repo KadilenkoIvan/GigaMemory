@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SlotOperation:
-    op: str  # add|update|delete
+    op: str  # add|update|delete|nothing
     record_id: Optional[int] = None
     value: Optional[str] = None
 
@@ -69,7 +69,7 @@ class SlotUpdateClient:
     def _attempt_fix_json(self, bad_text: str) -> str:
         prompt = (
             "Исправь следующий ответ так, чтобы он был ВАЛИДНЫМ JSON строго формата:\n"
-            '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2} ] }\n'
+            '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2}, {"op":"nothing"} ] }\n'
             "Никакого текста кроме JSON.\n\n"
             f"Ответ для исправления:\n```text\n{bad_text}\n```"
         )
@@ -97,7 +97,7 @@ class SlotUpdateClient:
             if not isinstance(item, dict):
                 continue
             op = str(item.get("op", "")).strip().lower()
-            if op not in {"add", "update", "delete"}:
+            if op not in {"add", "update", "delete", "nothing"}:
                 continue
             if op == "add":
                 v = item.get("value")
@@ -112,5 +112,7 @@ class SlotUpdateClient:
                 rid = item.get("id")
                 if isinstance(rid, int):
                     out.append(SlotOperation(op="delete", record_id=rid))
+            elif op == "nothing":
+                out.append(SlotOperation(op="nothing"))
         return out
 

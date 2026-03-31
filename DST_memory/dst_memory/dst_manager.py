@@ -73,6 +73,14 @@ class DSTManager:
         }
 
         for op in ops:
+            if op.op == "nothing":
+                logger.info(
+                    "DST nothing dialogue_id=%s slot=%s step=%d",
+                    state.dialogue_id,
+                    slot,
+                    state.step,
+                )
+                continue
             if op.op == "add" and op.value:
                 rid = state.next_record_id
                 state.next_record_id += 1

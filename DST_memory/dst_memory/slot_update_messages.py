@@ -19,12 +19,13 @@ def build_update_messages(
         "Ваша задача — на основе нового сообщения пользователя обновить атомарные записи слота.\n"
         "Возвращайте только JSON.\n\n"
         "Формат JSON строго:\n"
-        '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2} ] }\n\n'
+        '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2}, {"op":"nothing"} ] }\n\n'
         "Правила:\n"
         "1) Извлекайте только полезную, атомарную информацию. Не сохраняйте весь текст сообщения.\n"
-        "2) add — новый факт; update — изменить существующий факт по id; delete — удалить устаревший факт по id.\n"
-        "3) Минимизируйте количество операций.\n"
-        "4) Если сообщение не добавляет полезной информации для этого слота — operations должен быть пустым списком.\n"
+        "2) add — новый факт; update — изменить существующий факт по id; delete — удалить устаревший факт по id; nothing — не делать ничего.\n"
+        "3) Можно вернуть несколько операций за раз (например: update старого факта + add нового).\n"
+        "4) Минимизируйте количество операций.\n"
+        "5) Если сообщение не добавляет полезной информации для этого слота — верните одну операцию nothing.\n"
     )
 
     def user_turn(s: str, records: list[dict[str, Any]]) -> str:
@@ -42,7 +43,7 @@ def build_update_messages(
             "role": "user",
             "content": user_turn(
                 "Я продал свою Ладу",
-                [{"id": 1, "value": "машина: lada granta"}],
+                [{"id": 1, "value": "машина: Лада"}],
             ),
         },
         {"role": "assistant", "content": '{"operations":[{"op":"delete","id":1}]}'},
@@ -78,7 +79,7 @@ def build_update_messages(
                 [{"id": 1, "value": "машина: kia rio"}],
             ),
         },
-        {"role": "assistant", "content": '{"operations":[]}'},
+        {"role": "assistant", "content": '{"operations":[{"op":"nothing"}]}'},
     ]
 
     final_user = {"role": "user", "content": user_turn(user_message, existing_records)}
