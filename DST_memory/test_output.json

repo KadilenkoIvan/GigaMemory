@@ -1,0 +1,276 @@
+[
+  {
+    "dialogue_id": "1",
+    "question": "Каким спортом я занимаюсь?",
+    "use_memory": true,
+    "retrieved": [
+      {
+        "dialogue_id": "1",
+        "slot": "транспорт",
+        "slot_name": "транспорт",
+        "value": "машина: kia",
+        "message_text": "машина: kia",
+        "source_text": "думаю вот машину сменить, сейчас у меня Chevrolet Cruze, а до этого была Renault Logan, думаю вот насчет Kia",
+        "created_at_step": 36,
+        "updated_at_step": 36,
+        "is_active": true,
+        "score": 0.7236837148666382
+      },
+      {
+        "dialogue_id": "1",
+        "slot": "транспорт",
+        "slot_name": "транспорт",
+        "value": "машина: chevrolet cruze",
+        "message_text": "машина: chevrolet cruze",
+        "source_text": "думаю вот машину сменить, сейчас у меня Chevrolet Cruze, а до этого была Renault Logan, думаю вот насчет Kia",
+        "created_at_step": 36,
+        "updated_at_step": 36,
+        "is_active": true,
+        "score": 0.7236837148666382
+      },
+      {
+        "dialogue_id": "1",
+        "slot": "транспорт",
+        "slot_name": "транспорт",
+        "value": "машина: renault logan",
+        "message_text": "машина: renault logan",
+        "source_text": "думаю вот машину сменить, сейчас у меня Chevrolet Cruze, а до этого была Renault Logan, думаю вот насчет Kia",
+        "created_at_step": 36,
+        "updated_at_step": 36,
+        "is_active": true,
+        "score": 0.7236837148666382
+      },
+      {
+        "dialogue_id": "1",
+        "slot": "спорт",
+        "slot_name": "спорт",
+        "value": "футбол: пятницы с мужиками, гандикап 0:5 в пользу мужиков",
+        "message_text": "футбол: пятницы с мужиками, гандикап 0:5 в пользу мужиков",
+        "source_text": "какое-то всё бабское, да и какая ходьба, если я в футбол гоняю уже",
+        "created_at_step": 22,
+        "updated_at_step": 23,
+        "is_active": true,
+        "score": 0.6938564777374268
+      },
+      {
+        "dialogue_id": "1",
+        "slot": "спорт",
+        "slot_name": "спорт",
+        "value": "футбол: пятницы с мужиками",
+        "message_text": "футбол: пятницы с мужиками",
+        "source_text": "а то, что я уже лет 15 по пятницам с мужиками в футбол играю, разве не считается? спорт же вроде полезен",
+        "created_at_step": 22,
+        "updated_at_step": 22,
+        "is_active": true,
+        "score": 0.6938564777374268
+      }
+    ],
+    "memory_slots": [
+      {
+        "slot": "семья",
+        "messages": [
+          {
+            "record_id": 1,
+            "message_text": "разные фамилии в паспортах, хотя женаты 20 лет",
+            "source_text": "жена моя расстроилась из-за этого, что в паспортах у нас разные фамилии, а мы уже 20 лет женаты",
+            "created_at_step": 2,
+            "updated_at_step": 2,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "хобби",
+        "messages": [
+          {
+            "record_id": 2,
+            "message_text": "рыбалка: еженедельно, зима",
+            "source_text": "я с детства рыбалку люблю, раз в неделю стараюсь выбираться, даже зимой, а сын мой по моим. стопам не пошел вот, всё больше за компьютером сидит",
+            "created_at_step": 6,
+            "updated_at_step": 6,
+            "is_active": true
+          },
+          {
+            "record_id": 3,
+            "message_text": "семья: сын, компьютерное увлечение, пинг-понг: иногда, посещение музея: да, пианино: нет",
+            "source_text": "сына хотели в музыкалку отдать на пианино, но он заартачился. мы не стали давить, я сам в детстве в музыкалку ходил, правда, не на пианино, оно, конечно, хорошо, но местами нудно, да и для пацана с порт лучше, я думаю",
+            "created_at_step": 6,
+            "updated_at_step": 53,
+            "is_active": true
+          },
+          {
+            "record_id": 4,
+            "message_text": "семья: посещение музея: да",
+            "source_text": "ох, надо бы в музей с ним сходить, в Третьяковку, туда ещё мой отец со мной хаживал",
+            "created_at_step": 8,
+            "updated_at_step": 8,
+            "is_active": true
+          },
+          {
+            "record_id": 5,
+            "message_text": "спорт: футбол: пятницы",
+            "source_text": "а то, что я уже лет 15 по пятницам с мужиками в футбол играю, разве не считается? спорт же вроде полезен",
+            "created_at_step": 22,
+            "updated_at_step": 22,
+            "is_active": true
+          },
+          {
+            "record_id": 10,
+            "message_text": "танцы: танго",
+            "source_text": "говорит, будем на танго ходить. я уперся, конечно, что за барское мероприятие. но соглашусь, наверное, чтобы ей было приятно",
+            "created_at_step": 31,
+            "updated_at_step": 33,
+            "is_active": true
+          },
+          {
+            "record_id": 16,
+            "message_text": "семья: пикник: иногда",
+            "source_text": "а ещё с сыном хоти сходить на группу Пикник",
+            "created_at_step": 45,
+            "updated_at_step": 45,
+            "is_active": true
+          },
+          {
+            "record_id": 17,
+            "message_text": "она ещё раз туда хочет, но я попрошу на орган больше билеты не брать, думаю, мне фортепиано больше понравится",
+            "source_text": "она ещё раз туда хочет, но я попрошу на орган больше билеты не брать, думаю, мне фортепиано больше понравится",
+            "created_at_step": 51,
+            "updated_at_step": 52,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "спорт",
+        "messages": [
+          {
+            "record_id": 6,
+            "message_text": "футбол: пятницы с мужиками, гандикап 0:5 в пользу мужиков",
+            "source_text": "какое-то всё бабское, да и какая ходьба, если я в футбол гоняю уже",
+            "created_at_step": 22,
+            "updated_at_step": 23,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "финансы",
+        "messages": [
+          {
+            "record_id": 7,
+            "message_text": "способ сортировки доходов: по конвертам",
+            "source_text": "я по старинке деньги по конвертам сортирую, могу не поужинать иногда, тем более животик вырос за последние 5 лет, так и живём. Людке ещё внушаю, чтобы меньше денег на всякое тряпьё спускала, но что с нее взять, баба и есть баба",
+            "created_at_step": 26,
+            "updated_at_step": 26,
+            "is_active": true
+          },
+          {
+            "record_id": 8,
+            "message_text": "выделяю деньги на еду: нет",
+            "source_text": "я по старинке деньги по конвертам сортирую, могу не поужинать иногда, тем более животик вырос за последние 5 лет, так и живём. Людке ещё внушаю, чтобы меньше денег на всякое тряпьё спускала, но что с нее взять, баба и есть баба",
+            "created_at_step": 26,
+            "updated_at_step": 26,
+            "is_active": true
+          },
+          {
+            "record_id": 9,
+            "message_text": "расходы на одежду увеличиваются",
+            "source_text": "она мне и не доверит, наверное, сыну одежду выбирать, а я и не против, деньги даю и всё",
+            "created_at_step": 26,
+            "updated_at_step": 70,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "здоровье",
+        "messages": [
+          {
+            "record_id": 15,
+            "message_text": "голодание продлевает жизнь, организм очищается",
+            "source_text": "а я читал, что голодание запускает какие-то процессы в организме, которые продлевают жизнь. организм вроде как сам себя начинает очищать",
+            "created_at_step": 39,
+            "updated_at_step": 39,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "транспорт",
+        "messages": [
+          {
+            "record_id": 11,
+            "message_text": "машина: chevrolet cruze",
+            "source_text": "думаю вот машину сменить, сейчас у меня Chevrolet Cruze, а до этого была Renault Logan, думаю вот насчет Kia",
+            "created_at_step": 36,
+            "updated_at_step": 36,
+            "is_active": true
+          },
+          {
+            "record_id": 12,
+            "message_text": "машина: renault logan",
+            "source_text": "думаю вот машину сменить, сейчас у меня Chevrolet Cruze, а до этого была Renault Logan, думаю вот насчет Kia",
+            "created_at_step": 36,
+            "updated_at_step": 36,
+            "is_active": true
+          },
+          {
+            "record_id": 13,
+            "message_text": "машина: kia",
+            "source_text": "думаю вот машину сменить, сейчас у меня Chevrolet Cruze, а до этого была Renault Logan, думаю вот насчет Kia",
+            "created_at_step": 36,
+            "updated_at_step": 36,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "работа",
+        "messages": [
+          {
+            "record_id": 14,
+            "message_text": "профессия: слесарь-электрик, место работы: Московский метрополитен",
+            "source_text": "блин, я слесарем-электриком работаю в Московском метрополитене, на кой мне мерс",
+            "created_at_step": 37,
+            "updated_at_step": 37,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "питомец",
+        "messages": [
+          {
+            "record_id": 18,
+            "message_text": "сыну хотелось иметь: хомяк, игуана, черепаха",
+            "source_text": "сын просит черепаху ему купить, до этого хомяка просил, а ещё раньше вообще игуану, а я думаю, куда нам второе домашнее животное, отказываю ему, а он дуется",
+            "created_at_step": 57,
+            "updated_at_step": 57,
+            "is_active": true
+          }
+        ]
+      },
+      {
+        "slot": "еда",
+        "messages": [
+          {
+            "record_id": 19,
+            "message_text": "любимая еда: жареная картошка",
+            "source_text": "больше всего на свете люблю есть жареную картошку",
+            "created_at_step": 58,
+            "updated_at_step": 58,
+            "is_active": true
+          },
+          {
+            "record_id": 20,
+            "message_text": "ужин: пицца с пепперони",
+            "source_text": "мне вот пепперони больше нравится, а сын какую-то мясную, там видов 5 мяса",
+            "created_at_step": 71,
+            "updated_at_step": 72,
+            "is_active": true
+          }
+        ]
+      }
+    ]
+  }
+]
