@@ -11,6 +11,7 @@ class Message:
 
 @dataclass
 class FactRecord:
+    record_id: int
     value: str
     source_text: str
     created_at_step: int
@@ -21,6 +22,7 @@ class FactRecord:
 @dataclass
 class MemoryFact:
     slot: str
+    record_id: int
     value: str
     source_text: str
     created_at_step: int
@@ -33,3 +35,4 @@ class DialogueMemoryState:
     dialogue_id: str
     step: int = 0
     slots: Dict[str, List[FactRecord]] = field(default_factory=dict)
+    next_record_id: int = 1

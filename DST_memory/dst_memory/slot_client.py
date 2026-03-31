@@ -3,12 +3,10 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from pathlib import Path
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
+from .serving import GenerationConfig, LocalHFServing
 from .slot_messages import build_messages
+from .slot_model_path import resolve_slot_model_path
 from .slot_name_normalize import (
     normalize_slot_label,
     resolve_slot_key_to_existing,
@@ -16,48 +14,8 @@ from .slot_name_normalize import (
 
 logger = logging.getLogger(__name__)
 
-
-def _is_hf_repo_id(s: str) -> bool:
-    """
-    True for HuggingFace hub ids like 'Qwen/Qwen2.5-0.5B' (namespace/model).
-    False for local paths (absolute, or multi-segment relative paths).
-    """
-    if "/" not in s:
-        return False
-    if Path(s).is_absolute():
-        return False
-    parts = s.split("/")
-    if len(parts) != 2 or not parts[0] or not parts[1]:
-        return False
-    if Path(s).exists():
-        return False
-    return True
-
-
-def resolve_slot_model_path(model_path: str) -> str:
-    """
-    Return a path/id suitable for AutoTokenizer/AutoModel.from_pretrained.
-
-    - Existing directory (relative or absolute) -> resolved absolute path.
-    - HuggingFace repo id -> unchanged string.
-    - Otherwise -> FileNotFoundError with a clear message.
-    """
-    raw = str(model_path).strip()
-    if not raw:
-        raise ValueError("slot model path is empty")
-
-    local = Path(raw).expanduser()
-    if local.is_dir():
-        return str(local.resolve())
-
-    if _is_hf_repo_id(raw):
-        return raw
-
-    raise FileNotFoundError(
-        f"Slot model directory not found: {model_path!r}. "
-        "Use an existing folder with tokenizer + weights, a HuggingFace id (e.g. org/model), "
-        "or --slot-use-stub."
-    )
+# Backwards compatibility: other code may import from slot_client.
+__all__ = ["SlotDecision", "SlotDecisionClient", "resolve_slot_model_path"]
 
 
 @dataclass
@@ -67,46 +25,34 @@ class SlotDecision:
 
 
 class SlotDecisionClient:
+    """
+    Slot name decisions via the same LocalHFServing instance as SlotUpdateClient
+    (single model load in GPU memory).
+    """
+
     def __init__(
         self,
         use_stub: bool,
-        model_path: str,
+        serving: Optional[LocalHFServing] = None,
         max_slots: int = 5,
         max_retries: int = 1,
     ):
         self.use_stub = use_stub
-        self.model_path = model_path
+        self.serving = serving
         self.max_slots = max_slots
         self.max_retries = max_retries
 
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._is_model_ready = False
-
-        if not self.use_stub:
-            resolved = resolve_slot_model_path(model_path)
-            logger.info(
-                "Loading slot decision model path=%s (resolved=%s) device=%s",
-                model_path,
-                resolved,
-                self.device,
-            )
-            self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                resolved,
-                trust_remote_code=True,
-                torch_dtype=torch.float16,
-            ).to(self.device)
-            self.model.eval()
-            self._is_model_ready = True
-            try:
-                model_device = next(self.model.parameters()).device
-            except StopIteration:
-                model_device = "unknown"
-            logger.info("Slot model loaded on device=%s", model_device)
-        else:
+        if self.use_stub:
             logger.info("Slot decision client in STUB mode")
-            self.tokenizer = None
-            self.model = None
+        elif self.serving is None:
+            raise ValueError(
+                "SlotDecisionClient requires serving=LocalHFServing(...) when use_stub is False"
+            )
+        else:
+            logger.info(
+                "Slot decision client using shared LocalHFServing device=%s",
+                self.serving.device,
+            )
 
     def decide_slots(self, existing_slots: List[str], user_message: str) -> List[SlotDecision]:
         if self.use_stub:
@@ -159,38 +105,16 @@ class SlotDecisionClient:
         return out
 
     def _generate(self, messages: List[Dict[str, str]]) -> str:
-        if not self._is_model_ready or self.tokenizer is None or self.model is None:
+        if self.use_stub or self.serving is None:
             raise RuntimeError(
                 "Slot model is not initialized. "
-                "Disable --slot-use-stub and provide valid --slot-model-path."
+                "Disable --slot-use-stub and pass a shared LocalHFServing instance."
             )
-        try:
-            model_device = next(self.model.parameters()).device
-        except StopIteration:
-            model_device = "unknown"
-        logger.info("Slot generation using device=%s", model_device)
-        text = self.tokenizer.apply_chat_template(
+        logger.info("Slot decision generation via shared serving device=%s", self.serving.device)
+        return self.serving.generate_chat(
             messages,
-            tokenize=False,
-            add_generation_prompt=True,
+            gen=GenerationConfig(max_new_tokens=300, do_sample=False, temperature=0.0),
         )
-        inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
-        # Детерминированно: greedy (do_sample=False). temperature/top_p при sampling не используются.
-        # Полная стохастическая стабильность на GPU не гарантируется без torch.use_deterministic_algorithms (редко нужно).
-        eos_id = getattr(self.tokenizer, "eos_token_id", None)
-        pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=300,
-                do_sample=False,
-                temperature=0.0,
-                top_p=1.0,
-                pad_token_id=pad_id,
-                eos_token_id=eos_id,
-            )
-        result = self.tokenizer.decode(outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True)
-        return result.strip()
 
     def _coerce_to_slot_list(self, obj: Any) -> Optional[List[str]]:
         """Возвращает список имён слотов или None, если структура не распознана."""

@@ -50,15 +50,21 @@ def cmd_module_classifier(args: argparse.Namespace) -> None:
 
 def cmd_module_dst(args: argparse.Namespace) -> None:
     logger.info("Command: module dst")
+    from dst_memory.serving import LocalHFServing
     from dst_memory.slot_client import SlotDecisionClient
+    from dst_memory.slot_update_client import SlotUpdateClient
 
+    slot_serving = None
+    if not args.slot_use_stub:
+        slot_serving = LocalHFServing(args.slot_model_path)
     slot_client = SlotDecisionClient(
         use_stub=args.slot_use_stub,
-        model_path=args.slot_model_path,
+        serving=slot_serving,
         max_slots=args.slot_max_slots_per_message,
         max_retries=1,
     )
-    dst = DSTManager(slot_client=slot_client)
+    slot_update = SlotUpdateClient(serving=slot_serving, max_retries=1)
+    dst = DSTManager(slot_client=slot_client, slot_update=slot_update)
     created = dst.upsert_from_message(args.dialogue_id, args.text)
     print(json.dumps([asdict(x) for x in created], ensure_ascii=False, indent=2))
 
