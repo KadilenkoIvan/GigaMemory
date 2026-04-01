@@ -59,7 +59,7 @@ class SlotUpdateClient:
         for attempt in range(1, tries + 1):
             last = self.serving.generate_chat(
                 messages,
-                gen=GenerationConfig(max_new_tokens=400, do_sample=False, temperature=0.0),
+                gen=GenerationConfig(max_new_tokens=400, do_sample=False),
             )
             logger.info("SlotUpdate raw response attempt=%d: %s", attempt, last)
             if self._parse_operations(last) is not None:
@@ -76,7 +76,7 @@ class SlotUpdateClient:
         messages = [{"role": "system", "content": "Ты исправляешь JSON."}, {"role": "user", "content": prompt}]
         fixed = self.serving.generate_chat(
             messages,
-            gen=GenerationConfig(max_new_tokens=250, do_sample=False, temperature=0.0),
+            gen=GenerationConfig(max_new_tokens=250, do_sample=False),
         )
         logger.info("SlotUpdate fixed JSON candidate: %s", fixed)
         return fixed

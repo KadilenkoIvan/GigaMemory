@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 class GenerationConfig:
     max_new_tokens: int = 300
     do_sample: bool = False
-    temperature: float = 0.0
+    # NOTE: In HF Transformers, `temperature` is only used when `do_sample=True`.
+    # Keeping default at 1.0 avoids confusing "temperature=0" semantics.
+    temperature: float = 1.0
     top_p: float = 1.0
 
 
@@ -60,15 +62,21 @@ class LocalHFServing:
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
+        # Transformers only uses temperature/top_p when sampling is enabled.
+        # Passing them with do_sample=False triggers warnings ("will be ignored").
+        gen_kwargs = {
+            "max_new_tokens": gen.max_new_tokens,
+            "do_sample": gen.do_sample,
+            "pad_token_id": pad_id,
+            "eos_token_id": eos_id,
+        }
+        if gen.do_sample:
+            gen_kwargs["temperature"] = gen.temperature
+            gen_kwargs["top_p"] = gen.top_p
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=gen.max_new_tokens,
-                do_sample=gen.do_sample,
-                temperature=gen.temperature,
-                top_p=gen.top_p,
-                pad_token_id=pad_id,
-                eos_token_id=eos_id,
+                **gen_kwargs,
             )
         result = self.tokenizer.decode(
             outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
