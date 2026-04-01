@@ -44,10 +44,18 @@ class LocalHFServing:
         ).to(self.device)
         self.model.eval()
         try:
-            model_device = next(self.model.parameters()).device
+            first_param = next(self.model.parameters())
+            model_device = first_param.device
+            param_dtype = first_param.dtype
         except StopIteration:
             model_device = "unknown"
-        logger.info("Serving model loaded on device=%s", model_device)
+            param_dtype = None
+        logger.info(
+            "Serving model loaded on device=%s param_dtype=%s (requested load dtype=%s)",
+            model_device,
+            param_dtype,
+            torch_dtype,
+        )
 
     def generate_chat(
         self,
