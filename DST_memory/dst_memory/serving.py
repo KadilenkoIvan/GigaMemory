@@ -15,7 +15,7 @@ class GenerationConfig:
     max_new_tokens: int = 300
     do_sample: bool = False
     # NOTE: In HF Transformers, `temperature` is only used when `do_sample=True`.
-    # Keeping default at 1.0 avoids confusing "temperature=0" semantics.
+    # Default 1.0 avoids confusing "temperature=0" semantics.
     temperature: float = 1.0
     top_p: float = 1.0
 
@@ -50,10 +50,12 @@ class LocalHFServing:
         logger.info("Serving model loaded on device=%s", model_device)
 
     def generate_chat(
-        self, messages: List[Dict[str, str]], gen: Optional[GenerationConfig] = None
+        self,
+        messages: List[Dict[str, str]],
+        generation_config: Optional[GenerationConfig] = None,
     ) -> str:
-        if gen is None:
-            gen = GenerationConfig()
+        if generation_config is None:
+            generation_config = GenerationConfig()
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -65,14 +67,14 @@ class LocalHFServing:
         # Transformers only uses temperature/top_p when sampling is enabled.
         # Passing them with do_sample=False triggers warnings ("will be ignored").
         gen_kwargs = {
-            "max_new_tokens": gen.max_new_tokens,
-            "do_sample": gen.do_sample,
+            "max_new_tokens": generation_config.max_new_tokens,
+            "do_sample": generation_config.do_sample,
             "pad_token_id": pad_id,
             "eos_token_id": eos_id,
         }
-        if gen.do_sample:
-            gen_kwargs["temperature"] = gen.temperature
-            gen_kwargs["top_p"] = gen.top_p
+        if generation_config.do_sample:
+            gen_kwargs["temperature"] = generation_config.temperature
+            gen_kwargs["top_p"] = generation_config.top_p
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
