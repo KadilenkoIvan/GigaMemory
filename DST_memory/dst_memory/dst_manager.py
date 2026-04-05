@@ -178,6 +178,33 @@ class DSTManager:
         _ = user_text
         logger.debug("DST delete stub invoked dialogue_id=%s", dialogue_id)
 
+    def active_slot_names(self, dialogue_id: str) -> List[str]:
+        """Имена слотов, в которых есть хотя бы одна активная запись (стабильный порядок)."""
+        state = self.get_state(dialogue_id)
+        names: List[str] = []
+        for slot, records in state.slots.items():
+            if any(r.is_active for r in records):
+                names.append(slot)
+        return sorted(names)
+
+    def memory_lines_for_slots(
+        self, dialogue_id: str, slot_names: List[str]
+    ) -> List[str]:
+        """
+        Строки «слот: значение» для финальной LLM по выбранным слотам
+        (все активные записи по порядку в state).
+        """
+        state = self.get_state(dialogue_id)
+        lines: List[str] = []
+        for name in slot_names:
+            recs = state.slots.get(name)
+            if not recs:
+                continue
+            for rec in recs:
+                if rec.is_active:
+                    lines.append(f"{name}: {rec.value}")
+        return lines
+
     def active_facts(self, dialogue_id: str) -> List[MemoryFact]:
         state = self.get_state(dialogue_id)
         result: List[MemoryFact] = []

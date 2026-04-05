@@ -113,7 +113,7 @@ class SlotDecisionClient:
         logger.info("Slot decision generation via shared serving device=%s", self.serving.device)
         return self.serving.generate_chat(
             messages,
-            gen=GenerationConfig(max_new_tokens=300, do_sample=False),
+            generation_config=GenerationConfig(max_new_tokens=300, do_sample=False),
         )
 
     def _coerce_to_slot_list(self, obj: Any) -> Optional[List[str]]:
