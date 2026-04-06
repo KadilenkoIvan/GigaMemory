@@ -1,0 +1,424 @@
+{
+  "results": [
+    {
+      "id": "family_basic_1",
+      "slot": "FAMILY",
+      "message": "мы с женой женаты 10 лет, у нас есть сын и дочка",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЖЕНАТ_С",
+          "object": "ЖЕНА"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИМЕЕТ_РЕБЁНКА",
+          "object": "СЫН"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИМЕЕТ_РЕБЁНКА",
+          "object": "ДОЧКА"
+        }
+      ]
+    },
+    {
+      "id": "family_with_noise_2",
+      "slot": "FAMILY",
+      "message": "окей, и кстати мы с женой в браке 7 лет, сыну 12, спасибо",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЖЕНАТ_С",
+          "object": "ЖЕНА"
+        },
+        {
+          "subject": "СЫН",
+          "relation": "ВОЗРАСТ",
+          "object": "12"
+        }
+      ]
+    },
+    {
+      "id": "work_basic_3",
+      "slot": "WORK",
+      "message": "я работаю водителем такси в ночные смены",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "РАБОТАЕТ_КАК",
+          "object": "ВОДИТЕЛЬ ТАКСИ"
+        }
+      ]
+    },
+    {
+      "id": "work_org_4",
+      "slot": "WORK",
+      "message": "я устроился в Яндекс на позицию аналитика данных",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "РАБОТАЕТ_В",
+          "object": "ЯНДЕКС"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ДОЛЖНОСТЬ",
+          "object": "АНАЛИТИК_ДАННЫХ"
+        }
+      ]
+    },
+    {
+      "id": "food_pref_5",
+      "slot": "FOOD",
+      "message": "я не ем мясо, но люблю рыбу и сыр",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИСКЛЮЧАЕТ",
+          "object": "МЯСО"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЛЮБИТ",
+          "object": "РЯБУ"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЛЮБИТ",
+          "object": "СЫР"
+        }
+      ]
+    },
+    {
+      "id": "food_negative_6",
+      "slot": "FOOD",
+      "message": "сегодня суп так себе, вообще день не задался",
+      "triplets": []
+    },
+    {
+      "id": "pets_basic_7",
+      "slot": "PETS",
+      "message": "у меня кот Барсик, он боится собак",
+      "triplets": [
+        {
+          "subject": "КОТ_БАРСИК",
+          "relation": "БОЙЦИТСЯ",
+          "object": "СОБАК"
+        }
+      ]
+    },
+    {
+      "id": "pets_name_variant_8",
+      "slot": "PETS",
+      "message": "мою собаку зовут Луна, ей 3 года",
+      "triplets": [
+        {
+          "subject": "СУБАК",
+          "relation": "ИМЯ",
+          "object": "ЛУНА"
+        },
+        {
+          "subject": "СУБАК",
+          "relation": "ВОЗРАСТ",
+          "object": "3 ГОДА"
+        }
+      ]
+    },
+    {
+      "id": "sports_habit_9",
+      "slot": "SPORTS",
+      "message": "каждую субботу играю в футбол с друзьями",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИГРАЕТ",
+          "object": "ФУТБОЛ_СУБРБУТНИЦА"
+        }
+      ]
+    },
+    {
+      "id": "sports_noise_10",
+      "slot": "SPORTS",
+      "message": "ну да, спорт это полезно, но сегодня лень",
+      "triplets": []
+    },
+    {
+      "id": "location_basic_11",
+      "slot": "LOCATION",
+      "message": "я живу в Новосибирске, раньше жил в Томске",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЖИВЁТ_В",
+          "object": "НОВОСИБИРСК"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "РАНЕЕ_ЖИЛ_В",
+          "object": "ТОМСК"
+        }
+      ]
+    },
+    {
+      "id": "travel_plan_12",
+      "slot": "TRAVEL",
+      "message": "в августе планируем поездку в Казань с семьей",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ПЛАНИРУЕТ_ПОЕЗДКУ",
+          "object": "КАЗАНЬ_АВГУСТ"
+        }
+      ]
+    },
+    {
+      "id": "schedule_13",
+      "slot": "SCHEDULE",
+      "message": "по будням я встаю в 6 утра и ложусь около 23:00",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ВСТУП_ВРЕМЯ",
+          "object": "6_УТРА"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЛЫЖ_ВРЕМЯ",
+          "object": "23_00"
+        }
+      ]
+    },
+    {
+      "id": "goals_14",
+      "slot": "GOALS",
+      "message": "хочу через год перейти в продуктовую аналитику",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЦЕЛЬ",
+          "object": "ПЕРЕЙТИ_В_ПРОДУКТОВУЮ_АНИТАЛИКУ_ЧЕРЕЗ_ГОД"
+        }
+      ]
+    },
+    {
+      "id": "health_15",
+      "slot": "HEALTH",
+      "message": "у меня гипертония, поэтому слежу за давлением каждый день",
+      "triplets": []
+    },
+    {
+      "id": "mental_health_16",
+      "slot": "MENTAL_HEALTH",
+      "message": "у меня часто тревожность перед выступлениями",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЧАСТО_ЧУВСТВУЕТ",
+          "object": "ТРОЖНОСТЬ"
+        }
+      ]
+    },
+    {
+      "id": "finance_17",
+      "slot": "FINANCE",
+      "message": "я откладываю 20 процентов зарплаты на подушку безопасности",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ОТЛОЖИЛ",
+          "object": "20_ПРОЦЕНТОВ_ЗАРАБОТНОЙ_ПЛАТЫ"
+        }
+      ]
+    },
+    {
+      "id": "vehicles_18",
+      "slot": "VEHICLES",
+      "message": "у меня kia rio, а до этого была renault logan",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "АВТО",
+          "object": "KIA RIO"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "БЫЛО_АВТО",
+          "object": "RENAULT LOGAN"
+        }
+      ]
+    },
+    {
+      "id": "home_19",
+      "slot": "HOME",
+      "message": "я живу в двухкомнатной квартире и недавно сделал ремонт кухни",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЖИВЁТ",
+          "object": "ДВУХКОМНАТНАЯ_КРАЙНЯ_КВАРТИРА"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "СДЕЛАЛ",
+          "object": "РЕМОНТ_КУХНИ"
+        }
+      ]
+    },
+    {
+      "id": "tech_20",
+      "slot": "TECH",
+      "message": "я пользуюсь айфоном и макбуком для работы",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ПОЛЬЗУЕТСЯ",
+          "object": "АЙФОН"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ПОЛЬЗУЕТСЯ",
+          "object": "МАКБУК"
+        }
+      ]
+    },
+    {
+      "id": "education_21",
+      "slot": "EDUCATION",
+      "message": "я закончил НГУ по специальности прикладная математика",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЗАВЕРШИЛ",
+          "object": "НГУ"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "СПЕЦИАЛИЗАЦИЯ",
+          "object": "ПРИКЛАДНАЯ_МАТЕМАТИКА"
+        }
+      ]
+    },
+    {
+      "id": "romance_22",
+      "slot": "ROMANCE",
+      "message": "я встречаюсь с девушкой уже полтора года",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ВСТРЕЧАЕТСЯ",
+          "object": "ДЕВОЧКА_1_5_ГОДА"
+        }
+      ]
+    },
+    {
+      "id": "friends_23",
+      "slot": "FRIENDS",
+      "message": "мы с лучшим другом Димой дружим со школы",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ДРУЖИТ",
+          "object": "ДИМА_СШКОЛА"
+        }
+      ]
+    },
+    {
+      "id": "identity_24",
+      "slot": "IDENTITY",
+      "message": "меня зовут Иван, мне 27 лет",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИМЯ",
+          "object": "ИВАН"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ВОЗРАСТ",
+          "object": "27"
+        }
+      ]
+    },
+    {
+      "id": "events_25",
+      "slot": "EVENTS",
+      "message": "в прошлом месяце я выступал на конференции Data Fest",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "УПРАВЛЕНИЕ",
+          "object": "КОНФЕРЕНЦИЯ_DATA_FEST"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous_26",
+      "slot": "WORK",
+      "message": "думаю, может сменить направление, пока не решил",
+      "triplets": []
+    },
+    {
+      "id": "coref_27",
+      "slot": "FAMILY",
+      "message": "жена получила повышение, она теперь руководит отделом",
+      "triplets": [
+        {
+          "subject": "ЖЕНА",
+          "relation": "ПОЛУЧИЛА",
+          "object": "ПОВЫШЕНИЕ"
+        },
+        {
+          "subject": "ЖЕНА",
+          "relation": "РУКОВОДИТ",
+          "object": "ОТДЕЛ"
+        }
+      ]
+    },
+    {
+      "id": "mixed_slot_wrong_target_28",
+      "slot": "FOOD",
+      "message": "я работаю в банке и у меня кот Барсик",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "РАБОТАЕТ_В",
+          "object": "БАНКЕ"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИМЕЕТ_ПИТОМЦА",
+          "object": "КОТ_БАРСИК"
+        }
+      ]
+    },
+    {
+      "id": "empty_style_29",
+      "slot": "HOBBIES",
+      "message": "ок",
+      "triplets": []
+    },
+    {
+      "id": "long_multi_fact_30",
+      "slot": "FAMILY",
+      "message": "мы с женой 12 лет вместе, у нас двое детей: сын Артем ходит в 5 класс, дочка Маша занимается танцами, по выходным обычно проводим время вместе дома",
+      "triplets": [
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ЖЕНАТ_С",
+          "object": "ЖЕНА"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИМЕЕТ_РЕБЁНКА",
+          "object": "СЫН_АРТЁМ"
+        },
+        {
+          "subject": "ПОЛЬЗОВАТЕЛЬ",
+          "relation": "ИМЕЕТ_РЕБЁНКА",
+          "object": "ДОЧКА_МАША"
+        }
+      ]
+    }
+  ]
+}
