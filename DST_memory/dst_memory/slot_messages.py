@@ -13,7 +13,12 @@ from typing import Any
 from .slot_ontology import SLOT_LABEL_BY_ID, SLOT_ID_BY_LABEL, SLOT_IDS, slot_catalog_markdown
 
 
-def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str, Any]]:
+def build_messages(
+    message: str,
+    max_s: int,
+    slots: list[str],
+    force_at_least_one: bool = False,
+) -> list[dict[str, Any]]:
     system = (
         "You are a long-term memory router for a conversational assistant.\n"
         "Given a user message, select which memory slots should be updated.\n"
@@ -43,7 +48,14 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
             "Rules:\n"
             "- Select ONLY from the allowed ontology labels.\n"
             "- Select slots only if the message contains stable personal facts/preferences/relations/habits/plans.\n"
-            "- If nothing useful for memory is present, return an empty list.\n\n"
+            "- If nothing useful for memory is present, return an empty list.\n"
+            + (
+                "- IMPORTANT: the message was pre-filtered as IMPORTANT for memory. "
+                "If it contains any stable personal fact, you MUST choose at least one slot.\n"
+                if force_at_least_one
+                else ""
+            )
+            + "\n"
             "Return format строго:\n"
             '{"slot_assignments":["<SLOT_LABEL>", "..."]}'
         )
@@ -56,7 +68,7 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
                 [],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["identity_profile"]}'},
+        {"role": "assistant", "content": '{"slot_assignments":["IDENTITY"]}'},
         {
             "role": "user",
             "content": user_turn(
@@ -64,7 +76,7 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
                 [],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["family_relationships"]}'},
+        {"role": "assistant", "content": '{"slot_assignments":["FAMILY"]}'},
         {
             "role": "user",
             "content": user_turn(
@@ -72,7 +84,7 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
                 [],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["sports_activity"]}'},
+        {"role": "assistant", "content": '{"slot_assignments":["SPORTS"]}'},
         {
             "role": "user",
             "content": user_turn(
@@ -80,7 +92,7 @@ def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str,
                 ["family_relationships"],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["travel_mobility"]}'},
+        {"role": "assistant", "content": '{"slot_assignments":["TRAVEL"]}'},
         {
             "role": "user",
             "content": user_turn(

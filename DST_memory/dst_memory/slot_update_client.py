@@ -16,6 +16,7 @@ class SlotOperation:
     record_id: Optional[int] = None
     value: Optional[str] = None
     triplets: List[Dict[str, str]] | None = None
+    graph_artifacts: Dict[str, Any] | None = None
 
 
 class SlotUpdateClient:
@@ -113,20 +114,21 @@ class SlotUpdateClient:
             obj = json.loads(raw.strip())
         except Exception:
             return op
+        if isinstance(obj, dict):
+            op.graph_artifacts = obj
         arr = obj.get("triplets") if isinstance(obj, dict) else None
-        if not isinstance(arr, list):
-            return op
-        out: List[Dict[str, str]] = []
-        for x in arr:
-            if not isinstance(x, dict):
-                continue
-            s = str(x.get("subject", "")).strip()
-            r = str(x.get("relation", "")).strip()
-            o = str(x.get("object", "")).strip()
-            if not s or not r or not o:
-                continue
-            out.append({"subject": s, "relation": r, "object": o})
-        op.triplets = out[:3]
+        if isinstance(arr, list):
+            out: List[Dict[str, str]] = []
+            for x in arr:
+                if not isinstance(x, dict):
+                    continue
+                s = str(x.get("subject", "")).strip()
+                r = str(x.get("relation", "")).strip()
+                o = str(x.get("object", "")).strip()
+                if not s or not r or not o:
+                    continue
+                out.append({"subject": s, "relation": r, "object": o})
+            op.triplets = out[:3]
         return op
 
     def _generate_with_retries(self, messages: List[Dict[str, str]]) -> str:

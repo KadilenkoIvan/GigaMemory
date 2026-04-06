@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .slot_ontology import SLOT_BY_ID, SLOT_LABEL_BY_ID
+
 
 def build_update_messages(
     slot_name: str,
@@ -22,8 +24,12 @@ def build_update_messages(
 
     def user_turn(s: str, records: list[dict[str, Any]]) -> str:
         records_json = json.dumps(records, ensure_ascii=False)
+        slot_label = SLOT_LABEL_BY_ID.get(slot_name, slot_name.upper())
+        slot_desc = SLOT_BY_ID.get(slot_name).description if slot_name in SLOT_BY_ID else ""
         return (
-            f"Slot: {slot_name}\n"
+            f"SLOT_LABEL: {slot_label}\n"
+            f"SLOT_ID: {slot_name}\n"
+            f"SLOT_SCOPE: {slot_desc}\n"
             f"Existing records: {records_json}\n\n"
             f"Сообщение:\n```text\n{s}\n```\n\n"
             "Return format (strict JSON, nothing before/after):\n"
@@ -38,7 +44,9 @@ def build_update_messages(
             "Rules:\n"
             "- Multiple operations are allowed (add/update/delete).\n"
             "- If you return nothing, it must be the only operation.\n"
-            "- If the slot is chosen but the message has no facts for this slot, return nothing.\n\n"
+            "- If the slot is chosen but the message has no facts for this slot, return nothing.\n"
+            "- CRITICAL: extract ONLY facts that belong to THIS SLOT (SLOT_LABEL / SLOT_SCOPE).\n"
+            "  If the message contains facts for other slots, IGNORE them here.\n\n"
             "Requirements:\n"
             "— АТОМАРНОСТЬ: один факт = одна запись. Не склеивай несколько фактов через запятую или точку с запятой.\n"
             "  Плохо: «женат 20 лет, есть сын, любит путешествия»\n"
@@ -57,6 +65,8 @@ def build_update_messages(
             "  В других слотах аналогично: «работа: …», «спорт: …», «питомцы: …» — чтобы записи не сливались в один текст.\n"
             "— НЕТ ДУБЛЕЙ: перед добавлением проверяй, нет ли уже похожего факта в записях.\n"
             "  Если факт уже есть — update, не add.\n"
+            "— НЕ СКЛЕИВАЙ РАЗНЫЕ ТЕМЫ В UPDATE: update должен менять ТОЛЬКО тот же факт, что и старая запись.\n"
+            "  Если в сообщении появился новый факт другого типа — это add отдельной записью, а не дописывание к старой.\n"
         )
 
     few_shot = [
@@ -341,16 +351,25 @@ def build_triplets_messages(
     value: str,
 ) -> list[dict[str, Any]]:
     system = (
-        "You extract knowledge graph triplets from a user memory fact.\n"
-        "Return strictly valid JSON: "
-        "{\"triplets\":[{\"subject\":\"...\",\"relation\":\"...\",\"object\":\"...\"}]}.\n"
-        "No markdown, no extra text."
+        "You extract knowledge graph artifacts from a user memory fact.\n"
+        "Return strictly valid JSON with TWO fields: entities[] and relations[]. No markdown.\n"
+        "Schema:\n"
+        "{\n"
+        '  \"entities\": [{\"entity_name\": str, \"entity_type\": str, \"description\": str}],\n'
+        '  \"relations\": [{\"source_entity\": str, \"target_entity\": str, \"relation_type\": str, \"description\": str, \"relationship_strength\": int}]\n'
+        "}\n"
+        "Rules:\n"
+        "- Use English UPPER_CASE for entity_type and UPPER_SNAKE_CASE for relation_type.\n"
+        "- Always include an entity for the user: entity_name = \"USER\", entity_type = \"PERSON\".\n"
+        "- Entities and relations must be grounded in the text; no hallucination.\n"
+        "- relation endpoints MUST match entity_name values exactly.\n"
+        "- Prefer 1-5 entities and 1-5 relations.\n"
     )
     user = (
         f"Слот: {slot_name}\n"
         f"Сообщение пользователя:\n```text\n{user_message}\n```\n\n"
         f"Сохраненное значение:\n```text\n{value}\n```\n\n"
-        "Верни 1-3 триплета, отражающих факт о пользователе. "
-        "Если нечего извлекать, верни пустой массив."
+        "Extract entities and relations for THIS memory fact. "
+        "If nothing can be extracted, return empty lists."
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

@@ -117,6 +117,7 @@ class DSTMemoryPipeline:
                 "updated_at_step": fact.updated_at_step,
                 "is_active": fact.is_active,
                 "triplets": fact.triplets,
+                "graph_artifacts": fact.graph_artifacts,
             }
             self.store.add(vec, payload)
             if fact.triplets:

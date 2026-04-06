@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -24,6 +24,7 @@ class FactRecord:
     updated_at_step: int
     is_active: bool = True
     triplets: List[Dict[str, str]] = field(default_factory=list)
+    graph_artifacts: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -36,6 +37,7 @@ class MemoryFact:
     updated_at_step: int
     is_active: bool
     triplets: List[Dict[str, str]] = field(default_factory=list)
+    graph_artifacts: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -55,10 +55,20 @@ class SlotDecisionClient:
                 self.serving.device,
             )
 
-    def decide_slots(self, existing_slots: List[str], user_message: str) -> List[SlotDecision]:
+    def decide_slots(
+        self,
+        existing_slots: List[str],
+        user_message: str,
+        force_at_least_one: bool = False,
+    ) -> List[SlotDecision]:
         if self.use_stub:
             return [SlotDecision(slot_name="home_daily_life")]
-        messages = build_messages(user_message, self.max_slots, existing_slots)
+        messages = build_messages(
+            user_message,
+            self.max_slots,
+            existing_slots,
+            force_at_least_one=force_at_least_one,
+        )
 
         tries = self.max_retries + 1
         for attempt in range(1, tries + 1):
@@ -71,6 +81,14 @@ class SlotDecisionClient:
 
             decisions = self._finalize_decisions(existing_slots, raw_names)
             decisions = [d for d in decisions if d.slot_name in SLOT_IDS]
+            # If model produced only unknown labels, treat as parse failure to retry.
+            if raw_names and not decisions:
+                logger.warning(
+                    "Slot model attempt=%d returned unknown slots raw=%s",
+                    attempt,
+                    raw_names,
+                )
+                continue
             logger.info(
                 "Slot model attempt=%d parsed=%s decisions=%s",
                 attempt,

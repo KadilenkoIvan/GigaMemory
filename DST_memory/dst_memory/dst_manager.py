@@ -39,6 +39,14 @@ class DSTManager:
             existing_slots=existing_slots,
             user_message=user_text,
         )
+        # If the importance classifier already decided "important", it's better to
+        # force at least one slot than to silently drop the memory update.
+        if not slot_decisions:
+            slot_decisions = self.slot_client.decide_slots(
+                existing_slots=existing_slots,
+                user_message=user_text,
+                force_at_least_one=True,
+            )
         if not slot_decisions:
             logger.info("No slot decisions dialogue_id=%s step=%d", dialogue_id, state.step)
             return []
@@ -92,6 +100,7 @@ class DSTManager:
                     updated_at_step=state.step,
                     is_active=True,
                     triplets=list(op.triplets or []),
+                    graph_artifacts=dict(op.graph_artifacts or {}),
                 )
                 state.slots[slot].append(rec)
                 logger.info(
@@ -111,6 +120,7 @@ class DSTManager:
                         updated_at_step=state.step,
                         is_active=True,
                         triplets=list(op.triplets or []),
+                        graph_artifacts=dict(op.graph_artifacts or {}),
                     )
                 )
             elif op.op == "update" and op.record_id is not None and op.value:
@@ -127,6 +137,7 @@ class DSTManager:
                 rec.source_text = source_text
                 rec.updated_at_step = state.step
                 rec.triplets = list(op.triplets or [])
+                rec.graph_artifacts = dict(op.graph_artifacts or {})
                 logger.info(
                     "DST update dialogue_id=%s slot=%s id=%d value_preview=%s",
                     state.dialogue_id,
@@ -144,6 +155,7 @@ class DSTManager:
                         updated_at_step=rec.updated_at_step,
                         is_active=True,
                         triplets=list(op.triplets or []),
+                        graph_artifacts=dict(op.graph_artifacts or {}),
                     )
                 )
             elif op.op == "delete" and op.record_id is not None:
@@ -225,6 +237,7 @@ class DSTManager:
                             updated_at_step=rec.updated_at_step,
                             is_active=rec.is_active,
                             triplets=rec.triplets,
+                            graph_artifacts=rec.graph_artifacts,
                         )
                     )
         return result
@@ -253,6 +266,7 @@ class DSTManager:
                         "message_text": rec.value,
                         "source_text": rec.source_text,
                         "triplets": rec.triplets,
+                        "graph_artifacts": rec.graph_artifacts,
                         "created_at_step": rec.created_at_step,
                         "updated_at_step": rec.updated_at_step,
                         "is_active": rec.is_active,
