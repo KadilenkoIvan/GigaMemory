@@ -1,0 +1,71 @@
+2026-04-06 15:09:08,110 | INFO | dst_memory.serving | Serving model loaded on device=cuda:0 param_dtype=torch.float16 (requested load dtype=torch.float16)
+2026-04-06 15:09:08,111 | INFO | dst_memory.slot_client | Slot decision client using shared LocalHFServing device=cuda
+2026-04-06 15:09:08,115 | INFO | dst_memory.memory_gate_client | Memory gate client in STUB mode (эвристика по маркерам)
+2026-04-06 15:09:08,122 | INFO | sentence_transformers.SentenceTransformer | Use pytorch device_name: cuda:0
+2026-04-06 15:09:08,122 | INFO | sentence_transformers.SentenceTransformer | Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2026-04-06 15:09:11,710 | INFO | dst_memory.llm_client | FinalLLMClient initialized mode=openrouter model=openai/gpt-oss-120b:free temperature=0.0
+2026-04-06 15:09:11,797 | INFO | __main__ | Processing dialogue_id=1
+2026-04-06 15:09:11,797 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=145
+2026-04-06 15:09:12,069 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.7546 is_important=True
+2026-04-06 15:09:12,069 | INFO | dst_memory.dst_manager | Creating new dialogue state dialogue_id=1
+2026-04-06 15:09:12,069 | INFO | dst_memory.slot_client | Slot decision generation via shared serving device=cuda
+The following generation flags are not valid and may be ignored: ['temperature', 'top_p', 'top_k']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+2026-04-06 15:09:13,669 | INFO | dst_memory.slot_client | Slot model raw response attempt=1: {"slot_assignments":["identity_profile"]}
+2026-04-06 15:09:13,670 | INFO | dst_memory.slot_client | Slot model attempt=1 parsed=['identity_profile'] decisions=['identity_profile']
+2026-04-06 15:09:20,916 | INFO | dst_memory.slot_update_client | SlotUpdate raw response attempt=1: {"operations":[{"op":"add","value":"паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков"}]}
+2026-04-06 15:09:22,013 | INFO | dst_memory.dst_manager | DST add dialogue_id=1 slot=identity_profile id=1 value_preview=паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков
+Batches: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 18.37it/s]
+2026-04-06 15:09:22,072 | INFO | dst_memory.pipeline | Indexing facts dialogue_id=1 count=1
+2026-04-06 15:09:22,072 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=104
+2026-04-06 15:09:22,093 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.4787 is_important=False
+2026-04-06 15:09:22,093 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=102
+2026-04-06 15:09:22,111 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.2386 is_important=False
+2026-04-06 15:09:22,111 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=12
+2026-04-06 15:09:22,131 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.0188 is_important=False
+2026-04-06 15:09:22,131 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=95
+2026-04-06 15:09:22,147 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.8402 is_important=True
+2026-04-06 15:09:22,148 | INFO | dst_memory.slot_client | Slot decision generation via shared serving device=cuda
+2026-04-06 15:09:23,402 | INFO | dst_memory.slot_client | Slot model raw response attempt=1: {"slot_assignments":["identity_profile"]}
+2026-04-06 15:09:23,402 | INFO | dst_memory.slot_client | Slot model attempt=1 parsed=['identity_profile'] decisions=['identity_profile']
+2026-04-06 15:09:32,036 | INFO | dst_memory.slot_update_client | SlotUpdate raw response attempt=1: {"operations":[{"op":"update","id":1,"value":"паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена расстроилась из-за разных фамилий в паспортах"}]}
+2026-04-06 15:09:32,144 | INFO | dst_memory.dst_manager | DST update dialogue_id=1 slot=identity_profile id=1 value_preview=паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена рас
+Batches: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 185.70it/s]
+2026-04-06 15:09:32,152 | INFO | dst_memory.pipeline | Indexing facts dialogue_id=1 count=1
+2026-04-06 15:09:32,152 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=62
+2026-04-06 15:09:32,167 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.4557 is_important=False
+2026-04-06 15:09:32,167 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=150
+2026-04-06 15:09:32,181 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.4516 is_important=False
+2026-04-06 15:09:32,182 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=106
+2026-04-06 15:09:32,195 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.6969 is_important=True
+2026-04-06 15:09:32,195 | INFO | dst_memory.slot_client | Slot decision generation via shared serving device=cuda
+2026-04-06 15:09:33,352 | INFO | dst_memory.slot_client | Slot model raw response attempt=1: {"slot_assignments":[]}
+2026-04-06 15:09:33,352 | INFO | dst_memory.slot_client | Slot model attempt=1 parsed=[] decisions=[]
+2026-04-06 15:09:33,352 | INFO | dst_memory.dst_manager | No slot decisions dialogue_id=1 step=3
+2026-04-06 15:09:33,352 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=33
+2026-04-06 15:09:33,366 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.0217 is_important=False
+2026-04-06 15:09:33,366 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=93
+2026-04-06 15:09:33,380 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.5519 is_important=True
+2026-04-06 15:09:33,380 | INFO | dst_memory.slot_client | Slot decision generation via shared serving device=cuda
+2026-04-06 15:09:34,547 | INFO | dst_memory.slot_client | Slot model raw response attempt=1: {"slot_assignments":[]}
+2026-04-06 15:09:34,547 | INFO | dst_memory.slot_client | Slot model attempt=1 parsed=[] decisions=[]
+2026-04-06 15:09:34,547 | INFO | dst_memory.dst_manager | No slot decisions dialogue_id=1 step=4
+2026-04-06 15:09:34,547 | INFO | dst_memory.pipeline | write_to_memory dialogue_id=1 role=user content_len=132
+2026-04-06 15:09:34,562 | INFO | dst_memory.pipeline | classifier result dialogue_id=1 p_important=0.6821 is_important=True
+2026-04-06 15:09:34,562 | INFO | dst_memory.slot_client | Slot decision generation via shared serving device=cuda
+2026-04-06 15:09:35,794 | INFO | dst_memory.slot_client | Slot model raw response attempt=1: {"slot_assignments":["home_activities"]}
+/home/student/miniforge3/lib/python3.13/site-packages/pymorphy2/analyzer.py:114: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+2026-04-06 15:09:35,940 | INFO | pymorphy2.opencorpora_dict.wrapper | Loading dictionaries from /home/student/miniforge3/lib/python3.13/site-packages/pymorphy2_dicts_ru/data
+2026-04-06 15:09:35,975 | INFO | pymorphy2.opencorpora_dict.wrapper | format: 2.4, revision: 417127, updated: 2020-10-11T15:05:51.070345
+2026-04-06 15:09:36,434 | INFO | dst_memory.slot_client | Slot model attempt=1 parsed=['home_activities'] decisions=[]
+2026-04-06 15:09:36,434 | INFO | dst_memory.dst_manager | No slot decisions dialogue_id=1 step=5
+2026-04-06 15:09:36,434 | INFO | dst_memory.pipeline | answer_without_final_llm dialogue_id=1
+Batches: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00, 179.13it/s]
+2026-04-06 15:09:36,445 | INFO | dst_memory.retriever | Retriever result dialogue_id=1 query_len=26 total_hits=2 filtered_hits=2
+2026-04-06 15:09:36,445 | INFO | dst_memory.pipeline | clear_memory dialogue_id=1
+2026-04-06 15:09:36,445 | INFO | dst_memory.dst_manager | Clearing DST state dialogue_id=1
+2026-04-06 15:09:36,445 | INFO | dst_memory.vector_store | VectorStore clear dialogue_id=1 removed=2 now_empty=true
+2026-04-06 15:09:36,446 | INFO | __main__ | Saved output to DST_memory/out_shot_meno.json
+2026-04-06 15:09:36,446 | INFO | __main__ | Saved logs output to DST_memory/out_shot_meno_logs.json
+Saved: DST_memory/out_shot_meno.json
+Saved logs: DST_memory/out_shot_meno_logs.json
