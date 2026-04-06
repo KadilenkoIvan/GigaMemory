@@ -29,20 +29,40 @@ class LocalHFServing:
 
     def __init__(self, model_path_or_id: str, torch_dtype: torch.dtype = torch.float16):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Force fp16 on CUDA for predictable memory footprint.
+        self.compute_dtype = torch.float16 if self.device == "cuda" else torch.float32
         resolved = resolve_slot_model_path(model_path_or_id)
         logger.info(
             "Serving loading model=%s (resolved=%s) device=%s dtype=%s",
             model_path_or_id,
             resolved,
             self.device,
-            torch_dtype,
+            self.compute_dtype,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            resolved,
-            trust_remote_code=True,
-            torch_dtype=torch_dtype,
-        ).to(self.device)
+        # Newer transformers prefers `dtype`; fallback to `torch_dtype` for compatibility.
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                resolved,
+                trust_remote_code=True,
+                dtype=self.compute_dtype,
+                low_cpu_mem_usage=True,
+            ).to(self.device)
+        except TypeError:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                resolved,
+                trust_remote_code=True,
+                torch_dtype=self.compute_dtype,
+                low_cpu_mem_usage=True,
+            ).to(self.device)
+        # Keep generation config consistent with greedy decoding to avoid warnings.
+        try:
+            self.model.generation_config.do_sample = False
+            self.model.generation_config.temperature = None
+            self.model.generation_config.top_p = None
+            self.model.generation_config.top_k = None
+        except Exception:
+            pass
         self.model.eval()
         try:
             first_param = next(self.model.parameters())
@@ -55,7 +75,7 @@ class LocalHFServing:
             "Serving model loaded on device=%s param_dtype=%s (requested load dtype=%s)",
             model_device,
             param_dtype,
-            torch_dtype,
+            self.compute_dtype,
         )
 
     def generate_chat(
@@ -89,6 +109,9 @@ class LocalHFServing:
                 **inputs,
                 **gen_kwargs,
             )
+        if self.device == "cuda":
+            # Drop allocator cache so nvidia-smi reflects real working set better.
+            torch.cuda.empty_cache()
         result = self.tokenizer.decode(
             outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
         )

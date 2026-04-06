@@ -11,16 +11,29 @@ class ImportanceClassifier:
     def __init__(self, model_path: str, threshold: float = 0.5):
         self.threshold = threshold
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.compute_dtype = torch.float16 if self.device == "cuda" else torch.float32
         logger.info(
-            "Initializing ImportanceClassifier model_path=%s threshold=%.3f device=%s",
+            "Initializing ImportanceClassifier model_path=%s threshold=%.3f device=%s dtype=%s",
             model_path,
             threshold,
             self.device,
+            self.compute_dtype,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_path, trust_remote_code=True
-        ).to(self.device)
+        try:
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                dtype=self.compute_dtype,
+                low_cpu_mem_usage=True,
+            ).to(self.device)
+        except TypeError:
+            self.model = AutoModelForSequenceClassification.from_pretrained(
+                model_path,
+                trust_remote_code=True,
+                torch_dtype=self.compute_dtype,
+                low_cpu_mem_usage=True,
+            ).to(self.device)
         self.model.eval()
 
     def predict(self, text: str) -> Dict[str, float]:
