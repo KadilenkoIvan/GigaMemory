@@ -11,8 +11,8 @@ from .memory_gate_client import MemoryGateClient
 from .models import MemoryFact, Message
 from .retriever import MemoryRetriever
 from .serving import LocalHFServing
-from .slot_client import SlotDecisionClient
-from .slot_update_client import SlotUpdateClient
+from .slot_select_client import SlotSelectClient
+from .triplet_client import TripletExtractionClient
 from .vector_store import InMemoryVectorStore
 
 logger = logging.getLogger(__name__)
@@ -38,14 +38,23 @@ class DSTMemoryPipeline:
         slot_serving = None
         if not config.slot_use_stub:
             slot_serving = LocalHFServing(config.slot_model_path)
-        slot_client = SlotDecisionClient(
+        triplet_extractor = TripletExtractionClient(
+            use_stub=config.slot_use_stub,
+            serving=slot_serving,
+            max_triplets=max(6, config.slot_max_slots_per_message * 3),
+            max_retries=1,
+        )
+        slot_selector = SlotSelectClient(
             use_stub=config.slot_use_stub,
             serving=slot_serving,
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
         )
-        slot_update = SlotUpdateClient(serving=slot_serving, max_retries=1)
-        self.dst = DSTManager(slot_client=slot_client, slot_update=slot_update)
+        self.dst = DSTManager(
+            triplet_extractor=triplet_extractor,
+            slot_selector=slot_selector,
+            single_pass_fallback=True,
+        )
         gate_stub = config.memory_gate_use_stub or slot_serving is None
         self.memory_gate = MemoryGateClient(
             use_stub=gate_stub,
@@ -88,6 +97,13 @@ class DSTMemoryPipeline:
 
         self.dst.delete_with_stub_policy(dialogue_id, message.content)
         new_facts = self.dst.upsert_from_message(dialogue_id, message.content)
+        if not new_facts:
+            return {
+                "saved": False,
+                "reason": "no_facts_extracted",
+                "classifier": cls,
+                "new_facts": [],
+            }
         self._index_facts(dialogue_id, new_facts)
         return {
             "saved": True,
@@ -100,7 +116,8 @@ class DSTMemoryPipeline:
         if not facts:
             logger.debug("index_facts skipped empty facts")
             return
-        texts = [f.slot for f in facts]
+        # Index by the fact text itself, not only by slot name.
+        texts = [f"{f.slot}: {f.value}" for f in facts]
         vectors = self.embedder.encode(texts)
         logger.info("Indexing facts dialogue_id=%s count=%d", dialogue_id, len(facts))
         for fact, vec in zip(facts, vectors):
@@ -109,6 +126,9 @@ class DSTMemoryPipeline:
                 "slot": fact.slot,
                 "slot_name": fact.slot,
                 "value": fact.value,
+                "subject": fact.subject,
+                "relation": fact.relation,
+                "object": fact.object,
                 "message_text": fact.value,
                 "source_text": fact.source_text,
                 "created_at_step": fact.created_at_step,
@@ -193,16 +213,20 @@ class DSTMemoryPipeline:
         meta_base: Dict,
     ) -> Tuple[List[str], Dict]:
         if not self.config.use_memory_gate:
+            entity_scope = self.dst.entity_scope_for_slots(dialogue_id, slot_names, hops=1)
             hits = self.retriever.search(
                 dialogue_id=dialogue_id,
                 query=question,
                 top_k=self.config.retrieval_top_k,
+                allowed_slots=slot_names,
+                allowed_entities=entity_scope,
             )
             lines = self._lines_from_retriever_hits(hits)
             return lines, {
                 **meta_base,
                 "use_memory": bool(lines),
-                "selected_slots": [],
+                "selected_slots": list(slot_names),
+                "entity_scope": entity_scope,
                 "mode": "gate_disabled_vector_topk",
                 "retrieved_count": len(hits),
             }
@@ -218,16 +242,21 @@ class DSTMemoryPipeline:
                 "mode": "llm_gate_rejected_vector",
             }
 
+        selected_slots = list(sel.slot_names) if sel.slot_names else list(slot_names)
+        entity_scope = self.dst.entity_scope_for_slots(dialogue_id, selected_slots, hops=1)
         hits = self.retriever.search(
             dialogue_id=dialogue_id,
             query=question,
             top_k=self.config.retrieval_top_k,
+            allowed_slots=selected_slots,
+            allowed_entities=entity_scope,
         )
         lines = self._lines_from_retriever_hits(hits)
         return lines, {
             **meta_base,
             "use_memory": bool(lines),
-            "selected_slots": list(sel.slot_names),
+            "selected_slots": selected_slots,
+            "entity_scope": entity_scope,
             "mode": "llm_gate_vector_topk",
             "retrieved_count": len(hits),
         }
@@ -235,8 +264,16 @@ class DSTMemoryPipeline:
     def answer_without_final_llm(self, dialogue_id: str, question: str) -> Dict:
         logger.info("answer_without_final_llm dialogue_id=%s", dialogue_id)
         memory_lines, gate_meta = self._memory_context_for_question(dialogue_id, question)
+        selected_slots = gate_meta.get("selected_slots") or self.dst.active_slot_names(dialogue_id)
+        entity_scope = gate_meta.get("entity_scope") or self.dst.entity_scope_for_slots(
+            dialogue_id, selected_slots, hops=1
+        )
         hits = self.retriever.search(
-            dialogue_id=dialogue_id, query=question, top_k=self.config.retrieval_top_k
+            dialogue_id=dialogue_id,
+            query=question,
+            top_k=self.config.retrieval_top_k,
+            allowed_slots=selected_slots,
+            allowed_entities=entity_scope,
         )
         memory_slots = self.dst.slots_with_messages(dialogue_id)
         return {

@@ -224,6 +224,36 @@ def create_parser(
     )
     op.set_defaults(func=cmd_module_openrouter_ping)
 
+    tj = m_sub.add_parser(
+        "triplet-json-test",
+        help="Run per-slot triplet extraction from JSON payload",
+    )
+    tj.add_argument(
+        "--json-path",
+        type=str,
+        default="DST_memory/triplet_test_payload.json",
+        help="Path to JSON payload with fields: message, slot",
+    )
+    tj.set_defaults(func=cmd_module_triplet_json_test)
+
+    tjb = m_sub.add_parser(
+        "triplet-json-batch-test",
+        help="Run per-slot triplet extraction for a batch JSON payload",
+    )
+    tjb.add_argument(
+        "--json-path",
+        type=str,
+        default="DST_memory/triplet_test_payloads.json",
+        help="Path to JSON payload with field 'cases': [{id, message, slot}, ...]",
+    )
+    tjb.add_argument(
+        "--output-path",
+        type=str,
+        default="DST_memory/triplet_test_results.json",
+        help="Where to save batch extraction results",
+    )
+    tjb.set_defaults(func=cmd_module_triplet_json_batch_test)
+
     p = sub.add_parser("pipeline", help="Run whole pipeline")
     p_sub = p.add_subparsers(required=True)
 
@@ -266,21 +296,30 @@ def cmd_module_classifier(args: argparse.Namespace) -> None:
 def cmd_module_dst(args: argparse.Namespace) -> None:
     from dst_memory.dst_manager import DSTManager
     from dst_memory.serving import LocalHFServing
-    from dst_memory.slot_client import SlotDecisionClient
-    from dst_memory.slot_update_client import SlotUpdateClient
+    from dst_memory.slot_select_client import SlotSelectClient
+    from dst_memory.triplet_client import TripletExtractionClient
 
     logger.info("Command: module dst")
     slot_serving = None
     if not args.slot_use_stub:
         slot_serving = LocalHFServing(args.slot_model_path)
-    slot_client = SlotDecisionClient(
+    triplet_extractor = TripletExtractionClient(
         use_stub=args.slot_use_stub,
         serving=slot_serving,
-        max_slots=args.slot_max_slots_per_message,
+        max_triplets=max(6, int(args.slot_max_slots_per_message) * 3),
         max_retries=1,
     )
-    slot_update = SlotUpdateClient(serving=slot_serving, max_retries=1)
-    dst = DSTManager(slot_client=slot_client, slot_update=slot_update)
+    slot_selector = SlotSelectClient(
+        use_stub=args.slot_use_stub,
+        serving=slot_serving,
+        max_slots=int(args.slot_max_slots_per_message),
+        max_retries=1,
+    )
+    dst = DSTManager(
+        triplet_extractor=triplet_extractor,
+        slot_selector=slot_selector,
+        single_pass_fallback=True,
+    )
     created = dst.upsert_from_message(args.dialogue_id, args.text)
     print(json.dumps([asdict(x) for x in created], ensure_ascii=False, indent=2))
 
@@ -324,6 +363,99 @@ def cmd_module_vector(args: argparse.Namespace) -> None:
     q = embedder.encode([args.query])[0]
     hits = store.search(q, top_k=args.top_k)
     print(json.dumps(hits, ensure_ascii=False, indent=2))
+
+
+def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
+    from dst_memory.ontology import DEFAULT_USER_SLOTS
+    from dst_memory.serving import LocalHFServing
+    from dst_memory.triplet_client import TripletExtractionClient
+
+    logger.info("Command: module triplet-json-test path=%s", args.json_path)
+    with open(args.json_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    msg = str(payload.get("message", "")).strip()
+    slot = str(payload.get("slot", "")).strip().upper()
+    if not msg:
+        raise SystemExit("JSON payload must include non-empty 'message'")
+    if slot not in set(DEFAULT_USER_SLOTS.slot_names):
+        raise SystemExit(
+            f"Invalid slot '{slot}'. Allowed: {', '.join(DEFAULT_USER_SLOTS.slot_names)}"
+        )
+
+    serving = LocalHFServing(args.slot_model_path)
+    client = TripletExtractionClient(
+        use_stub=False,
+        serving=serving,
+        max_triplets=max(6, int(args.slot_max_slots_per_message) * 3),
+        max_retries=1,
+    )
+    triplets = client.extract_for_slot(msg, slot)
+    out = {
+        "slot": slot,
+        "message": msg,
+        "triplets": [
+            {"subject": t.subject, "relation": t.relation, "object": t.object}
+            for t in triplets
+        ],
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+
+
+def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
+    from dst_memory.ontology import DEFAULT_USER_SLOTS
+    from dst_memory.serving import LocalHFServing
+    from dst_memory.triplet_client import TripletExtractionClient
+
+    logger.info("Command: module triplet-json-batch-test path=%s", args.json_path)
+    with open(args.json_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    cases = payload.get("cases", [])
+    if not isinstance(cases, list) or not cases:
+        raise SystemExit("Batch JSON must contain non-empty 'cases' list")
+
+    allowed = set(DEFAULT_USER_SLOTS.slot_names)
+    serving = LocalHFServing(args.slot_model_path)
+    client = TripletExtractionClient(
+        use_stub=False,
+        serving=serving,
+        max_triplets=max(6, int(args.slot_max_slots_per_message) * 3),
+        max_retries=1,
+    )
+
+    results = []
+    for idx, case in enumerate(cases, start=1):
+        cid = str(case.get("id", f"case_{idx}"))
+        msg = str(case.get("message", "")).strip()
+        slot = str(case.get("slot", "")).strip().upper()
+        if not msg or slot not in allowed:
+            results.append(
+                {
+                    "id": cid,
+                    "slot": slot,
+                    "message": msg,
+                    "error": "invalid_case",
+                    "triplets": [],
+                }
+            )
+            continue
+        triplets = client.extract_for_slot(msg, slot)
+        results.append(
+            {
+                "id": cid,
+                "slot": slot,
+                "message": msg,
+                "triplets": [
+                    {"subject": t.subject, "relation": t.relation, "object": t.object}
+                    for t in triplets
+                ],
+            }
+        )
+
+    with open(args.output_path, "w", encoding="utf-8") as f:
+        json.dump({"results": results}, f, ensure_ascii=False, indent=2)
+    print(f"Saved: {args.output_path}")
+    print(json.dumps({"cases": len(results)}, ensure_ascii=False))
 
 
 def cmd_pipeline_jsonl(args: argparse.Namespace) -> None:

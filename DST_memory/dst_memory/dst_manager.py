@@ -1,9 +1,10 @@
 from typing import Any, Dict, List
 import logging
 
+from .graph_backend import UserGraphBackend
 from .models import DialogueMemoryState, FactRecord, MemoryFact
-from .slot_client import SlotDecisionClient
-from .slot_update_client import SlotOperation, SlotUpdateClient
+from .slot_select_client import SlotSelectClient
+from .triplet_client import TripletExtractionClient
 
 logger = logging.getLogger(__name__)
 
@@ -11,13 +12,22 @@ logger = logging.getLogger(__name__)
 class DSTManager:
     """
     Slot state manager.
-    TODO: replace slot extraction and delete decision with stronger LLM logic.
+    Slots correspond to subgraphs in a single user knowledge graph.
+    Facts are stored as KG triplets per slot.
     """
 
-    def __init__(self, slot_client: SlotDecisionClient, slot_update: SlotUpdateClient):
+    def __init__(
+        self,
+        triplet_extractor: TripletExtractionClient,
+        slot_selector: SlotSelectClient,
+        *,
+        single_pass_fallback: bool = True,
+    ):
         self._states: Dict[str, DialogueMemoryState] = {}
-        self.slot_client = slot_client
-        self.slot_update = slot_update
+        self.triplet_extractor = triplet_extractor
+        self.slot_selector = slot_selector
+        self.single_pass_fallback = single_pass_fallback
+        self.graph = UserGraphBackend()
 
     def get_state(self, dialogue_id: str) -> DialogueMemoryState:
         if dialogue_id not in self._states:
@@ -34,140 +44,59 @@ class DSTManager:
             state.step,
             len(user_text),
         )
-        existing_slots = list(state.slots.keys())
-        slot_decisions = self.slot_client.decide_slots(
-            existing_slots=existing_slots,
-            user_message=user_text,
-        )
-        if not slot_decisions:
-            logger.info("No slot decisions dialogue_id=%s step=%d", dialogue_id, state.step)
+        created: List[MemoryFact] = []
+        selected_slots = self.slot_selector.select_slots(user_text)
+        triplets = []
+        for slot in selected_slots:
+            triplets.extend(self.triplet_extractor.extract_for_slot(user_text, slot))
+        if not triplets and self.single_pass_fallback:
+            triplets = self.triplet_extractor.extract(user_text)
+        if not triplets:
+            logger.info("No triplets extracted dialogue_id=%s step=%d", dialogue_id, state.step)
             return []
 
-        created: List[MemoryFact] = []
-        for decision in slot_decisions:
-            slot = decision.slot_name
+        for t in triplets:
+            slot = t.slot
             if slot not in state.slots:
                 state.slots[slot] = []
-            existing = [
-                {"id": r.record_id, "value": r.value}
-                for r in state.slots[slot]
-                if r.is_active
-            ]
-            ops = self.slot_update.plan_operations(slot, existing, user_text)
-            self._apply_operations(state, slot, ops, user_text, created)
-        return created
-
-    def _apply_operations(
-        self,
-        state: DialogueMemoryState,
-        slot: str,
-        ops: List[SlotOperation],
-        source_text: str,
-        out_facts: List[MemoryFact],
-    ) -> None:
-        if slot not in state.slots:
-            state.slots[slot] = []
-
-        by_id: Dict[int, FactRecord] = {
-            r.record_id: r for r in state.slots[slot] if r.is_active
-        }
-
-        for op in ops:
-            if op.op == "nothing":
-                logger.info(
-                    "DST nothing dialogue_id=%s slot=%s step=%d",
-                    state.dialogue_id,
-                    slot,
-                    state.step,
-                )
-                continue
-            if op.op == "add" and op.value:
-                rid = state.next_record_id
-                state.next_record_id += 1
-                rec = FactRecord(
+            rid = state.next_record_id
+            state.next_record_id += 1
+            value = t.as_line()
+            rec = FactRecord(
+                record_id=rid,
+                value=value,
+                source_text=user_text,
+                created_at_step=state.step,
+                updated_at_step=state.step,
+                subject=t.subject,
+                relation=t.relation,
+                object=t.object,
+                is_active=True,
+            )
+            state.slots[slot].append(rec)
+            self.graph.upsert_triplet(
+                dialogue_id,
+                record_id=rid,
+                slot=slot,
+                subject=t.subject,
+                relation=t.relation,
+                object_=t.object,
+            )
+            created.append(
+                MemoryFact(
+                    slot=slot,
                     record_id=rid,
-                    value=op.value,
-                    source_text=source_text,
+                    value=value,
+                    source_text=user_text,
                     created_at_step=state.step,
                     updated_at_step=state.step,
                     is_active=True,
+                    subject=t.subject,
+                    relation=t.relation,
+                    object=t.object,
                 )
-                state.slots[slot].append(rec)
-                logger.info(
-                    "DST add dialogue_id=%s slot=%s id=%d value_preview=%s",
-                    state.dialogue_id,
-                    slot,
-                    rid,
-                    op.value[:80],
-                )
-                out_facts.append(
-                    MemoryFact(
-                        slot=slot,
-                        record_id=rid,
-                        value=op.value,
-                        source_text=source_text,
-                        created_at_step=state.step,
-                        updated_at_step=state.step,
-                        is_active=True,
-                    )
-                )
-            elif op.op == "update" and op.record_id is not None and op.value:
-                rec = by_id.get(op.record_id)
-                if not rec:
-                    logger.info(
-                        "DST update skipped (unknown id) dialogue_id=%s slot=%s id=%s",
-                        state.dialogue_id,
-                        slot,
-                        op.record_id,
-                    )
-                    continue
-                rec.value = op.value
-                rec.source_text = source_text
-                rec.updated_at_step = state.step
-                logger.info(
-                    "DST update dialogue_id=%s slot=%s id=%d value_preview=%s",
-                    state.dialogue_id,
-                    slot,
-                    op.record_id,
-                    op.value[:80],
-                )
-                out_facts.append(
-                    MemoryFact(
-                        slot=slot,
-                        record_id=op.record_id,
-                        value=op.value,
-                        source_text=source_text,
-                        created_at_step=rec.created_at_step,
-                        updated_at_step=rec.updated_at_step,
-                        is_active=True,
-                    )
-                )
-            elif op.op == "delete" and op.record_id is not None:
-                rec = by_id.get(op.record_id)
-                if not rec:
-                    logger.info(
-                        "DST delete skipped (unknown id) dialogue_id=%s slot=%s id=%s",
-                        state.dialogue_id,
-                        slot,
-                        op.record_id,
-                    )
-                    continue
-                rec.is_active = False
-                rec.source_text = source_text
-                rec.updated_at_step = state.step
-                logger.info(
-                    "DST delete dialogue_id=%s slot=%s id=%d",
-                    state.dialogue_id,
-                    slot,
-                    op.record_id,
-                )
-            else:
-                logger.debug(
-                    "DST op ignored dialogue_id=%s slot=%s op=%s",
-                    state.dialogue_id,
-                    slot,
-                    op,
-                )
+            )
+        return created
 
     def delete_with_stub_policy(self, dialogue_id: str, user_text: str) -> None:
         """
@@ -220,9 +149,18 @@ class DSTManager:
                             created_at_step=rec.created_at_step,
                             updated_at_step=rec.updated_at_step,
                             is_active=rec.is_active,
+                            subject=rec.subject,
+                            relation=rec.relation,
+                            object=rec.object,
                         )
                     )
         return result
+
+    def entity_scope_for_slots(
+        self, dialogue_id: str, slot_names: List[str], hops: int = 1
+    ) -> List[str]:
+        seeds = self.graph.entities_for_slots(dialogue_id, slot_names)
+        return self.graph.expand_entities(dialogue_id, seeds, hops=hops)
 
     def slots_with_messages(self, dialogue_id: str) -> List[Dict[str, Any]]:
         """
@@ -247,6 +185,9 @@ class DSTManager:
                         "record_id": rec.record_id,
                         "message_text": rec.value,
                         "source_text": rec.source_text,
+                        "subject": rec.subject,
+                        "relation": rec.relation,
+                        "object": rec.object,
                         "created_at_step": rec.created_at_step,
                         "updated_at_step": rec.updated_at_step,
                         "is_active": rec.is_active,
@@ -258,3 +199,4 @@ class DSTManager:
     def clear_dialogue(self, dialogue_id: str) -> None:
         logger.info("Clearing DST state dialogue_id=%s", dialogue_id)
         self._states.pop(dialogue_id, None)
+        self.graph.clear_dialogue(dialogue_id)

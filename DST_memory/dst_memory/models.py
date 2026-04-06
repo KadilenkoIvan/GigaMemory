@@ -16,6 +16,9 @@ class FactRecord:
     source_text: str
     created_at_step: int
     updated_at_step: int
+    subject: str = ""
+    relation: str = ""
+    object: str = ""
     is_active: bool = True
 
 
@@ -28,6 +31,9 @@ class MemoryFact:
     created_at_step: int
     updated_at_step: int
     is_active: bool
+    subject: str = ""
+    relation: str = ""
+    object: str = ""
 
 
 @dataclass

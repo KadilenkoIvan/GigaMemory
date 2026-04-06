@@ -1,0 +1,154 @@
+{
+  "cases": [
+    {
+      "id": "family_basic_1",
+      "slot": "FAMILY",
+      "message": "мы с женой женаты 10 лет, у нас есть сын и дочка"
+    },
+    {
+      "id": "family_with_noise_2",
+      "slot": "FAMILY",
+      "message": "окей, и кстати мы с женой в браке 7 лет, сыну 12, спасибо"
+    },
+    {
+      "id": "work_basic_3",
+      "slot": "WORK",
+      "message": "я работаю водителем такси в ночные смены"
+    },
+    {
+      "id": "work_org_4",
+      "slot": "WORK",
+      "message": "я устроился в Яндекс на позицию аналитика данных"
+    },
+    {
+      "id": "food_pref_5",
+      "slot": "FOOD",
+      "message": "я не ем мясо, но люблю рыбу и сыр"
+    },
+    {
+      "id": "food_negative_6",
+      "slot": "FOOD",
+      "message": "сегодня суп так себе, вообще день не задался"
+    },
+    {
+      "id": "pets_basic_7",
+      "slot": "PETS",
+      "message": "у меня кот Барсик, он боится собак"
+    },
+    {
+      "id": "pets_name_variant_8",
+      "slot": "PETS",
+      "message": "мою собаку зовут Луна, ей 3 года"
+    },
+    {
+      "id": "sports_habit_9",
+      "slot": "SPORTS",
+      "message": "каждую субботу играю в футбол с друзьями"
+    },
+    {
+      "id": "sports_noise_10",
+      "slot": "SPORTS",
+      "message": "ну да, спорт это полезно, но сегодня лень"
+    },
+    {
+      "id": "location_basic_11",
+      "slot": "LOCATION",
+      "message": "я живу в Новосибирске, раньше жил в Томске"
+    },
+    {
+      "id": "travel_plan_12",
+      "slot": "TRAVEL",
+      "message": "в августе планируем поездку в Казань с семьей"
+    },
+    {
+      "id": "schedule_13",
+      "slot": "SCHEDULE",
+      "message": "по будням я встаю в 6 утра и ложусь около 23:00"
+    },
+    {
+      "id": "goals_14",
+      "slot": "GOALS",
+      "message": "хочу через год перейти в продуктовую аналитику"
+    },
+    {
+      "id": "health_15",
+      "slot": "HEALTH",
+      "message": "у меня гипертония, поэтому слежу за давлением каждый день"
+    },
+    {
+      "id": "mental_health_16",
+      "slot": "MENTAL_HEALTH",
+      "message": "у меня часто тревожность перед выступлениями"
+    },
+    {
+      "id": "finance_17",
+      "slot": "FINANCE",
+      "message": "я откладываю 20 процентов зарплаты на подушку безопасности"
+    },
+    {
+      "id": "vehicles_18",
+      "slot": "VEHICLES",
+      "message": "у меня kia rio, а до этого была renault logan"
+    },
+    {
+      "id": "home_19",
+      "slot": "HOME",
+      "message": "я живу в двухкомнатной квартире и недавно сделал ремонт кухни"
+    },
+    {
+      "id": "tech_20",
+      "slot": "TECH",
+      "message": "я пользуюсь айфоном и макбуком для работы"
+    },
+    {
+      "id": "education_21",
+      "slot": "EDUCATION",
+      "message": "я закончил НГУ по специальности прикладная математика"
+    },
+    {
+      "id": "romance_22",
+      "slot": "ROMANCE",
+      "message": "я встречаюсь с девушкой уже полтора года"
+    },
+    {
+      "id": "friends_23",
+      "slot": "FRIENDS",
+      "message": "мы с лучшим другом Димой дружим со школы"
+    },
+    {
+      "id": "identity_24",
+      "slot": "IDENTITY",
+      "message": "меня зовут Иван, мне 27 лет"
+    },
+    {
+      "id": "events_25",
+      "slot": "EVENTS",
+      "message": "в прошлом месяце я выступал на конференции Data Fest"
+    },
+    {
+      "id": "ambiguous_26",
+      "slot": "WORK",
+      "message": "думаю, может сменить направление, пока не решил"
+    },
+    {
+      "id": "coref_27",
+      "slot": "FAMILY",
+      "message": "жена получила повышение, она теперь руководит отделом"
+    },
+    {
+      "id": "mixed_slot_wrong_target_28",
+      "slot": "FOOD",
+      "message": "я работаю в банке и у меня кот Барсик"
+    },
+    {
+      "id": "empty_style_29",
+      "slot": "HOBBIES",
+      "message": "ок"
+    },
+    {
+      "id": "long_multi_fact_30",
+      "slot": "FAMILY",
+      "message": "мы с женой 12 лет вместе, у нас двое детей: сын Артем ходит в 5 класс, дочка Маша занимается танцами, по выходным обычно проводим время вместе дома"
+    }
+  ]
+}
