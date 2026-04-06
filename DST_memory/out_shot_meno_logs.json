@@ -1,0 +1,217 @@
+[
+  {
+    "dialogue_id": "1",
+    "question": "Каким спортом я занимаюсь?",
+    "write_logs": [
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.24540412425994873,
+          "p_important": 0.7545958757400513,
+          "is_important": true
+        },
+        "new_facts": [
+          {
+            "slot": "identity_profile",
+            "record_id": 1,
+            "value": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков",
+            "source_text": "Исполнилось, мне значит, 45, сразу пошел паспорт менять, через месяц выдали мне паспорт на имя Петра Ильича Рослюкова, а у меня Росляков фамилия!",
+            "created_at_step": 1,
+            "updated_at_step": 1,
+            "is_active": true,
+            "triplets": [
+              {
+                "subject": "паспорт",
+                "relation": "выдан на имя",
+                "object": "Петр Ильич Рослюканов"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.5212769508361816,
+          "p_important": 0.47872304916381836,
+          "is_important": false
+        }
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.761359453201294,
+          "p_important": 0.23864056169986725,
+          "is_important": false
+        }
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.9811939597129822,
+          "p_important": 0.018806036561727524,
+          "is_important": false
+        }
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.15984699130058289,
+          "p_important": 0.8401530385017395,
+          "is_important": true
+        },
+        "new_facts": [
+          {
+            "slot": "identity_profile",
+            "record_id": 1,
+            "value": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена расстроилась из-за разных фамилий в паспортах",
+            "source_text": "жена моя расстроилась из-за этого, что в паспортах у нас разные фамилии, а мы уже 20 лет женаты",
+            "created_at_step": 1,
+            "updated_at_step": 2,
+            "is_active": true,
+            "triplets": []
+          }
+        ]
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.5443490743637085,
+          "p_important": 0.45565086603164673,
+          "is_important": false
+        }
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.548449695110321,
+          "p_important": 0.45155033469200134,
+          "is_important": false
+        }
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.30307263135910034,
+          "p_important": 0.6969273686408997,
+          "is_important": true
+        },
+        "new_facts": []
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.978257417678833,
+          "p_important": 0.02174266055226326,
+          "is_important": false
+        }
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.44806230068206787,
+          "p_important": 0.5519376397132874,
+          "is_important": true
+        },
+        "new_facts": []
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.3178730905056,
+          "p_important": 0.6821268796920776,
+          "is_important": true
+        },
+        "new_facts": []
+      }
+    ],
+    "answer": {
+      "dialogue_id": "1",
+      "question": "Каким спортом я занимаюсь?",
+      "use_memory": true,
+      "memory_gate": {
+        "memory_context_source": "slots",
+        "retrieval_top_k": 5,
+        "use_memory": true,
+        "selected_slots": [
+          "identity_profile"
+        ],
+        "mode": "llm_gate_slots"
+      },
+      "memory_lines_for_final_llm": [
+        "identity_profile: паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена расстроилась из-за разных фамилий в паспортах"
+      ],
+      "retrieved": [
+        {
+          "dialogue_id": "1",
+          "slot": "identity_profile",
+          "slot_name": "identity_profile",
+          "value": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков",
+          "message_text": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков",
+          "source_text": "Исполнилось, мне значит, 45, сразу пошел паспорт менять, через месяц выдали мне паспорт на имя Петра Ильича Рослюкова, а у меня Росляков фамилия!",
+          "created_at_step": 1,
+          "updated_at_step": 1,
+          "is_active": true,
+          "triplets": [
+            {
+              "subject": "паспорт",
+              "relation": "выдан на имя",
+              "object": "Петр Ильич Рослюканов"
+            }
+          ],
+          "score": 0.4681810140609741
+        },
+        {
+          "dialogue_id": "1",
+          "slot": "identity_profile",
+          "slot_name": "identity_profile",
+          "value": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена расстроилась из-за разных фамилий в паспортах",
+          "message_text": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена расстроилась из-за разных фамилий в паспортах",
+          "source_text": "жена моя расстроилась из-за этого, что в паспортах у нас разные фамилии, а мы уже 20 лет женаты",
+          "created_at_step": 1,
+          "updated_at_step": 2,
+          "is_active": true,
+          "triplets": [],
+          "score": 0.46102964878082275
+        }
+      ],
+      "memory_slots": [
+        {
+          "slot": "identity_profile",
+          "messages": [
+            {
+              "record_id": 1,
+              "message_text": "паспорт: получил на имя Петр Ильич Рослюканов, вместо фамилии Росляков, жена расстроилась из-за разных фамилий в паспортах",
+              "source_text": "жена моя расстроилась из-за этого, что в паспортах у нас разные фамилии, а мы уже 20 лет женаты",
+              "triplets": [],
+              "created_at_step": 1,
+              "updated_at_step": 2,
+              "is_active": true
+            }
+          ]
+        }
+      ],
+      "recent_qa_turns": [],
+      "graph_triplets": [
+        {
+          "subject": "паспорт",
+          "relation": "выдан на имя",
+          "object": "Петр Ильич Рослюканов",
+          "slot": "identity_profile",
+          "source_text": "Исполнилось, мне значит, 45, сразу пошел паспорт менять, через месяц выдали мне паспорт на имя Петра Ильича Рослюкова, а у меня Росляков фамилия!"
+        }
+      ]
+    }
+  }
+]
