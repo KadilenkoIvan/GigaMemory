@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from .ontology import DEFAULT_USER_SLOTS
+from .ontology import RU_SLOT_LABELS_ORDERED
+from .prompt_fewshots_ru import slot_select_few_shot_messages
 
 
 def build_slot_select_messages(
@@ -12,38 +13,30 @@ def build_slot_select_messages(
     ontology_slots: List[str] | None = None,
     max_slots: int = 5,
 ) -> List[Dict[str, Any]]:
-    slots = ontology_slots or DEFAULT_USER_SLOTS.slot_names
-    slots_json = json.dumps(slots, ensure_ascii=False)
+    _ = ontology_slots
+    slots_json = json.dumps(RU_SLOT_LABELS_ORDERED, ensure_ascii=False)
 
     system = (
-        "You are a slot classifier for user long-term memory.\n"
-        "Pick which slots from a fixed ontology are relevant to the user message.\n"
-        "Return ONLY JSON.\n\n"
-        "Rules:\n"
-        "- Select only slots that are truly about the user and useful later.\n"
-        "- Multiple slots are allowed.\n"
-        "- If there is no stable user-related information, return empty list.\n"
-        "- Use EXACT slot names from ontology, uppercase.\n\n"
-        f"Allowed slots: {slots_json}\n"
-        f"Max slots in response: {max_slots}\n\n"
-        'Output schema: {"slot_assignments": ["FAMILY", "WORK"]}'
+        "ТЫ КЛАССИФИКАТОР СЛОТОВ ДОЛГОВРЕМЕННОЙ ПАМЯТИ ПОЛЬЗОВАТЕЛЯ.\n"
+        "ВЫБЕРИ ИЗ ФИКСИРОВАННОЙ ОНТОЛОГИИ СЛОТЫ, К КОТОРЫМ ОТНОСИТСЯ СООБЩЕНИЕ.\n"
+        "ОТВЕТ ТОЛЬКО ВАЛИДНЫЙ JSON, БЕЗ MARKDOWN, БЕЗ ПОЯСНЕНИЙ.\n\n"
+        "ПРАВИЛА:\n"
+        "ВЫБИРАЙ ТОЛЬКО СЛОТЫ С УСТОЙЧИВОЙ ПОЛЕЗНОЙ ИНФОРМАЦИЕЙ О ПОЛЬЗОВАТЕЛЕ.\n"
+        "НЕСКОЛЬКО СЛОТОВ РАЗРЕШЕНО.\n"
+        "ЕСЛИ НЕТ СТАБИЛЬНЫХ ФАКТОВ О ПОЛЬЗОВАТЕЛЕ — ПУСТОЙ СПИСОК.\n"
+        "ИМЕНА СЛОТОВ В ОТВЕТЕ — РУССКИЕ МЕТКИ ИЗ СПИСКА НИЖЕ (КАК В СПИСКЕ).\n\n"
+        f"ДОПУСТИМЫЕ СЛОТЫ (РУССКИЕ МЕТКИ): {slots_json}\n"
+        f"МАКСИМУМ СЛОТОВ В ОТВЕТЕ: {max_slots}\n\n"
+        'СХЕМА ОТВЕТА: {"slot_assignments":["СЕМЬЯ","РАБОТА"]}'
     )
 
     def user_turn(msg: str) -> str:
-        return f"Message:\n```text\n{msg}\n```"
+        return f"Сообщение пользователя:\n{msg}"
 
-    few_shot = [
-        {"role": "user", "content": user_turn("мы с женой женаты 10 лет, у нас есть сын")},
-        {"role": "assistant", "content": '{"slot_assignments":["FAMILY"]}'},
-        {"role": "user", "content": user_turn("работаю водителем такси и по выходным играю в футбол")},
-        {"role": "assistant", "content": '{"slot_assignments":["WORK","SPORTS"]}'},
-        {"role": "user", "content": user_turn("окей, понял, спасибо")},
-        {"role": "assistant", "content": '{"slot_assignments":[]}'},
-    ]
+    few_shot = slot_select_few_shot_messages(user_turn)
 
     return (
         [{"role": "system", "content": system}]
         + few_shot
         + [{"role": "user", "content": user_turn(user_message)}]
     )
-

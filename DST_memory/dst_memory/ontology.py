@@ -28,6 +28,7 @@ class SlotOntology:
     def resolve(self, name: str) -> str:
         """
         Resolve a candidate slot name to a canonical ontology slot.
+        Accepts English keys (FAMILY) or Russian labels (СЕМЬЯ).
         Returns "" if the slot is not in ontology.
         """
         cand = self.normalize(name)
@@ -36,10 +37,69 @@ class SlotOntology:
         allowed = set(self.slot_names)
         if cand in allowed:
             return cand
+        ru = RU_SLOT_TO_CANONICAL.get(cand)
+        if ru and ru in allowed:
+            return ru
         return ""
 
     def as_prompt_list(self) -> str:
         return ", ".join(self.slot_names)
+
+
+# Русские метки слотов в промптах и few-shot → канонический ключ онтологии (англ. UPPERCASE).
+# Порядок совпадает с DEFAULT_USER_SLOTS.slot_names — для вывода в промптах.
+RU_SLOT_LABELS_ORDERED: List[str] = [
+    "ЛИЧНОСТЬ",
+    "СЕМЬЯ",
+    "ДРУЗЬЯ",
+    "РОМАНТИКА",
+    "РАБОТА",
+    "ОБРАЗОВАНИЕ",
+    "ФИНАНСЫ",
+    "ЗДОРОВЬЕ",
+    "ПСИХИКА",
+    "ПРИВЫЧКИ",
+    "ПРЕДПОЧТЕНИЯ",
+    "ХОББИ",
+    "СПОРТ",
+    "ЕДА",
+    "ДОМ",
+    "ЛОКАЦИЯ",
+    "ПУТЕШЕСТВИЯ",
+    "ПИТОМЦЫ",
+    "ТЕХНИКА",
+    "ТРАНСПОРТ",
+    "РАСПИСАНИЕ",
+    "ЦЕЛИ",
+    "СОБЫТИЯ",
+]
+
+
+RU_SLOT_TO_CANONICAL: dict[str, str] = {
+    "ЛИЧНОСТЬ": "IDENTITY",
+    "СЕМЬЯ": "FAMILY",
+    "ДРУЗЬЯ": "FRIENDS",
+    "РОМАНТИКА": "ROMANCE",
+    "РАБОТА": "WORK",
+    "ОБРАЗОВАНИЕ": "EDUCATION",
+    "ФИНАНСЫ": "FINANCE",
+    "ЗДОРОВЬЕ": "HEALTH",
+    "ПСИХИКА": "MENTAL_HEALTH",
+    "ПРИВЫЧКИ": "HABITS",
+    "ПРЕДПОЧТЕНИЯ": "PREFERENCES",
+    "ХОББИ": "HOBBIES",
+    "СПОРТ": "SPORTS",
+    "ЕДА": "FOOD",
+    "ДОМ": "HOME",
+    "ЛОКАЦИЯ": "LOCATION",
+    "ПУТЕШЕСТВИЯ": "TRAVEL",
+    "ПИТОМЦЫ": "PETS",
+    "ТЕХНИКА": "TECH",
+    "ТРАНСПОРТ": "VEHICLES",
+    "РАСПИСАНИЕ": "SCHEDULE",
+    "ЦЕЛИ": "GOALS",
+    "СОБЫТИЯ": "EVENTS",
+}
 
 
 DEFAULT_USER_SLOTS = SlotOntology(
@@ -68,6 +128,10 @@ DEFAULT_USER_SLOTS = SlotOntology(
         "GOALS",
         "EVENTS",
     ]
+)
+
+CANONICAL_TO_RU_LABEL: dict[str, str] = dict(
+    zip(DEFAULT_USER_SLOTS.slot_names, RU_SLOT_LABELS_ORDERED)
 )
 
 

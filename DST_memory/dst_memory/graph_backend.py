@@ -96,6 +96,25 @@ class UserGraphBackend:
         st = self.get_state(dialogue_id)
         return [e for e in st.edges.values() if e.is_active and e.slot in slots]
 
+    def get_active_by_subject_in_slot(
+        self, dialogue_id: str, slot: str, subject: str
+    ) -> List[GraphEdge]:
+        """All active edges in a slot with the given subject."""
+        st = self.get_state(dialogue_id)
+        return [
+            e for e in st.edges.values()
+            if e.is_active and e.slot == slot and e.subject == subject
+        ]
+
+    def deactivate_record(self, dialogue_id: str, record_id: int) -> bool:
+        """Mark an edge as inactive. Returns True if the record was found."""
+        st = self.get_state(dialogue_id)
+        edge = st.edges.get(record_id)
+        if edge is None:
+            return False
+        edge.is_active = False
+        return True
+
     def clear_dialogue(self, dialogue_id: str) -> None:
         self._states.pop(dialogue_id, None)
 

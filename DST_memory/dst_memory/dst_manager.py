@@ -1,6 +1,8 @@
-from typing import Any, Dict, List
+from collections import defaultdict
+from typing import Any, Dict, List, Optional
 import logging
 
+from .conflict_client import TripletConflictClient
 from .graph_backend import UserGraphBackend
 from .models import DialogueMemoryState, FactRecord, MemoryFact
 from .slot_select_client import SlotSelectClient
@@ -14,6 +16,10 @@ class DSTManager:
     Slot state manager.
     Slots correspond to subgraphs in a single user knowledge graph.
     Facts are stored as KG triplets per slot.
+
+    Conflict resolution strategy (hybrid):
+      Rule layer — exact (subject, relation) match → auto-deactivate old record.
+      LLM layer  — same subject, ambiguous relation → TripletConflictClient.
     """
 
     def __init__(
@@ -21,11 +27,13 @@ class DSTManager:
         triplet_extractor: TripletExtractionClient,
         slot_selector: SlotSelectClient,
         *,
+        conflict_resolver: Optional[TripletConflictClient] = None,
         single_pass_fallback: bool = True,
     ):
         self._states: Dict[str, DialogueMemoryState] = {}
         self.triplet_extractor = triplet_extractor
         self.slot_selector = slot_selector
+        self.conflict_resolver = conflict_resolver
         self.single_pass_fallback = single_pass_fallback
         self.graph = UserGraphBackend()
 
@@ -55,57 +63,102 @@ class DSTManager:
             logger.info("No triplets extracted dialogue_id=%s step=%d", dialogue_id, state.step)
             return []
 
+        # Group new triplets by slot for per-slot conflict resolution
+        by_slot: Dict[str, List] = defaultdict(list)
         for t in triplets:
-            slot = t.slot
+            by_slot[t.slot].append(t)
+
+        for slot, slot_triplets in by_slot.items():
             if slot not in state.slots:
                 state.slots[slot] = []
-            rid = state.next_record_id
-            state.next_record_id += 1
-            value = t.as_line()
-            rec = FactRecord(
-                record_id=rid,
-                value=value,
-                source_text=user_text,
-                created_at_step=state.step,
-                updated_at_step=state.step,
-                subject=t.subject,
-                relation=t.relation,
-                object=t.object,
-                is_active=True,
-            )
-            state.slots[slot].append(rec)
-            self.graph.upsert_triplet(
-                dialogue_id,
-                record_id=rid,
-                slot=slot,
-                subject=t.subject,
-                relation=t.relation,
-                object_=t.object,
-            )
-            created.append(
-                MemoryFact(
-                    slot=slot,
+
+            # --- Conflict resolution ---
+            skip_indices: set = set()
+            if self.conflict_resolver is not None:
+                # Gather all existing active edges for subjects present in new triplets
+                subjects = {t.subject for t in slot_triplets}
+                all_existing = []
+                for subj in subjects:
+                    all_existing.extend(
+                        self.graph.get_active_by_subject_in_slot(dialogue_id, slot, subj)
+                    )
+
+                if all_existing:
+                    resolution = self.conflict_resolver.resolve(
+                        slot, all_existing, slot_triplets
+                    )
+                    # Apply deactivations to graph and state records
+                    for rid in resolution.deactivate_ids:
+                        self.graph.deactivate_record(dialogue_id, rid)
+                        for rec in state.slots.get(slot, []):
+                            if rec.record_id == rid:
+                                rec.is_active = False
+                                rec.updated_at_step = state.step
+                                logger.info(
+                                    "Deactivated record_id=%d slot=%s step=%d",
+                                    rid, slot, state.step,
+                                )
+                    skip_indices = resolution.skip_new_indices
+
+            # --- Insert surviving new triplets ---
+            for idx, t in enumerate(slot_triplets):
+                if idx in skip_indices:
+                    logger.debug("Skipping duplicate triplet idx=%d (%s|%s|%s)",
+                                 idx, t.subject, t.relation, t.object)
+                    continue
+                rid = state.next_record_id
+                state.next_record_id += 1
+                value = t.as_line()
+                rec = FactRecord(
                     record_id=rid,
                     value=value,
                     source_text=user_text,
                     created_at_step=state.step,
                     updated_at_step=state.step,
-                    is_active=True,
                     subject=t.subject,
                     relation=t.relation,
                     object=t.object,
+                    is_active=True,
                 )
-            )
+                state.slots[slot].append(rec)
+                self.graph.upsert_triplet(
+                    dialogue_id,
+                    record_id=rid,
+                    slot=slot,
+                    subject=t.subject,
+                    relation=t.relation,
+                    object_=t.object,
+                )
+                created.append(
+                    MemoryFact(
+                        slot=slot,
+                        record_id=rid,
+                        value=value,
+                        source_text=user_text,
+                        created_at_step=state.step,
+                        updated_at_step=state.step,
+                        is_active=True,
+                        subject=t.subject,
+                        relation=t.relation,
+                        object=t.object,
+                    )
+                )
         return created
 
-    def delete_with_stub_policy(self, dialogue_id: str, user_text: str) -> None:
+    def deactivate_record(self, dialogue_id: str, record_id: int) -> bool:
         """
-        TODO: implement LLM-based delete/update policy for contradictory facts.
-        Current placeholder intentionally does nothing.
+        Deactivate a single fact record (soft-delete).
+        Used by conflict_resolver and can also be called externally.
+        Returns True if the record was found and deactivated.
         """
-        _ = dialogue_id
-        _ = user_text
-        logger.debug("DST delete stub invoked dialogue_id=%s", dialogue_id)
+        state = self.get_state(dialogue_id)
+        graph_ok = self.graph.deactivate_record(dialogue_id, record_id)
+        for records in state.slots.values():
+            for rec in records:
+                if rec.record_id == record_id:
+                    rec.is_active = False
+                    return True
+        return graph_ok
 
     def active_slot_names(self, dialogue_id: str) -> List[str]:
         """Имена слотов, в которых есть хотя бы одна активная запись (стабильный порядок)."""

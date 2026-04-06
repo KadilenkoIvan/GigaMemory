@@ -4,6 +4,7 @@ import logging
 
 from .classifier import ImportanceClassifier
 from .config import PipelineConfig
+from .conflict_client import TripletConflictClient
 from .dst_manager import DSTManager
 from .embedder import TextEmbedder
 from .llm_client import FinalLLMClient
@@ -50,9 +51,15 @@ class DSTMemoryPipeline:
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
         )
+        conflict_resolver = TripletConflictClient(
+            use_stub=config.slot_use_stub,
+            serving=slot_serving,
+            max_retries=1,
+        )
         self.dst = DSTManager(
             triplet_extractor=triplet_extractor,
             slot_selector=slot_selector,
+            conflict_resolver=conflict_resolver,
             single_pass_fallback=True,
         )
         gate_stub = config.memory_gate_use_stub or slot_serving is None
@@ -95,7 +102,6 @@ class DSTMemoryPipeline:
         if not bool(cls["is_important"]):
             return {"saved": False, "reason": "not_important", "classifier": cls}
 
-        self.dst.delete_with_stub_policy(dialogue_id, message.content)
         new_facts = self.dst.upsert_from_message(dialogue_id, message.content)
         if not new_facts:
             return {

@@ -1,8 +1,10 @@
-"""Промпты для локальной LLM: нужна ли память и какие слоты релевантны сообщению."""
+"""Промпты memory gate: русские few-shot, чередование user + assistant."""
 
 from __future__ import annotations
 
 from typing import Dict, List
+
+from .prompt_fewshots_ru import MEMORY_GATE_FEWSHOT, MEMORY_GATE_FEWSHOT_VECTOR, memory_gate_user_block
 
 
 def build_memory_gate_messages(
@@ -11,33 +13,46 @@ def build_memory_gate_messages(
     *,
     for_vector_context: bool = False,
 ) -> List[Dict[str, str]]:
-    slots_text = (
-        "\n".join(f"- {name}" for name in slot_names)
-        if slot_names
-        else "(нет ни одного слота с сохранёнными данными)"
-    )
-    system = (
-        "Ты помощник для выбора релевантной долговременной памяти в диалоге. "
-        "Тебе дают сообщение пользователя и список имён слотов памяти (только названия, без содержимого). "
-        "Реши, нужно ли для ответа на это сообщение подставлять сохранённые факты из памяти. "
-        "Если сообщение не связано ни с одним из перечисленных слотов (общий вопрос, оффтоп, "
-        "запрос без личного контекста) — память не нужна. "
-        "Если сообщение явно отсылает к тематике одного или нескольких слотов — перечисли только их имена "
-        "точно как в списке (регистр и формулировка как у пользователя в списке). "
-        "Ответ строго один JSON-объект без пояснений и без markdown: "
-        '{"use_memory": true или false, "slots": ["имя_слота", ...]}. '
-        'При use_memory=false массив "slots" должен быть [].'
-    )
-    extra = ""
+    extra_block = ""
     if for_vector_context:
-        extra = (
-            " Если память для ответа нужна, но ни один конкретный слот из списка явно не подходит, "
+        extra_block = (
+            " ЕСЛИ ПАМЯТЬ ДЛЯ ОТВЕТА НУЖНА, НО НИ ОДИН КОНКРЕТНЫЙ СЛОТ ИЗ СПИСКА ЯВНО НЕ ПОДХОДИТ — "
             'укажи use_memory: true и slots: [].'
         )
-    user = (
-        f"Сообщение пользователя:\n{user_message}\n\nИмена слотов памяти:\n{slots_text}\n{extra}"
+
+    system = (
+        "ТЫ ПОМОЩНИК ДЛЯ ВЫБОРА РЕЛЕВАНТНОЙ ДОЛГОВРЕМЕННОЙ ПАМЯТИ.\n"
+        "ДАНЫ СООБЩЕНИЕ ПОЛЬЗОВАТЕЛЯ И СПИСОК ИМЁН СЛОТОВ (ТОЛЬКО НАЗВАНИЯ, БЕЗ СОДЕРЖИМОГО).\n"
+        "РЕШИ, НУЖНО ЛИ ДЛЯ ОТВЕТА ПОДСТАВЛЯТЬ СОХРАНЁННЫЕ ФАКТЫ.\n"
+        "ЕСЛИ ВОПРОС ОБЩИЙ, ОФФТОП ИЛИ БЕЗ ЛИЧНОГО КОНТЕКСТА — ПАМЯТЬ НЕ НУЖНА.\n"
+        "ЕСЛИ ЯВНО НУЖНЫ ОДИН ИЛИ НЕСКОЛЬКО СЛОТОВ — ПЕРЕЧИСЛИ ИХ ИМЕНА ТОЧНО КАК В СПИСКЕ.\n"
+        "ОТВЕТ СТРОГО ОДИН JSON-ОБЪЕКТ, БЕЗ MARKDOWN, БЕЗ ПОЯСНЕНИЙ:\n"
+        '{"use_memory": true или false, "slots": ["ИМЯ_СЛОТА", ...]}\n'
+        'ПРИ use_memory=false МАССИВ "slots" ДОЛЖЕН БЫТЬ [].'
     )
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+
+    few_shot: List[Dict[str, str]] = []
+    for question, slots_block, assistant_json in MEMORY_GATE_FEWSHOT:
+        slot_list = [s.strip() for s in slots_block.split("\n") if s.strip()]
+        few_shot.append(
+            {
+                "role": "user",
+                "content": memory_gate_user_block(question, slot_list, ""),
+            }
+        )
+        few_shot.append({"role": "assistant", "content": assistant_json})
+
+    if for_vector_context:
+        for question, slots_block, assistant_json in MEMORY_GATE_FEWSHOT_VECTOR:
+            slot_list = [s.strip() for s in slots_block.split("\n") if s.strip()]
+            few_shot.append(
+                {
+                    "role": "user",
+                    "content": memory_gate_user_block(question, slot_list, extra_block.strip()),
+                }
+            )
+            few_shot.append({"role": "assistant", "content": assistant_json})
+
+    final_user = memory_gate_user_block(user_message, slot_names, extra_block)
+
+    return [{"role": "system", "content": system}] + few_shot + [{"role": "user", "content": final_user}]

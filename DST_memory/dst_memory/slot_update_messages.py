@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .prompt_fewshots_ru import SLOT_UPDATE_EXTRA_FEWSHOT
+
 
 def build_update_messages(
     slot_name: str,
@@ -28,7 +30,7 @@ def build_update_messages(
         return (
             f"Слот: {slot_name}\n"
             f"Текущие записи: {records_json}\n\n"
-            f"Сообщение:\n```text\n{s}\n```\n\n"
+            f"Сообщение:\n{s}\n\n"
             "Формат ответа — строго JSON, никакого текста до или после:\n"
             '{"operations":[<операция>, <операция>, ...]}\n\n'
             "Каждая операция — один из четырёх вариантов:\n"
@@ -218,6 +220,10 @@ def build_update_messages(
             "content": '{"operations":[{"op":"nothing"}]}',
         },
     ]
+
+    for msg, records, assistant_json in SLOT_UPDATE_EXTRA_FEWSHOT:
+        few_shot.append({"role": "user", "content": user_turn(msg, records)})
+        few_shot.append({"role": "assistant", "content": assistant_json})
 
     final_user = {"role": "user", "content": user_turn(user_message, existing_records)}
     return [{"role": "system", "content": system}] + few_shot + [final_user]
