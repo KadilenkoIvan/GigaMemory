@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from .serving import GenerationConfig, LocalHFServing
 from .slot_messages import build_messages
 from .slot_model_path import resolve_slot_model_path
+from .slot_ontology import SLOT_ID_BY_LABEL, SLOT_IDS
 from .slot_name_normalize import (
     normalize_slot_label,
     resolve_slot_key_to_existing,
@@ -56,8 +57,7 @@ class SlotDecisionClient:
 
     def decide_slots(self, existing_slots: List[str], user_message: str) -> List[SlotDecision]:
         if self.use_stub:
-            return [SlotDecision(slot_name="facts")]
-
+            return [SlotDecision(slot_name="home_daily_life")]
         messages = build_messages(user_message, self.max_slots, existing_slots)
 
         tries = self.max_retries + 1
@@ -70,6 +70,7 @@ class SlotDecisionClient:
                 continue
 
             decisions = self._finalize_decisions(existing_slots, raw_names)
+            decisions = [d for d in decisions if d.slot_name in SLOT_IDS]
             logger.info(
                 "Slot model attempt=%d parsed=%s decisions=%s",
                 attempt,
@@ -89,10 +90,17 @@ class SlotDecisionClient:
         out: List[SlotDecision] = []
 
         for name in raw_names:
-            normalized = normalize_slot_label(name)
-            if not normalized:
-                continue
-            resolved = resolve_slot_key_to_existing(canonical_existing, normalized)
+            raw = str(name).strip()
+            # Fixed ontology: allow exact slot ids without ru-normalization.
+            if raw in SLOT_IDS:
+                resolved = raw
+            elif raw.upper() in SLOT_ID_BY_LABEL:
+                resolved = SLOT_ID_BY_LABEL[raw.upper()]
+            else:
+                normalized = normalize_slot_label(raw)
+                if not normalized:
+                    continue
+                resolved = resolve_slot_key_to_existing(canonical_existing, normalized)
             if resolved in seen:
                 continue
             seen.add(resolved)

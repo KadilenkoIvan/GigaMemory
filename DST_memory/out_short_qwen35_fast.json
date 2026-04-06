@@ -1,0 +1,9 @@
+[
+  {
+    "dialogue_id": "1",
+    "question": "Каким спортом я занимаюсь?",
+    "use_memory": false,
+    "retrieved": [],
+    "memory_slots": []
+  }
+]

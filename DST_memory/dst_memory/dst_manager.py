@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 import logging
 
-from .models import DialogueMemoryState, FactRecord, MemoryFact
+from .models import DialogueMemoryState, FactRecord, MemoryFact, QATurn
 from .slot_client import SlotDecisionClient
 from .slot_update_client import SlotOperation, SlotUpdateClient
 
@@ -91,6 +91,7 @@ class DSTManager:
                     created_at_step=state.step,
                     updated_at_step=state.step,
                     is_active=True,
+                    triplets=list(op.triplets or []),
                 )
                 state.slots[slot].append(rec)
                 logger.info(
@@ -109,6 +110,7 @@ class DSTManager:
                         created_at_step=state.step,
                         updated_at_step=state.step,
                         is_active=True,
+                        triplets=list(op.triplets or []),
                     )
                 )
             elif op.op == "update" and op.record_id is not None and op.value:
@@ -124,6 +126,7 @@ class DSTManager:
                 rec.value = op.value
                 rec.source_text = source_text
                 rec.updated_at_step = state.step
+                rec.triplets = list(op.triplets or [])
                 logger.info(
                     "DST update dialogue_id=%s slot=%s id=%d value_preview=%s",
                     state.dialogue_id,
@@ -140,6 +143,7 @@ class DSTManager:
                         created_at_step=rec.created_at_step,
                         updated_at_step=rec.updated_at_step,
                         is_active=True,
+                        triplets=list(op.triplets or []),
                     )
                 )
             elif op.op == "delete" and op.record_id is not None:
@@ -220,6 +224,7 @@ class DSTManager:
                             created_at_step=rec.created_at_step,
                             updated_at_step=rec.updated_at_step,
                             is_active=rec.is_active,
+                            triplets=rec.triplets,
                         )
                     )
         return result
@@ -247,6 +252,7 @@ class DSTManager:
                         "record_id": rec.record_id,
                         "message_text": rec.value,
                         "source_text": rec.source_text,
+                        "triplets": rec.triplets,
                         "created_at_step": rec.created_at_step,
                         "updated_at_step": rec.updated_at_step,
                         "is_active": rec.is_active,
@@ -258,3 +264,13 @@ class DSTManager:
     def clear_dialogue(self, dialogue_id: str) -> None:
         logger.info("Clearing DST state dialogue_id=%s", dialogue_id)
         self._states.pop(dialogue_id, None)
+
+    def add_qa_turn(self, dialogue_id: str, question: str, answer: str) -> None:
+        state = self.get_state(dialogue_id)
+        state.qa_turns.append(QATurn(question=question, answer=answer))
+
+    def last_qa_turns(self, dialogue_id: str, limit: int = 5) -> List[QATurn]:
+        state = self.get_state(dialogue_id)
+        if limit <= 0:
+            return []
+        return state.qa_turns[-limit:]

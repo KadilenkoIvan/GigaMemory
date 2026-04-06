@@ -5,7 +5,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
-from typing import List
+from typing import List, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,14 @@ class FinalLLMClient:
         )
 
     def generate(self, question: str, memory_lines: List[str]) -> str:
+        return self.generate_with_context(question, memory_lines, recent_qa_turns=[])
+
+    def generate_with_context(
+        self,
+        question: str,
+        memory_lines: List[str],
+        recent_qa_turns: Sequence[dict],
+    ) -> str:
         logger.info(
             "FinalLLM generate mode=%s question_len=%d memory_lines=%d",
             self.mode,
@@ -48,13 +56,14 @@ class FinalLLMClient:
         )
         if self.mode == "stub":
             joined = "; ".join(memory_lines[:3]) if memory_lines else "no-memory"
-            return f"[STUB_ANSWER] q='{question}' | memory='{joined}'"
+            qa = len(recent_qa_turns)
+            return f"[STUB_ANSWER] q='{question}' | memory='{joined}' | qa_turns={qa}"
 
         if self.mode == "local":
             raise NotImplementedError("TODO: local LLM backend is not implemented yet.")
 
         if self.mode in ("api", "openrouter"):
-            return self._openai_compatible_chat(question, memory_lines)
+            return self._openai_compatible_chat(question, memory_lines, recent_qa_turns)
 
         raise ValueError(f"Unknown llm_mode: {self.mode}")
 
@@ -66,7 +75,12 @@ class FinalLLMClient:
             return base
         return f"{base.rstrip('/')}/chat/completions"
 
-    def _openai_compatible_chat(self, question: str, memory_lines: List[str]) -> str:
+    def _openai_compatible_chat(
+        self,
+        question: str,
+        memory_lines: List[str],
+        recent_qa_turns: Sequence[dict],
+    ) -> str:
         if not self.api_key.strip():
             raise ValueError(
                 "llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY."
@@ -81,7 +95,18 @@ class FinalLLMClient:
             "если память пуста или не относится к вопросу — отвечай из общих знаний, не выдумывай факты о пользователе."
         )
         mem_block = "\n".join(f"- {line}" for line in memory_lines) if memory_lines else "(память пуста)"
-        user = f"Фрагменты памяти (слоты):\n{mem_block}\n\nВопрос пользователя:\n{question}"
+        qa_lines: List[str] = []
+        for i, t in enumerate(recent_qa_turns[-5:], start=1):
+            q = str(t.get("question", "")).strip()
+            a = str(t.get("answer", "")).strip()
+            if q or a:
+                qa_lines.append(f"{i}) Q: {q}\n   A: {a}")
+        qa_block = "\n".join(qa_lines) if qa_lines else "(нет прошлых QA итераций)"
+        user = (
+            f"Последние QA итерации:\n{qa_block}\n\n"
+            f"Фрагменты памяти (слоты):\n{mem_block}\n\n"
+            f"Текущий вопрос пользователя:\n{question}"
+        )
 
         body = {
             "model": self.model,

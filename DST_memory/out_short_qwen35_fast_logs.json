@@ -1,0 +1,120 @@
+[
+  {
+    "dialogue_id": "1",
+    "question": "Каким спортом я занимаюсь?",
+    "write_logs": [
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.0005392521852627397,
+          "p_important": 0.999460756778717,
+          "is_important": true
+        },
+        "new_facts": []
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.9765081405639648,
+          "p_important": 0.023491907864809036,
+          "is_important": false
+        }
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.9775076508522034,
+          "p_important": 0.022492356598377228,
+          "is_important": false
+        }
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.9890375733375549,
+          "p_important": 0.010962441563606262,
+          "is_important": false
+        }
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.00045801547821611166,
+          "p_important": 0.9995419979095459,
+          "is_important": true
+        },
+        "new_facts": []
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.032566167414188385,
+          "p_important": 0.9674338102340698,
+          "is_important": true
+        },
+        "new_facts": []
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.9449629187583923,
+          "p_important": 0.0550370067358017,
+          "is_important": false
+        }
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.001999789848923683,
+          "p_important": 0.9980002045631409,
+          "is_important": true
+        },
+        "new_facts": []
+      },
+      {
+        "saved": false,
+        "reason": "not_important",
+        "classifier": {
+          "p_not_important": 0.9946804642677307,
+          "p_important": 0.005319481249898672,
+          "is_important": false
+        }
+      },
+      {
+        "saved": true,
+        "reason": "important",
+        "classifier": {
+          "p_not_important": 0.26730677485466003,
+          "p_important": 0.7326932549476624,
+          "is_important": true
+        },
+        "new_facts": []
+      }
+    ],
+    "answer": {
+      "dialogue_id": "1",
+      "question": "Каким спортом я занимаюсь?",
+      "use_memory": false,
+      "memory_gate": {
+        "memory_context_source": "slots",
+        "retrieval_top_k": 5,
+        "use_memory": false,
+        "selected_slots": [],
+        "reason": "no_active_slots"
+      },
+      "memory_lines_for_final_llm": [],
+      "retrieved": [],
+      "memory_slots": [],
+      "recent_qa_turns": [],
+      "graph_triplets": []
+    }
+  }
+]

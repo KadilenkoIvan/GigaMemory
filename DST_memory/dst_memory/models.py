@@ -10,6 +10,12 @@ class Message:
 
 
 @dataclass
+class QATurn:
+    question: str
+    answer: str
+
+
+@dataclass
 class FactRecord:
     record_id: int
     value: str
@@ -17,6 +23,7 @@ class FactRecord:
     created_at_step: int
     updated_at_step: int
     is_active: bool = True
+    triplets: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -28,6 +35,7 @@ class MemoryFact:
     created_at_step: int
     updated_at_step: int
     is_active: bool
+    triplets: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -36,3 +44,4 @@ class DialogueMemoryState:
     step: int = 0
     slots: Dict[str, List[FactRecord]] = field(default_factory=dict)
     next_record_id: int = 1
+    qa_turns: List[QATurn] = field(default_factory=list)

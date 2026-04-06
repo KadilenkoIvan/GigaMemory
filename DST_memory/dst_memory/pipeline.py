@@ -6,6 +6,7 @@ from .classifier import ImportanceClassifier
 from .config import PipelineConfig
 from .dst_manager import DSTManager
 from .embedder import TextEmbedder
+from .graph_memory import GraphMemory
 from .llm_client import FinalLLMClient
 from .memory_gate_client import MemoryGateClient
 from .models import MemoryFact, Message
@@ -53,6 +54,7 @@ class DSTMemoryPipeline:
             max_retries=1,
         )
         self.embedder = TextEmbedder()
+        self.graph = GraphMemory()
         self.store = InMemoryVectorStore()
         self.retriever = MemoryRetriever(store=self.store, embedder=self.embedder)
         self.final_llm = FinalLLMClient(
@@ -100,7 +102,7 @@ class DSTMemoryPipeline:
         if not facts:
             logger.debug("index_facts skipped empty facts")
             return
-        texts = [f.slot for f in facts]
+        texts = [f"{f.slot}: {f.value}" for f in facts]
         vectors = self.embedder.encode(texts)
         logger.info("Indexing facts dialogue_id=%s count=%d", dialogue_id, len(facts))
         for fact, vec in zip(facts, vectors):
@@ -114,8 +116,16 @@ class DSTMemoryPipeline:
                 "created_at_step": fact.created_at_step,
                 "updated_at_step": fact.updated_at_step,
                 "is_active": fact.is_active,
+                "triplets": fact.triplets,
             }
             self.store.add(vec, payload)
+            if fact.triplets:
+                self.graph.upsert_triplets(
+                    dialogue_id=dialogue_id,
+                    slot=fact.slot,
+                    source_text=fact.source_text,
+                    triplets=fact.triplets,
+                )
 
     @staticmethod
     def _lines_from_retriever_hits(hits: List[Dict]) -> List[str]:
@@ -239,6 +249,10 @@ class DSTMemoryPipeline:
             dialogue_id=dialogue_id, query=question, top_k=self.config.retrieval_top_k
         )
         memory_slots = self.dst.slots_with_messages(dialogue_id)
+        recent = [
+            {"question": t.question, "answer": t.answer}
+            for t in self.dst.last_qa_turns(dialogue_id, limit=5)
+        ]
         return {
             "dialogue_id": dialogue_id,
             "question": question,
@@ -247,19 +261,35 @@ class DSTMemoryPipeline:
             "memory_lines_for_final_llm": memory_lines,
             "retrieved": hits,
             "memory_slots": memory_slots,
+            "recent_qa_turns": recent,
+            "graph_triplets": self.graph.slot_subgraph(
+                dialogue_id,
+                gate_meta.get("selected_slots", []) if isinstance(gate_meta, dict) else [],
+            ),
         }
 
     def answer(self, dialogue_id: str, question: str) -> str:
         logger.info("answer dialogue_id=%s", dialogue_id)
         memory_lines, gate_meta = self._memory_context_for_question(dialogue_id, question)
+        recent = [
+            {"question": t.question, "answer": t.answer}
+            for t in self.dst.last_qa_turns(dialogue_id, limit=5)
+        ]
         logger.info(
             "answer memory context lines=%d gate=%s",
             len(memory_lines),
             gate_meta,
         )
-        return self.final_llm.generate(question=question, memory_lines=memory_lines)
+        answer = self.final_llm.generate_with_context(
+            question=question,
+            memory_lines=memory_lines,
+            recent_qa_turns=recent,
+        )
+        self.dst.add_qa_turn(dialogue_id, question, answer)
+        return answer
 
     def clear_memory(self, dialogue_id: str) -> None:
         logger.info("clear_memory dialogue_id=%s", dialogue_id)
         self.dst.clear_dialogue(dialogue_id)
         self.store.clear_dialogue(dialogue_id)
+        self.graph.clear_dialogue(dialogue_id)

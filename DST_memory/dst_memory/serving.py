@@ -1,4 +1,5 @@
 import logging
+import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -92,4 +93,48 @@ class LocalHFServing:
             outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
         )
         return result.strip()
+
+    def classify_options_likelihood(
+        self,
+        messages: List[Dict[str, str]],
+        options: List[str],
+    ) -> Dict[str, float]:
+        """
+        Scores candidate options by autoregressive log-likelihood given the prompt.
+        Returns normalized probabilities over options.
+        """
+        if not options:
+            return {}
+        prompt_text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        prompt_inputs = self.tokenizer(prompt_text, return_tensors="pt").to(self.device)
+        prompt_ids = prompt_inputs["input_ids"][0]
+        option_scores: Dict[str, float] = {}
+        with torch.no_grad():
+            for raw_opt in options:
+                option = str(raw_opt)
+                suffix = option if option.startswith(" ") else f" {option}"
+                opt_ids = self.tokenizer(
+                    suffix,
+                    return_tensors="pt",
+                    add_special_tokens=False,
+                )["input_ids"][0].to(self.device)
+                seq = torch.cat([prompt_ids, opt_ids], dim=0).unsqueeze(0)
+                logits = self.model(seq).logits[0]
+                # log p(token_t | prefix before token_t) for suffix tokens
+                start = prompt_ids.shape[0]
+                total = 0.0
+                for pos in range(start, seq.shape[1]):
+                    token_id = int(seq[0, pos].item())
+                    pred_pos = pos - 1
+                    lp = torch.log_softmax(logits[pred_pos], dim=-1)[token_id]
+                    total += float(lp.item())
+                option_scores[option] = total
+        max_logp = max(option_scores.values())
+        exps = {k: math.exp(v - max_logp) for k, v in option_scores.items()}
+        z = sum(exps.values()) or 1.0
+        return {k: exps[k] / z for k in option_scores}
 

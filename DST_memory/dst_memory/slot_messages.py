@@ -1,5 +1,8 @@
 """
-Сообщения для модели слотов: system, few-shot, финальный user (структура из промпт-спеки).
+Сообщения для модели слотов: system, few-shot, финальный user.
+
+Текущая версия использует фиксированную онтологию слотов и ожидает
+строго JSON-ответ со списком выбранных слотов.
 """
 
 from __future__ import annotations
@@ -7,97 +10,83 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .slot_ontology import SLOT_LABEL_BY_ID, SLOT_ID_BY_LABEL, SLOT_IDS, slot_catalog_markdown
+
 
 def build_messages(message: str, max_s: int, slots: list[str]) -> list[dict[str, Any]]:
     system = (
-        "Вы — эксперт по извлечению информации о пользователе из его сообщений. "
-        "Слот — это широкая сфера жизни человека: еда, спорт, семья, работа, здоровье, "
-        "транспорт, хобби, питомцы, финансы, покупки и подобные категории."
+        "You are a long-term memory router for a conversational assistant.\n"
+        "Given a user message, select which memory slots should be updated.\n"
+        "Slots are fixed. Output must be strictly valid JSON, no markdown, no extra text."
     )
 
     def user_turn(msg: str, existing_slots: list[str]) -> str:
-        slots_json = json.dumps(existing_slots, ensure_ascii=False)
+        # existing_slots may contain internal ids; expose prompt labels in uppercase.
+        existing_labels: list[str] = []
+        for s in existing_slots:
+            key = str(s).strip()
+            if key in SLOT_IDS:
+                # map id -> label if possible, else keep as upper
+                existing_labels.append(SLOT_LABEL_BY_ID.get(key, key.upper()))
+            else:
+                existing_labels.append(key.upper())
+        slots_json = json.dumps(existing_labels, ensure_ascii=False)
+        allowed_labels = sorted(SLOT_ID_BY_LABEL.keys())
+        allowed_json = json.dumps(allowed_labels, ensure_ascii=False)
         return (
-            f"Существующие слоты: {slots_json}\n"
-            f"Максимум слотов в ответе: {max_s}\n\n"
+            f"Active slots (already have stored records): {slots_json}\n"
+            f"Allowed slots (ontology): {allowed_json}\n"
+            f"Max slots in answer: {max_s}\n\n"
             f"Сообщение:\n```text\n{msg}\n```\n\n"
-            "Задача: определи слоты, которые раскрывают что-то важное о самом пользователе "
-            "(его предпочтения, привычки, интересы, жизненные обстоятельства).\n"
-            "Если сообщение — просто факт, вопрос или действие без личной окраски, "
-            "верни пустой список.\n"
-            "Используй существующие слоты дословно. "
-            "Новый слот — только если ни один не подходит. "
-            "Слот — одно ключевое слово-существительное (широкая категория). "
-            "Второе слово добавляй только если без него смысл категории теряется. "
-            "Плохо: «личный интерес», «сфера хобби», «домашний питомец». "
-            "Хорошо: «интересы», «хобби», «питомцы». "
-            "Ответ — только JSON."
+            "Slot catalog:\n"
+            f"{slot_catalog_markdown()}\n\n"
+            "Rules:\n"
+            "- Select ONLY from the allowed ontology labels.\n"
+            "- Select slots only if the message contains stable personal facts/preferences/relations/habits/plans.\n"
+            "- If nothing useful for memory is present, return an empty list.\n\n"
+            "Return format строго:\n"
+            '{"slot_assignments":["<SLOT_LABEL>", "..."]}'
         )
 
     few_shot = [
-        # Личное отношение → слот
-        {
-            "role": "user",
-            "content": user_turn("обожаю эстрагон, кладу его вообще везде", ["еда"]),
-        },
-        {"role": "assistant", "content": '{"slot_assignments":["еда"]}'},
-        # Просто действие без личной окраски → пусто
-        {
-            "role": "user",
-            "content": user_turn("добавил эстрагон в соус", ["еда"]),
-        },
-        {"role": "assistant", "content": '{"slot_assignments":[]}'},
-        # Личные обстоятельства → несколько слотов
         {
             "role": "user",
             "content": user_turn(
-                "у меня такой стресс на работе, не могу нормально спать",
-                ["работа", "здоровье"],
+                "Исполнилось 45, пошёл паспорт менять. В паспорте фамилию написали с ошибкой.",
+                [],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["работа","здоровье"]}'},
-        # Нейтральный вопрос → пусто
-        {
-            "role": "user",
-            "content": user_turn("а что, завтра дождь будет?", ["хобби"]),
-        },
-        {"role": "assistant", "content": '{"slot_assignments":[]}'},
-        # Личный питомец → лаконичный слот (не "домашний питомец")
+        {"role": "assistant", "content": '{"slot_assignments":["identity_profile"]}'},
         {
             "role": "user",
             "content": user_turn(
-                "мой кот Барсик вообще не переносит других животных, вечно шипит",
-                ["питомцы", "семья"],
+                "жена расстроилась, мы уже 20 лет женаты",
+                [],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["питомцы"]}'},
-        # Новый слот с размытым сообщением → одно слово, не "личный интерес"
+        {"role": "assistant", "content": '{"slot_assignments":["family_relationships"]}'},
         {
             "role": "user",
             "content": user_turn(
-                "люблю читать про историю, особенно про средневековье", ["работа"]
+                "по пятницам с мужиками в футбол играю уже лет 15",
+                [],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["хобби"]}'},
-        # Несколько сфер одновременно
+        {"role": "assistant", "content": '{"slot_assignments":["sports_activity"]}'},
         {
             "role": "user",
             "content": user_turn(
-                "в выходные едем с женой в горы, я давно хотел попробовать треккинг",
-                ["семья", "хобби", "спорт"],
+                "вчера с семьёй из Твери вернулись, в следующий раз думаем в Нижний Новгород",
+                ["family_relationships"],
             ),
         },
-        {"role": "assistant", "content": '{"slot_assignments":["семья","спорт"]}'},
-        # Новый слот (не было в списке)
+        {"role": "assistant", "content": '{"slot_assignments":["travel_mobility"]}'},
         {
             "role": "user",
-            "content": user_turn("купил велик, теперь каждое утро катаюсь до работы", []),
-        },
-        {"role": "assistant", "content": '{"slot_assignments":["спорт","транспорт"]}'},
-        # Короткая нейтральная реплика → пусто
-        {
-            "role": "user",
-            "content": user_turn("окей, понял", ["работа"]),
+            "content": user_turn(
+                "окей, понял, спасибо",
+                ["family_relationships"],
+            ),
         },
         {"role": "assistant", "content": '{"slot_assignments":[]}'},
     ]

@@ -238,6 +238,18 @@ def create_parser(
         type=str,
         default=pj_cfg.get("output_path"),
     )
+    pj_parser.add_argument(
+        "--max-user-messages",
+        type=int,
+        default=None,
+        help="Ограничить число user-сообщений на диалог (для быстрых локальных тестов).",
+    )
+    pj_parser.add_argument(
+        "--max-important-messages",
+        type=int,
+        default=None,
+        help="Ограничить число важных (saved=true) сообщений на диалог (для быстрых локальных тестов).",
+    )
     pj_parser.set_defaults(func=cmd_pipeline_jsonl)
 
     pi_parser = p_sub.add_parser("interactive", help="Run pipeline interactive mode")
@@ -342,9 +354,21 @@ def cmd_pipeline_jsonl(args: argparse.Namespace) -> None:
         question = row.get("question", "")
         logger.info("Processing dialogue_id=%s", dialogue_id)
         write_logs = []
+        processed_messages = 0
+        processed_important = 0
         for msg in iter_user_messages(row):
+            if args.max_user_messages is not None and processed_messages >= args.max_user_messages:
+                break
             log = pipeline.write_to_memory(dialogue_id=dialogue_id, message=msg)
             write_logs.append(log)
+            processed_messages += 1
+            if log.get("saved"):
+                processed_important += 1
+            if (
+                args.max_important_messages is not None
+                and processed_important >= args.max_important_messages
+            ):
+                break
 
         if args.no_final_llm:
             answer = pipeline.answer_without_final_llm(dialogue_id=dialogue_id, question=question)
