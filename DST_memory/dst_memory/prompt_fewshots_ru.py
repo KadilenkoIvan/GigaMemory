@@ -52,14 +52,16 @@ def _t(items: List[dict]) -> str:
     return json.dumps({"triplets": items}, ensure_ascii=False)
 
 
-# Общие примеры для per-slot (без поля slot в JSON)
+# Общие примеры для per-slot (без указания слота в user-turn — базовый формат).
+# Субъект, связь и объект — строчными буквами без символа «_».
+# Постобработка в TripletExtractionClient._normalize_field переведёт их в UPPER_CASE с _.
 TRIPLET_PER_SLOT_SHARED: List[Tuple[str, str]] = [
     (
         "мы с женой семь лет в браке, есть сын Артём",
         _t(
             [
-                {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖЕНАТ_С", "object": "ЖЕНА"},
-                {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_РЕБЁНКА", "object": "СЫН_АРТЁМ"},
+                {"subject": "пользователь", "relation": "женат с", "object": "жена"},
+                {"subject": "пользователь", "relation": "имеет ребёнка", "object": "сын артём"},
             ]
         ),
     ),
@@ -67,8 +69,8 @@ TRIPLET_PER_SLOT_SHARED: List[Tuple[str, str]] = [
         "жена получила повышение, она теперь руководит отделом",
         _t(
             [
-                {"subject": "ЖЕНА", "relation": "ПОЛУЧИЛА", "object": "ПОВЫШЕНИЕ"},
-                {"subject": "ЖЕНА", "relation": "РУКОВОДИТ", "object": "ОТДЕЛ"},
+                {"subject": "жена", "relation": "получила", "object": "повышение"},
+                {"subject": "жена", "relation": "руководит", "object": "отдел"},
             ]
         ),
     ),
@@ -79,21 +81,29 @@ TRIPLET_PER_SLOT_SHARED: List[Tuple[str, str]] = [
 ]
 
 
-# Дополнительные пары под конкретный канонический слот (англ. ключ)
+# Дополнительные пары под конкретный канонический слот (англ. ключ).
+# Используются с user_turn_with_slot (слот указан в user-turn).
+# Каждый слот содержит позитивные примеры + хотя бы один негативный
+# (сообщение о другом слоте → пустой список).
 TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
     "FAMILY": [
         (
             "дочка переехала в Казань",
-            _t([{"subject": "ДОЧЬ", "relation": "ЖИВЁТ_В", "object": "КАЗАНЬ"}]),
+            _t([{"subject": "дочь", "relation": "живёт в", "object": "казань"}]),
         ),
         (
             "мы с сыном ходим на бокс два раза в неделю",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "С_СЫНОМ", "object": "БОКС"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЧАСТОТА", "object": "ДВА_РАЗА_В_НЕДЕЛЮ"},
+                    {"subject": "пользователь", "relation": "занимается с сыном", "object": "бокс"},
+                    {"subject": "пользователь", "relation": "частота", "object": "два раза в неделю"},
                 ]
             ),
+        ),
+        # негативный: про работу → нет фактов для СЕМЬЯ
+        (
+            "устроился в яндекс аналитиком",
+            '{"triplets":[]}',
         ),
     ],
     "WORK": [
@@ -101,14 +111,19 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "устроился в Яндекс аналитиком данных",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАБОТАЕТ_В", "object": "ЯНДЕКС"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДОЛЖНОСТЬ", "object": "АНАЛИТИК_ДАННЫХ"},
+                    {"subject": "пользователь", "relation": "работает в", "object": "яндекс"},
+                    {"subject": "пользователь", "relation": "должность", "object": "аналитик данных"},
                 ]
             ),
         ),
         (
             "уволился с прошлой работы в марте",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "УВОЛИЛСЯ", "object": "МАРТ"}]),
+            _t([{"subject": "пользователь", "relation": "уволился", "object": "март"}]),
+        ),
+        # негативный: про питомца → нет фактов для РАБОТА
+        (
+            "у меня кот барсик",
+            '{"triplets":[]}',
         ),
     ],
     "PETS": [
@@ -116,7 +131,7 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "кот Барсик не переносит других котов",
             _t(
                 [
-                    {"subject": "КОТ_БАРСИК", "relation": "НЕ_ПЕРЕНОСИТ", "object": "ДРУГИЕ_КОТЫ"},
+                    {"subject": "кот барсик", "relation": "не переносит", "object": "другие коты"},
                 ]
             ),
         ),
@@ -124,10 +139,15 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "собаку зовут Луна, гуляю с ней утром",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_СОБАКУ", "object": "ЛУНА"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ВЫГУЛ", "object": "УТРО"},
+                    {"subject": "пользователь", "relation": "имеет собаку", "object": "луна"},
+                    {"subject": "пользователь", "relation": "выгул", "object": "утро"},
                 ]
             ),
+        ),
+        # негативный: про работу → нет фактов для ПИТОМЦЫ
+        (
+            "я работаю в банке",
+            '{"triplets":[]}',
         ),
     ],
     "FOOD": [
@@ -135,14 +155,19 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "не ем глютен и лактозу",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИСКЛЮЧАЕТ", "object": "ГЛЮТЕН"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИСКЛЮЧАЕТ", "object": "ЛАКТОЗА"},
+                    {"subject": "пользователь", "relation": "исключает", "object": "глютен"},
+                    {"subject": "пользователь", "relation": "исключает", "object": "лактоза"},
                 ]
             ),
         ),
         (
             "люблю борщ и соленья",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "НРАВИТСЯ", "object": "БОРЩ_И_СОЛЕНЬЯ"}]),
+            _t([{"subject": "пользователь", "relation": "нравится", "object": "борщ и соленья"}]),
+        ),
+        # негативный: про работу и питомца → нет фактов для ЕДА
+        (
+            "я работаю в банке и у меня кот барсик",
+            '{"triplets":[]}',
         ),
     ],
     "HEALTH": [
@@ -150,10 +175,24 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "диабет второго типа, на учёте у эндокринолога",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДИАГНОЗ", "object": "ДИАБЕТ_2_ТИПА"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "НА_УЧЁТЕ", "object": "ЭНДОКРИНОЛОГ"},
+                    {"subject": "пользователь", "relation": "диагноз", "object": "диабет 2 типа"},
+                    {"subject": "пользователь", "relation": "на учёте", "object": "эндокринолог"},
                 ]
             ),
+        ),
+        (
+            "гипертония, слежу за давлением каждый день",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "диагноз", "object": "гипертония"},
+                    {"subject": "пользователь", "relation": "контролирует", "object": "давление"},
+                ]
+            ),
+        ),
+        # негативный
+        (
+            "сегодня на работе было всё окей",
+            '{"triplets":[]}',
         ),
     ],
     "MENTAL_HEALTH": [
@@ -161,7 +200,15 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "ходил к психотерапевту полгода, стало легче",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ТЕРАПИЯ", "object": "ПОЛГОДА"},
+                    {"subject": "пользователь", "relation": "терапия", "object": "полгода"},
+                ]
+            ),
+        ),
+        (
+            "часто тревожность перед выступлениями",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "часто чувствует", "object": "тревожность перед выступлениями"},
                 ]
             ),
         ),
@@ -171,8 +218,17 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "магистратура в НГУ, кафедра ИИ",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "УЧИТСЯ_В", "object": "НГУ_МАГИСТРАТУРА"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "КАФЕДРА", "object": "ИИ"},
+                    {"subject": "пользователь", "relation": "учится в", "object": "нгу магистратура"},
+                    {"subject": "пользователь", "relation": "кафедра", "object": "ии"},
+                ]
+            ),
+        ),
+        (
+            "закончил НГУ по специальности прикладная математика",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "закончил", "object": "нгу"},
+                    {"subject": "пользователь", "relation": "специализация", "object": "прикладная математика"},
                 ]
             ),
         ),
@@ -180,7 +236,16 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
     "SPORTS": [
         (
             "бегаю десять километров по воскресеньям",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЗАНИМАЕТСЯ", "object": "БЕГ_10КМ_ВОСКРЕСЕНЬЕ"}]),
+            _t([{"subject": "пользователь", "relation": "занимается", "object": "бег 10 км воскресенье"}]),
+        ),
+        (
+            "каждую субботу играю в футбол с друзьями",
+            _t([{"subject": "пользователь", "relation": "играет", "object": "футбол по субботам"}]),
+        ),
+        # негативный
+        (
+            "ну да, спорт это полезно, но сегодня лень",
+            '{"triplets":[]}',
         ),
     ],
     "LOCATION": [
@@ -188,8 +253,8 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "переехал в Красноярск из Иркутска",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖИВЁТ_В", "object": "КРАСНОЯРСК"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАНЕЕ_ЖИЛ_В", "object": "ИРКУТСК"},
+                    {"subject": "пользователь", "relation": "живёт в", "object": "красноярск"},
+                    {"subject": "пользователь", "relation": "ранее жил в", "object": "иркутск"},
                 ]
             ),
         ),
@@ -199,8 +264,17 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "ипотека в Сбере, платёж сорок тысяч",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИПОТЕКА", "object": "СБЕР"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ПЛАТЁЖ", "object": "40000_РУБ"},
+                    {"subject": "пользователь", "relation": "ипотека", "object": "сбер"},
+                    {"subject": "пользователь", "relation": "платёж", "object": "40000 руб"},
+                ]
+            ),
+        ),
+        (
+            "откладываю 20 процентов зарплаты на подушку безопасности",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "откладывает", "object": "20 процентов зарплаты"},
+                    {"subject": "пользователь", "relation": "цель накоплений", "object": "подушка безопасности"},
                 ]
             ),
         ),
@@ -208,19 +282,32 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
     "VEHICLES": [
         (
             "поменял масло, езжу на форде",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "АВТО", "object": "FORD"}]),
+            _t([{"subject": "пользователь", "relation": "авто", "object": "форд"}]),
+        ),
+        (
+            "у меня kia rio, а до этого была renault logan",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "авто", "object": "kia rio"},
+                    {"subject": "пользователь", "relation": "было авто", "object": "renault logan"},
+                ]
+            ),
         ),
     ],
     "TRAVEL": [
         (
             "в сентябре лечу в Токио",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ПОЕЗДКА", "object": "ТОКИО_СЕНТЯБРЬ"}]),
+            _t([{"subject": "пользователь", "relation": "поездка", "object": "токио сентябрь"}]),
+        ),
+        (
+            "в августе планируем поездку в Казань с семьей",
+            _t([{"subject": "пользователь", "relation": "планирует поездку", "object": "казань август"}]),
         ),
     ],
     "HOBBIES": [
         (
             "собираю виниловые пластинки пятнадцать лет",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "КОЛЛЕКЦИОНИРУЕТ", "object": "ВИНИЛ"}]),
+            _t([{"subject": "пользователь", "relation": "коллекционирует", "object": "винил"}]),
         ),
     ],
     "TECH": [
@@ -228,8 +315,17 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "основной телефон самсунг, ноутбук леново",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ТЕЛЕФОН", "object": "SAMSUNG"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "НОУТБУК", "object": "LENOVO"},
+                    {"subject": "пользователь", "relation": "телефон", "object": "samsung"},
+                    {"subject": "пользователь", "relation": "ноутбук", "object": "lenovo"},
+                ]
+            ),
+        ),
+        (
+            "пользуюсь айфоном и макбуком для работы",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "пользуется", "object": "айфон"},
+                    {"subject": "пользователь", "relation": "пользуется", "object": "макбук"},
                 ]
             ),
         ),
@@ -239,7 +335,16 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "по вторникам и четвергам до девяти на работе",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ГРАФИК", "object": "ВТ_ЧТ_ДО_21_00"},
+                    {"subject": "пользователь", "relation": "график", "object": "вт чт до 21 00"},
+                ]
+            ),
+        ),
+        (
+            "по будням встаю в 6 утра и ложусь около 23:00",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "время подъёма", "object": "6 утра"},
+                    {"subject": "пользователь", "relation": "время отхода ко сну", "object": "23 00"},
                 ]
             ),
         ),
@@ -247,13 +352,21 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
     "GOALS": [
         (
             "хочу сдать IELTS на семь с половиной",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЦЕЛЬ", "object": "IELTS_7_5"}]),
+            _t([{"subject": "пользователь", "relation": "цель", "object": "ielts 7 5"}]),
+        ),
+        (
+            "хочу через год перейти в продуктовую аналитику",
+            _t([{"subject": "пользователь", "relation": "цель", "object": "перейти в продуктовую аналитику через год"}]),
         ),
     ],
     "EVENTS": [
         (
             "на прошлой неделе был на свадьбе у кузена",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "БЫЛ_НА", "object": "СВАДЬБА_КУЗЕН"}]),
+            _t([{"subject": "пользователь", "relation": "был на", "object": "свадьба кузена"}]),
+        ),
+        (
+            "в прошлом месяце выступал на конференции Data Fest",
+            _t([{"subject": "пользователь", "relation": "выступал на", "object": "конференция data fest"}]),
         ),
     ],
     "HOME": [
@@ -261,8 +374,17 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "снял однушку на окраине, пятый этаж",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖИЛЬЁ", "object": "ОДНУШКА_ОКРАИНА"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЭТАЖ", "object": "5"},
+                    {"subject": "пользователь", "relation": "жильё", "object": "однушка окраина"},
+                    {"subject": "пользователь", "relation": "этаж", "object": "5"},
+                ]
+            ),
+        ),
+        (
+            "живу в двухкомнатной квартире, недавно сделал ремонт кухни",
+            _t(
+                [
+                    {"subject": "пользователь", "relation": "жильё", "object": "двухкомнатная квартира"},
+                    {"subject": "пользователь", "relation": "сделал", "object": "ремонт кухни"},
                 ]
             ),
         ),
@@ -272,8 +394,8 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
             "меня зовут Алексей, мне тридцать два",
             _t(
                 [
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЯ", "object": "АЛЕКСЕЙ"},
-                    {"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ВОЗРАСТ", "object": "32"},
+                    {"subject": "пользователь", "relation": "имя", "object": "алексей"},
+                    {"subject": "пользователь", "relation": "возраст", "object": "32"},
                 ]
             ),
         ),
@@ -281,52 +403,72 @@ TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
     "ROMANCE": [
         (
             "мы с партнёром живём вместе второй год",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "СОВМЕСТНОЕ_ПРОЖИВАНИЕ", "object": "ПАРТНЁР_2_ГОДА"}]),
+            _t([{"subject": "пользователь", "relation": "совместное проживание", "object": "партнёр 2 года"}]),
+        ),
+        (
+            "встречаюсь с девушкой уже полтора года",
+            _t([{"subject": "пользователь", "relation": "встречается с", "object": "девушка полтора года"}]),
         ),
     ],
     "FRIENDS": [
         (
             "каждую пятницу встречаемся с компанией в баре",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ВСТРЕЧА", "object": "КОМПАНИЯ_ПЯТНИЦА_БАР"}]),
+            _t([{"subject": "пользователь", "relation": "встреча", "object": "компания пятница бар"}]),
+        ),
+        (
+            "мы с лучшим другом Димой дружим со школы",
+            _t([{"subject": "пользователь", "relation": "дружит с", "object": "дима со школы"}]),
         ),
     ],
     "HABITS": [
         (
             "лечь спать до полуночи стараюсь каждый день",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ПРИВЫЧКА_СОН", "object": "ДО_00_00"}]),
+            _t([{"subject": "пользователь", "relation": "привычка сон", "object": "до 00 00"}]),
         ),
     ],
     "PREFERENCES": [
         (
             "не люблю сладкое в кофе",
-            _t([{"subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "НЕ_ЛЮБИТ", "object": "САХАР_В_КОФЕ"}]),
+            _t([{"subject": "пользователь", "relation": "не любит", "object": "сахар в кофе"}]),
         ),
     ],
 }
 
 
 def triplet_per_slot_few_shot_messages(
-    user_turn_fn, slot_name: str | None
+    shared_user_turn_fn,
+    per_slot_user_turn_fn,
+    slot_name: str | None,
 ) -> List[Dict[str, Any]]:
-    rows: List[Tuple[str, str]] = list(TRIPLET_PER_SLOT_SHARED)
-    if slot_name and slot_name in TRIPLET_PER_SLOT_BY_SLOT:
-        rows.extend(TRIPLET_PER_SLOT_BY_SLOT[slot_name])
+    """
+    Build few-shot messages for per-slot triplet extraction.
+
+    shared_user_turn_fn  — used for TRIPLET_PER_SLOT_SHARED (no slot hint in user-turn,
+                           demonstrates the basic triplet format).
+    per_slot_user_turn_fn — used for TRIPLET_PER_SLOT_BY_SLOT entries (slot hint present,
+                            demonstrates slot-scoped extraction and negative examples).
+    """
     out: List[Dict[str, Any]] = []
-    for msg, assistant_json in rows:
-        out.append({"role": "user", "content": user_turn_fn(msg)})
+    for msg, assistant_json in TRIPLET_PER_SLOT_SHARED:
+        out.append({"role": "user", "content": shared_user_turn_fn(msg)})
         out.append({"role": "assistant", "content": assistant_json})
+    if slot_name and slot_name in TRIPLET_PER_SLOT_BY_SLOT:
+        for msg, assistant_json in TRIPLET_PER_SLOT_BY_SLOT[slot_name]:
+            out.append({"role": "user", "content": per_slot_user_turn_fn(msg)})
+            out.append({"role": "assistant", "content": assistant_json})
     return out
 
 
-# Single-pass: в JSON есть поле slot — русские метки
+# Single-pass: в JSON есть поле slot — русские метки.
+# Субъект, связь и объект — строчными буквами без «_».
 TRIPLET_SINGLE_PASS_FEWSHOT: List[Tuple[str, str]] = [
     (
         "женат, сын в школе, работаю инженером",
         _t(
             [
-                {"slot": "СЕМЬЯ", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖЕНАТ", "object": "ДА"},
-                {"slot": "СЕМЬЯ", "subject": "СЫН", "relation": "УЧИТСЯ_В", "object": "ШКОЛА"},
-                {"slot": "РАБОТА", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАБОТАЕТ_КАК", "object": "ИНЖЕНЕР"},
+                {"slot": "СЕМЬЯ", "subject": "пользователь", "relation": "женат", "object": "да"},
+                {"slot": "СЕМЬЯ", "subject": "сын", "relation": "учится в", "object": "школа"},
+                {"slot": "РАБОТА", "subject": "пользователь", "relation": "работает как", "object": "инженер"},
             ]
         ),
     ),
@@ -334,8 +476,8 @@ TRIPLET_SINGLE_PASS_FEWSHOT: List[Tuple[str, str]] = [
         "кот Мурзик, не ем сахар",
         _t(
             [
-                {"slot": "ПИТОМЦЫ", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ", "object": "КОТ_МУРЗИК"},
-                {"slot": "ЕДА", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИСКЛЮЧАЕТ", "object": "САХАР"},
+                {"slot": "ПИТОМЦЫ", "subject": "пользователь", "relation": "имеет", "object": "кот мурзик"},
+                {"slot": "ЕДА", "subject": "пользователь", "relation": "исключает", "object": "сахар"},
             ]
         ),
     ),
@@ -347,8 +489,8 @@ TRIPLET_SINGLE_PASS_FEWSHOT: List[Tuple[str, str]] = [
         "переехал в Екатеринбург, ипотека в ВТБ",
         _t(
             [
-                {"slot": "ЛОКАЦИЯ", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖИВЁТ_В", "object": "ЕКАТЕРИНБУРГ"},
-                {"slot": "ФИНАНСЫ", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИПОТЕКА", "object": "ВТБ"},
+                {"slot": "ЛОКАЦИЯ", "subject": "пользователь", "relation": "живёт в", "object": "екатеринбург"},
+                {"slot": "ФИНАНСЫ", "subject": "пользователь", "relation": "ипотека", "object": "втб"},
             ]
         ),
     ),
@@ -356,8 +498,8 @@ TRIPLET_SINGLE_PASS_FEWSHOT: List[Tuple[str, str]] = [
         "бегаю марафоны и не пью алкоголь",
         _t(
             [
-                {"slot": "СПОРТ", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЗАНИМАЕТСЯ", "object": "МАРАФОНЫ"},
-                {"slot": "ПРИВЫЧКИ", "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "НЕ_УПОТРЕБЛЯЕТ", "object": "АЛКОГОЛЬ"},
+                {"slot": "СПОРТ", "subject": "пользователь", "relation": "занимается", "object": "марафоны"},
+                {"slot": "ПРИВЫЧКИ", "subject": "пользователь", "relation": "не употребляет", "object": "алкоголь"},
             ]
         ),
     ),

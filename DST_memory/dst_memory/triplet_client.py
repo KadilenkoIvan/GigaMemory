@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -119,14 +120,28 @@ class TripletExtractionClient:
             if not isinstance(it, dict):
                 continue
             slot = forced_slot or self.ontology.resolve(str(it.get("slot", "")))
-            subj = str(it.get("subject", "")).strip()
-            rel = str(it.get("relation", "")).strip().upper()
-            objv = str(it.get("object", "")).strip()
+            subj = self._normalize_field(str(it.get("subject", "")))
+            rel = self._normalize_field(str(it.get("relation", "")))
+            objv = self._normalize_field(str(it.get("object", "")))
             if not slot or not subj or not rel or not objv:
                 continue
             out.append(ExtractedTriplet(slot=slot, subject=subj, relation=rel, object=objv))
 
         return out
+
+    @staticmethod
+    def _normalize_field(s: str) -> str:
+        """
+        Normalize a triplet field produced by the LLM.
+        Model is asked to output lowercase words separated by spaces (no underscores).
+        Post-processing: strip whitespace, uppercase, replace any run of
+        spaces / dashes / underscores with a single underscore.
+        """
+        s = s.strip()
+        if not s:
+            return s
+        s = re.sub(r"[\s\-_]+", "_", s).strip("_")
+        return s.upper()
 
     @staticmethod
     def _extract_first_json_object(text: str) -> Optional[str]:
