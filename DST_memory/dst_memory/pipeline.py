@@ -1,36 +1,53 @@
 from dataclasses import asdict
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 
 from .classifier import ImportanceClassifier
 from .config import PipelineConfig
 from .conflict_client import TripletConflictClient
 from .dst_manager import DSTManager
-from .embedder import TextEmbedder
 from .llm_client import FinalLLMClient
 from .memory_gate_client import MemoryGateClient
 from .models import MemoryFact, Message
-from .retriever import MemoryRetriever
 from .serving import LocalHFServing
 from .slot_select_client import SlotSelectClient
 from .triplet_client import TripletExtractionClient
-from .vector_store import InMemoryVectorStore
 
 logger = logging.getLogger(__name__)
 
 
 class DSTMemoryPipeline:
-    def __init__(self, config: PipelineConfig):
+    def __init__(
+        self,
+        config: PipelineConfig,
+        ragu_processor: Optional[Any] = None,
+    ):
+        """
+        Parameters
+        ----------
+        config:
+            Pipeline configuration.
+        ragu_processor:
+            Optional ``RaguGraphProcessor`` instance.  When provided:
+            - triplets are mirrored to RAGU's KnowledgeGraph on every insert/delete.
+            - ``memory_context_source="vector"`` uses RAGU ``LocalSearchEngine``
+              instead of the legacy ``InMemoryVectorStore``.
+            When *None* the pipeline operates in "slots-only" mode regardless of
+            the ``memory_context_source`` config value.
+        """
         self.config = config
+        self.ragu_processor = ragu_processor
+
         logger.info(
             "Initializing pipeline threshold=%.3f top_k=%d llm_mode=%s gate=%s "
-            "memory_gate_stub=%s memory_context=%s",
+            "memory_gate_stub=%s memory_context=%s ragu=%s",
             config.importance_threshold,
             config.retrieval_top_k,
             config.llm_mode,
             config.use_memory_gate,
             config.memory_gate_use_stub,
             config.memory_context_source,
+            ragu_processor is not None,
         )
         self.classifier = ImportanceClassifier(
             model_path=config.importance_model_path,
@@ -61,6 +78,7 @@ class DSTMemoryPipeline:
             slot_selector=slot_selector,
             conflict_resolver=conflict_resolver,
             single_pass_fallback=True,
+            ragu_processor=ragu_processor,
         )
         gate_stub = config.memory_gate_use_stub or slot_serving is None
         self.memory_gate = MemoryGateClient(
@@ -68,9 +86,6 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_retries=1,
         )
-        self.embedder = TextEmbedder()
-        self.store = InMemoryVectorStore()
-        self.retriever = MemoryRetriever(store=self.store, embedder=self.embedder)
         self.final_llm = FinalLLMClient(
             mode=config.llm_mode,
             api_url=config.llm_api_url,
@@ -110,7 +125,7 @@ class DSTMemoryPipeline:
                 "classifier": cls,
                 "new_facts": [],
             }
-        self._index_facts(dialogue_id, new_facts)
+        # RAGU indexing happens inside DSTManager.upsert_from_message via ragu_processor.
         return {
             "saved": True,
             "reason": "important",
@@ -118,43 +133,24 @@ class DSTMemoryPipeline:
             "new_facts": [asdict(f) for f in new_facts],
         }
 
-    def _index_facts(self, dialogue_id: str, facts: List[MemoryFact]) -> None:
-        if not facts:
-            logger.debug("index_facts skipped empty facts")
-            return
-        # Index by the fact text itself, not only by slot name.
-        texts = [f"{f.slot}: {f.value}" for f in facts]
-        vectors = self.embedder.encode(texts)
-        logger.info("Indexing facts dialogue_id=%s count=%d", dialogue_id, len(facts))
-        for fact, vec in zip(facts, vectors):
-            payload = {
-                "dialogue_id": dialogue_id,
-                "slot": fact.slot,
-                "slot_name": fact.slot,
-                "value": fact.value,
-                "subject": fact.subject,
-                "relation": fact.relation,
-                "object": fact.object,
-                "message_text": fact.value,
-                "source_text": fact.source_text,
-                "created_at_step": fact.created_at_step,
-                "updated_at_step": fact.updated_at_step,
-                "is_active": fact.is_active,
-            }
-            self.store.add(vec, payload)
-
-    @staticmethod
-    def _lines_from_retriever_hits(hits: List[Dict]) -> List[str]:
-        return [f"{h.get('slot')}: {h.get('value')}" for h in hits]
-
     def _memory_context_for_question(
         self, dialogue_id: str, question: str
     ) -> Tuple[List[str], Dict]:
         """
-        Строки памяти для финальной LLM и метаданные шлюза (отладка / jsonl без финальной LLM).
+        Returns (memory_lines, gate_meta).
+        memory_lines go into the final LLM context.
+        gate_meta is logged / returned in answer_without_final_llm for debugging.
         """
         src = (self.config.memory_context_source or "slots").strip().lower()
         if src not in ("slots", "vector"):
+            src = "slots"
+
+        # Vector mode requires RAGU; fall back to slots if not configured.
+        if src == "vector" and self.ragu_processor is None:
+            logger.warning(
+                "memory_context_source='vector' requested but RAGU is not configured; "
+                "falling back to 'slots' mode."
+            )
             src = "slots"
 
         slot_names = self.dst.active_slot_names(dialogue_id)
@@ -218,23 +214,21 @@ class DSTMemoryPipeline:
         slot_names: List[str],
         meta_base: Dict,
     ) -> Tuple[List[str], Dict]:
+        """RAGU-based semantic retrieval path."""
+        assert self.ragu_processor is not None, "RAGU processor must be set for vector mode"
+
         if not self.config.use_memory_gate:
-            entity_scope = self.dst.entity_scope_for_slots(dialogue_id, slot_names, hops=1)
-            hits = self.retriever.search(
-                dialogue_id=dialogue_id,
+            lines = self.ragu_processor.search_memory(
                 query=question,
+                slot_names=list(slot_names),
                 top_k=self.config.retrieval_top_k,
-                allowed_slots=slot_names,
-                allowed_entities=entity_scope,
             )
-            lines = self._lines_from_retriever_hits(hits)
             return lines, {
                 **meta_base,
                 "use_memory": bool(lines),
                 "selected_slots": list(slot_names),
-                "entity_scope": entity_scope,
-                "mode": "gate_disabled_vector_topk",
-                "retrieved_count": len(hits),
+                "mode": "gate_disabled_ragu_topk",
+                "retrieved_count": len(lines),
             }
 
         sel = self.memory_gate.select_slots(
@@ -249,38 +243,34 @@ class DSTMemoryPipeline:
             }
 
         selected_slots = list(sel.slot_names) if sel.slot_names else list(slot_names)
-        entity_scope = self.dst.entity_scope_for_slots(dialogue_id, selected_slots, hops=1)
-        hits = self.retriever.search(
-            dialogue_id=dialogue_id,
+        lines = self.ragu_processor.search_memory(
             query=question,
+            slot_names=selected_slots,
             top_k=self.config.retrieval_top_k,
-            allowed_slots=selected_slots,
-            allowed_entities=entity_scope,
         )
-        lines = self._lines_from_retriever_hits(hits)
         return lines, {
             **meta_base,
             "use_memory": bool(lines),
             "selected_slots": selected_slots,
-            "entity_scope": entity_scope,
-            "mode": "llm_gate_vector_topk",
-            "retrieved_count": len(hits),
+            "mode": "llm_gate_ragu_topk",
+            "retrieved_count": len(lines),
         }
 
     def answer_without_final_llm(self, dialogue_id: str, question: str) -> Dict:
         logger.info("answer_without_final_llm dialogue_id=%s", dialogue_id)
         memory_lines, gate_meta = self._memory_context_for_question(dialogue_id, question)
-        selected_slots = gate_meta.get("selected_slots") or self.dst.active_slot_names(dialogue_id)
-        entity_scope = gate_meta.get("entity_scope") or self.dst.entity_scope_for_slots(
-            dialogue_id, selected_slots, hops=1
+        selected_slots = (
+            gate_meta.get("selected_slots") or self.dst.active_slot_names(dialogue_id)
         )
-        hits = self.retriever.search(
-            dialogue_id=dialogue_id,
-            query=question,
-            top_k=self.config.retrieval_top_k,
-            allowed_slots=selected_slots,
-            allowed_entities=entity_scope,
-        )
+
+        retrieved: List[Any] = []
+        if self.ragu_processor is not None:
+            retrieved = self.ragu_processor.search_memory(
+                query=question,
+                slot_names=list(selected_slots) if selected_slots else None,
+                top_k=self.config.retrieval_top_k,
+            )
+
         memory_slots = self.dst.slots_with_messages(dialogue_id)
         return {
             "dialogue_id": dialogue_id,
@@ -288,7 +278,7 @@ class DSTMemoryPipeline:
             "use_memory": bool(memory_lines),
             "memory_gate": gate_meta,
             "memory_lines_for_final_llm": memory_lines,
-            "retrieved": hits,
+            "retrieved": retrieved,
             "memory_slots": memory_slots,
         }
 
@@ -305,4 +295,3 @@ class DSTMemoryPipeline:
     def clear_memory(self, dialogue_id: str) -> None:
         logger.info("clear_memory dialogue_id=%s", dialogue_id)
         self.dst.clear_dialogue(dialogue_id)
-        self.store.clear_dialogue(dialogue_id)

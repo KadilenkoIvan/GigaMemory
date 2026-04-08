@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import logging
 
 from .conflict_client import TripletConflictClient
-from .graph_backend import UserGraphBackend
+from .graph_backend import GraphEdge
 from .models import DialogueMemoryState, FactRecord, MemoryFact
 from .slot_select_client import SlotSelectClient
 from .triplet_client import TripletExtractionClient
@@ -20,6 +20,11 @@ class DSTManager:
     Conflict resolution strategy (hybrid):
       Rule layer — exact (subject, relation) match → auto-deactivate old record.
       LLM layer  — same subject, ambiguous relation → TripletConflictClient.
+
+    When a ``RaguGraphProcessor`` is provided, every insert/delete is mirrored
+    to RAGU's KnowledgeGraph in addition to the in-memory ``DialogueMemoryState``.
+    The in-memory state is always the source of truth for conflict resolution and
+    slot-based retrieval; RAGU is used for semantic (vector) retrieval.
     """
 
     def __init__(
@@ -29,13 +34,16 @@ class DSTManager:
         *,
         conflict_resolver: Optional[TripletConflictClient] = None,
         single_pass_fallback: bool = True,
+        ragu_processor: Optional[Any] = None,
     ):
         self._states: Dict[str, DialogueMemoryState] = {}
         self.triplet_extractor = triplet_extractor
         self.slot_selector = slot_selector
         self.conflict_resolver = conflict_resolver
         self.single_pass_fallback = single_pass_fallback
-        self.graph = UserGraphBackend()
+        # Optional RAGU backend (RaguGraphProcessor); imported lazily to avoid
+        # hard dependency when RAGU is not configured.
+        self.ragu_processor = ragu_processor
 
     def get_state(self, dialogue_id: str) -> DialogueMemoryState:
         if dialogue_id not in self._states:
@@ -74,37 +82,63 @@ class DSTManager:
 
             # --- Conflict resolution ---
             skip_indices: set = set()
+            deactivated_record_ids: List[int] = []
+
             if self.conflict_resolver is not None:
-                # Gather all existing active edges for subjects present in new triplets
+                # Build GraphEdge list directly from DialogueMemoryState —
+                # no separate graph backend needed for conflict resolution.
                 subjects = {t.subject for t in slot_triplets}
-                all_existing = []
-                for subj in subjects:
-                    all_existing.extend(
-                        self.graph.get_active_by_subject_in_slot(dialogue_id, slot, subj)
+                all_existing: List[GraphEdge] = [
+                    GraphEdge(
+                        edge_id=rec.record_id,
+                        slot=slot,
+                        subject=rec.subject,
+                        relation=rec.relation,
+                        object=rec.object,
+                        record_id=rec.record_id,
+                        is_active=rec.is_active,
                     )
+                    for rec in state.slots.get(slot, [])
+                    if rec.is_active and rec.subject in subjects
+                ]
 
                 if all_existing:
                     resolution = self.conflict_resolver.resolve(
                         slot, all_existing, slot_triplets
                     )
-                    # Apply deactivations to graph and state records
+                    # Apply deactivations to state records
                     for rid in resolution.deactivate_ids:
-                        self.graph.deactivate_record(dialogue_id, rid)
                         for rec in state.slots.get(slot, []):
-                            if rec.record_id == rid:
+                            if rec.record_id == rid and rec.is_active:
                                 rec.is_active = False
                                 rec.updated_at_step = state.step
+                                deactivated_record_ids.append(rid)
                                 logger.info(
                                     "Deactivated record_id=%d slot=%s step=%d",
                                     rid, slot, state.step,
                                 )
                     skip_indices = resolution.skip_new_indices
 
+            # Mirror deactivations to RAGU
+            if self.ragu_processor is not None and deactivated_record_ids:
+                from .ragu_graph_processor import GraphTripletDelete
+                self.ragu_processor.delete_triplet_deltas([
+                    GraphTripletDelete(
+                        record_id=rid,
+                        dialogue_id=dialogue_id,
+                        slot=slot,
+                    )
+                    for rid in deactivated_record_ids
+                ])
+
             # --- Insert surviving new triplets ---
+            new_deltas = []
             for idx, t in enumerate(slot_triplets):
                 if idx in skip_indices:
-                    logger.debug("Skipping duplicate triplet idx=%d (%s|%s|%s)",
-                                 idx, t.subject, t.relation, t.object)
+                    logger.debug(
+                        "Skipping duplicate triplet idx=%d (%s|%s|%s)",
+                        idx, t.subject, t.relation, t.object,
+                    )
                     continue
                 rid = state.next_record_id
                 state.next_record_id += 1
@@ -121,14 +155,19 @@ class DSTManager:
                     is_active=True,
                 )
                 state.slots[slot].append(rec)
-                self.graph.upsert_triplet(
-                    dialogue_id,
-                    record_id=rid,
-                    slot=slot,
-                    subject=t.subject,
-                    relation=t.relation,
-                    object_=t.object,
-                )
+
+                if self.ragu_processor is not None:
+                    from .ragu_graph_processor import GraphTripletDelta
+                    new_deltas.append(GraphTripletDelta(
+                        record_id=rid,
+                        dialogue_id=dialogue_id,
+                        step=state.step,
+                        slot=slot,
+                        subject=t.subject,
+                        relation=t.relation,
+                        object=t.object,
+                    ))
+
                 created.append(
                     MemoryFact(
                         slot=slot,
@@ -143,22 +182,42 @@ class DSTManager:
                         object=t.object,
                     )
                 )
+
+            # Mirror inserts to RAGU in one batch
+            if self.ragu_processor is not None and new_deltas:
+                self.ragu_processor.upsert_triplet_deltas(new_deltas)
+
         return created
 
     def deactivate_record(self, dialogue_id: str, record_id: int) -> bool:
         """
         Deactivate a single fact record (soft-delete).
-        Used by conflict_resolver and can also be called externally.
         Returns True if the record was found and deactivated.
         """
         state = self.get_state(dialogue_id)
-        graph_ok = self.graph.deactivate_record(dialogue_id, record_id)
-        for records in state.slots.values():
+        found_slot: Optional[str] = None
+        for slot, records in state.slots.items():
             for rec in records:
-                if rec.record_id == record_id:
+                if rec.record_id == record_id and rec.is_active:
                     rec.is_active = False
-                    return True
-        return graph_ok
+                    found_slot = slot
+                    break
+            if found_slot is not None:
+                break
+
+        if found_slot is None:
+            return False
+
+        if self.ragu_processor is not None:
+            from .ragu_graph_processor import GraphTripletDelete
+            self.ragu_processor.delete_triplet_deltas([
+                GraphTripletDelete(
+                    record_id=record_id,
+                    dialogue_id=dialogue_id,
+                    slot=found_slot,
+                )
+            ])
+        return True
 
     def active_slot_names(self, dialogue_id: str) -> List[str]:
         """Имена слотов, в которых есть хотя бы одна активная запись (стабильный порядок)."""
@@ -212,8 +271,25 @@ class DSTManager:
     def entity_scope_for_slots(
         self, dialogue_id: str, slot_names: List[str], hops: int = 1
     ) -> List[str]:
-        seeds = self.graph.entities_for_slots(dialogue_id, slot_names)
-        return self.graph.expand_entities(dialogue_id, seeds, hops=hops)
+        """
+        Returns entity names active in the given slots.
+
+        With RAGU enabled, LocalSearchEngine handles graph expansion internally,
+        so this returns a flat list of entity names for informational purposes only.
+        Without RAGU, returns an empty list (legacy vector store handled entity scope).
+        """
+        state = self.get_state(dialogue_id)
+        entities: List[str] = []
+        seen: set = set()
+        for slot in slot_names:
+            for rec in state.slots.get(slot, []):
+                if not rec.is_active:
+                    continue
+                for name in (rec.subject, rec.object):
+                    if name and name not in seen:
+                        seen.add(name)
+                        entities.append(name)
+        return entities
 
     def slots_with_messages(self, dialogue_id: str) -> List[Dict[str, Any]]:
         """
@@ -252,4 +328,3 @@ class DSTManager:
     def clear_dialogue(self, dialogue_id: str) -> None:
         logger.info("Clearing DST state dialogue_id=%s", dialogue_id)
         self._states.pop(dialogue_id, None)
-        self.graph.clear_dialogue(dialogue_id)

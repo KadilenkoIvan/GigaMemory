@@ -56,8 +56,25 @@ def build_pipeline(args: argparse.Namespace):
         slot_use_stub=args.slot_use_stub,
         slot_model_path=args.slot_model_path,
         slot_max_slots_per_message=args.slot_max_slots_per_message,
+        use_ragu=getattr(args, "use_ragu", False),
+        ragu_embedder_model=getattr(args, "ragu_embedder_model", "all-MiniLM-L6-v2"),
+        ragu_storage_path=getattr(args, "ragu_storage_path", ""),
     )
-    return DSTMemoryPipeline(cfg)
+
+    ragu_processor = None
+    if cfg.use_ragu:
+        logger.info(
+            "Initializing RAGU backend embedder=%s storage=%s",
+            cfg.ragu_embedder_model,
+            cfg.ragu_storage_path or "<default>",
+        )
+        from dst_memory.ragu_graph_processor import build_ragu_processor
+        _kg, ragu_processor = build_ragu_processor(
+            embedder_model=cfg.ragu_embedder_model,
+            storage_path=cfg.ragu_storage_path or None,
+        )
+
+    return DSTMemoryPipeline(cfg, ragu_processor=ragu_processor)
 
 
 def create_parser(
@@ -189,6 +206,25 @@ def create_parser(
         "--slot-max-slots-per-message",
         type=int,
         default=int(s.get("slot_max_slots_per_message", 5)),
+    )
+    parser.add_argument(
+        "--use-ragu",
+        action="store_const",
+        const=True,
+        default=bool(s.get("use_ragu", False)),
+        help="Enable RAGU knowledge-graph backend for vector retrieval.",
+    )
+    parser.add_argument(
+        "--ragu-embedder-model",
+        type=str,
+        default=str(s.get("ragu_embedder_model", "all-MiniLM-L6-v2")),
+        help="SentenceTransformer model name for RAGU embedder.",
+    )
+    parser.add_argument(
+        "--ragu-storage-path",
+        type=str,
+        default=str(s.get("ragu_storage_path", "")),
+        help="Directory where RAGU persists its storage files.",
     )
 
     sub = parser.add_subparsers(required=True)

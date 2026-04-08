@@ -40,3 +40,13 @@ class PipelineConfig:
 
     # Финальная LLM (когда будут реализованы local/api): temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0
+
+    # RAGU knowledge-graph backend
+    # If True, all triplets are mirrored to RAGU and "vector" retrieval uses
+    # RAGU's LocalSearchEngine instead of the legacy InMemoryVectorStore.
+    use_ragu: bool = False
+    # SentenceTransformer model for RAGU's embedder.
+    ragu_embedder_model: str = "all-MiniLM-L6-v2"
+    # Folder where RAGU persists its storage files (graph, vectors, KV).
+    # Empty string → <repo_root>/ragu_storage
+    ragu_storage_path: str = ""
