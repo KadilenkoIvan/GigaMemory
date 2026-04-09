@@ -217,7 +217,7 @@ def create_parser(
     parser.add_argument(
         "--ragu-embedder-model",
         type=str,
-        default=str(s.get("ragu_embedder_model", "all-MiniLM-L6-v2")),
+        default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")),
         help="SentenceTransformer model name for RAGU embedder.",
     )
     parser.add_argument(

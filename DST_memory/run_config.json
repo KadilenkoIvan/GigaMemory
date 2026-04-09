@@ -18,7 +18,10 @@
     "log_level": "INFO",
     "slot_use_stub": false,
     "slot_model_path": "models/Meno-Lite-0.1",
-    "slot_max_slots_per_message": 5
+    "slot_max_slots_per_message": 5,
+    "use_ragu": false,
+    "ragu_embedder_model": "deepvk/USER-bge-m3",
+    "ragu_storage_path": ""
   },
   "pipeline_jsonl": {
     "dataset_path": null,

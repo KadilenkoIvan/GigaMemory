@@ -46,7 +46,7 @@ class PipelineConfig:
     # RAGU's LocalSearchEngine instead of the legacy InMemoryVectorStore.
     use_ragu: bool = False
     # SentenceTransformer model for RAGU's embedder.
-    ragu_embedder_model: str = "all-MiniLM-L6-v2"
+    ragu_embedder_model: str = "deepvk/USER-bge-m3"
     # Folder where RAGU persists its storage files (graph, vectors, KV).
     # Empty string → <repo_root>/ragu_storage
     ragu_storage_path: str = ""
