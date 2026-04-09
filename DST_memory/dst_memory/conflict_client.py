@@ -150,8 +150,7 @@ class TripletConflictClient:
         cfg = GenerationConfig(max_new_tokens=256, temperature=0.0, do_sample=False)
 
         for attempt in range(self.max_retries + 1):
-            raw = self.serving.generate(messages, cfg)
-            last = raw[-1].get("content", "") if raw else ""
+            last = self.serving.generate_chat(messages, cfg)
             try:
                 result = parse_conflict_response(last)
                 logger.debug("Conflict LLM resolved slot=%s: %s", slot_name, result)
