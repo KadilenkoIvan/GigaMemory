@@ -1,0 +1,17 @@
+{
+  "com-bb6b98a52315dd12d330d2f6d9e71027": {
+    "level": 0,
+    "cluster_id": 0,
+    "entity_ids": [
+      "ent-463b46bb78b9b85166b5faa1a389ec29",
+      "ent-59688ffe706e581bd28de50eaf3b03cf",
+      "ent-1476bda2207256f0a02c5244dedf2269",
+      "ent-ca5cdddee960b20588b2a46fd7b5d632"
+    ],
+    "relation_ids": [
+      "rel-65ff3d56cb48604b0fe06f7d368c7489",
+      "rel-1d238ccc5dcbfb0f682dba730a550a31",
+      "rel-7e245a56d6ffe32e1e864331f6c68654"
+    ]
+  }
+}
