@@ -129,6 +129,7 @@ class DSTMemoryPipeline:
             }
         # RAGU indexing happens inside DSTManager.upsert_from_message via ragu_processor.
         return {
+            "message": message,
             "saved": True,
             "reason": "important",
             "classifier": cls,
