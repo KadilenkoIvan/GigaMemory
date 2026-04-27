@@ -69,7 +69,7 @@ class DSTManager:
             triplets = self.triplet_extractor.extract(user_text)
         if not triplets:
             logger.info("No triplets extracted dialogue_id=%s step=%d", dialogue_id, state.step)
-            return []
+            return [], selected_slots
 
         # Group new triplets by slot for per-slot conflict resolution
         by_slot: Dict[str, List] = defaultdict(list)
@@ -187,7 +187,7 @@ class DSTManager:
             if self.ragu_processor is not None and new_deltas:
                 self.ragu_processor.upsert_triplet_deltas(new_deltas)
 
-        return created
+        return created, selected_slots
 
     def deactivate_record(self, dialogue_id: str, record_id: int) -> bool:
         """

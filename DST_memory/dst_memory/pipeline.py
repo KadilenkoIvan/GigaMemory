@@ -117,19 +117,24 @@ class DSTMemoryPipeline:
             cls["is_important"],
         )
         if not bool(cls["is_important"]):
-            return {"saved": False, "reason": "not_important", "classifier": cls}
+            return {"message": message.content,
+                    "saved": False, 
+                    "reason": "not_important", 
+                    "classifier": cls}
 
-        new_facts = self.dst.upsert_from_message(dialogue_id, message.content)
+        new_facts, selected_slots = self.dst.upsert_from_message(dialogue_id, message.content)
         if not new_facts:
             return {
+                "slots": selected_slots,
+                "message": message.content,
                 "saved": False,
                 "reason": "no_facts_extracted",
                 "classifier": cls,
                 "new_facts": [],
             }
-        # RAGU indexing happens inside DSTManager.upsert_from_message via ragu_processor.
         return {
-            "message": message,
+            "slots": selected_slots,
+            "message": message.content,
             "saved": True,
             "reason": "important",
             "classifier": cls,

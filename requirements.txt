@@ -16,3 +16,7 @@ pymorphy2
 pymorphy2-dicts-ru
 pyspellchecker
 sentence_transformers
+openai
+loguru
+razdel
+-e ./RAGU
