@@ -42,3 +42,4 @@ class DialogueMemoryState:
     step: int = 0
     slots: Dict[str, List[FactRecord]] = field(default_factory=dict)
     next_record_id: int = 1
+    recent_pairs: List[Dict[str, str]] = field(default_factory=list)

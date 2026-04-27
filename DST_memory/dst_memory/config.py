@@ -6,17 +6,24 @@ from pathlib import Path
 class PipelineConfig:
     importance_model_path: str = str(
         Path(__file__).resolve().parents[2]
-        / "message_important_learning"
-        / "best_model-full_tune"
+        / "importants_classificator"
+        / "training"
+        / "results_e5"
+        / "best_model"
     )
     importance_threshold: float = 0.5
     retrieval_top_k: int = 5
+    graph_top_k_records: int = 20
+    recent_history_pairs: int = 5
     # Если False — в финальную LLM попадают все активные слоты без отбора локальной LLM.
     use_memory_gate: bool = True
     # Если True — для отбора слотов под ответ используется эвристика (без вызова локальной модели).
     memory_gate_use_stub: bool = False
-    # Источник текста памяти для финальной LLM: "slots" — записи из выбранных слотов; "vector" — top-k из векторного индекса.
-    memory_context_source: str = "slots"
+    # Strategy of memory payload for final answer:
+    # - "full_graph_json": pass complete active memory graph as JSON.
+    # - "relevant_slots_full": LLM gate selects slots, pass full selected slots.
+    # - "topk_graph_records": RAGU semantic top-k over all graph.
+    memory_strategy: str = "relevant_slots_full"
 
     # LLM mode:
     # - "stub": no external LLM call, returns template response
@@ -41,10 +48,8 @@ class PipelineConfig:
     # Финальная LLM (когда будут реализованы local/api): temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0
 
-    # RAGU knowledge-graph backend
-    # If True, all triplets are mirrored to RAGU and "vector" retrieval uses
-    # RAGU's LocalSearchEngine instead of the legacy InMemoryVectorStore.
-    use_ragu: bool = False
+    # RAGU knowledge-graph backend (required in this project).
+    use_ragu: bool = True
     # SentenceTransformer model for RAGU's embedder.
     ragu_embedder_model: str = "deepvk/USER-bge-m3"
     # Folder where RAGU persists its storage files (graph, vectors, KV).

@@ -5,7 +5,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
-from typing import List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -39,22 +39,32 @@ class FinalLLMClient:
             temperature,
         )
 
-    def generate(self, question: str, memory_lines: List[str]) -> str:
+    def generate(
+        self,
+        question: str,
+        memory_context: Any,
+        recent_pairs: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
         logger.info(
-            "FinalLLM generate mode=%s question_len=%d memory_lines=%d",
+            "FinalLLM generate mode=%s question_len=%d has_memory=%s pairs=%d",
             self.mode,
             len(question),
-            len(memory_lines),
+            bool(memory_context),
+            len(recent_pairs or []),
         )
         if self.mode == "stub":
-            joined = "; ".join(memory_lines[:3]) if memory_lines else "no-memory"
-            return f"[STUB_ANSWER] q='{question}' | memory='{joined}'"
+            compact = json.dumps(memory_context, ensure_ascii=False)[:300] if memory_context else "no-memory"
+            return f"[STUB_ANSWER] q='{question}' | memory='{compact}'"
 
         if self.mode == "local":
             raise NotImplementedError("TODO: local LLM backend is not implemented yet.")
 
         if self.mode in ("api", "openrouter"):
-            return self._openai_compatible_chat(question, memory_lines)
+            return self._openai_compatible_chat(
+                question=question,
+                memory_context=memory_context,
+                recent_pairs=recent_pairs or [],
+            )
 
         raise ValueError(f"Unknown llm_mode: {self.mode}")
 
@@ -66,7 +76,12 @@ class FinalLLMClient:
             return base
         return f"{base.rstrip('/')}/chat/completions"
 
-    def _openai_compatible_chat(self, question: str, memory_lines: List[str]) -> str:
+    def _openai_compatible_chat(
+        self,
+        question: str,
+        memory_context: Any,
+        recent_pairs: List[Dict[str, str]],
+    ) -> str:
         if not self.api_key.strip():
             raise ValueError(
                 "llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY."
@@ -80,8 +95,20 @@ class FinalLLMClient:
             "Если в блоке памяти есть релевантные факты — опирайся на них; "
             "если память пуста или не относится к вопросу — отвечай из общих знаний, не выдумывай факты о пользователе."
         )
-        mem_block = "\n".join(f"- {line}" for line in memory_lines) if memory_lines else "(память пуста)"
-        user = f"Фрагменты памяти (слоты):\n{mem_block}\n\nВопрос пользователя:\n{question}"
+        mem_block = json.dumps(memory_context or {}, ensure_ascii=False, indent=2)
+        pairs_block = (
+            json.dumps(recent_pairs, ensure_ascii=False, indent=2)
+            if recent_pairs
+            else "[]"
+        )
+        user = (
+            "Контекст памяти (JSON):\n"
+            f"{mem_block}\n\n"
+            "Последние 5 пар user/assistant (JSON):\n"
+            f"{pairs_block}\n\n"
+            "Текущий запрос пользователя:\n"
+            f"{question}"
+        )
 
         body = {
             "model": self.model,

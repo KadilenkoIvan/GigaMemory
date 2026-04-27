@@ -1,61 +1,94 @@
-# Параметры `run_config.json`
+# CONFIG reference (`run_config.json`)
 
-Корень файла — три секции: `shared` (общие настройки пайплайна), `pipeline_jsonl`, `pipeline_interactive`. Значения из `shared` подставляются в CLI по умолчанию; аргументы командной строки их перезаписывают.
+`run.py` читает конфиг из:
 
-Перед чтением конфига `run.py` подгружает переменные из `DST_memory/.env` (если файл есть), не затирая уже заданные в системе переменные. Строка вида `"${OPENROUTER_API_KEY}"` в JSON подменяется значением из окружения (см. `dst_memory/run_config_loader.py`).
+1. `--config`, либо
+2. `DST_MEMORY_CONFIG`, либо
+3. `DST_memory/run_config.json`.
 
----
+Перед этим загружается `DST_memory/.env` (`dotenv_loader.py`).
 
-## Секция `shared`
+## `shared`
 
-| Параметр | Тип | Смысл |
-|----------|-----|--------|
-| **importance_model_path** | строка | Путь или Hugging Face id **классификатора важности** сообщения (бинарная sequence classification). От него зависит, будет ли реплика записываться в DST и индекс. |
-| **importance_threshold** | число 0…1 | Порог вероятности класса «важно»: при `p_important >= threshold` сообщение идёт в память. |
-| **retrieval_top_k** | целое | Сколько **чанков/записей** забирать из **векторного** хранилища при режиме `memory_context_source: "vector"` (обычно 5–10). На режим `slots` не влияет. |
-| **disable_memory_gate** | bool | Если **true** (CLI: `--disable-memory-gate`), **шлюз «нужна ли память для ответа»** отключён: память в финальную модель всегда подмешивается, если есть что подмешивать. В режиме **slots** — во все финальные строки попадают **все активные записи всех слотов**. В режиме **vector** — **top `retrieval_top_k`** по сходству с вопросом **без** решения локальной LLM. |
-| **memory_gate_use_stub** | bool | Если **true**, локальная модель для шлюза **не вызывается**: используется эвристика по маркерам в тексте вопроса («я», «мой», «помнишь», …). При совпадении шлюз разрешает память; в режиме **slots** stub передаёт все слоты, в **vector** — только флаг «память нужна», контент берётся из вектора. |
-| **memory_context_source** | `"slots"` \| `"vector"` | **Откуда брать текст памяти для финальной LLM.** `slots` — строки вида `слот: значение` из **состояния DST** по слотам, отобранным шлюзом (или по всем слотам, если шлюз отключён). `vector` — те же строки, но набор записей — **top-k из in-memory векторного индекса** по запросу (как раньше), после того как шлюз разрешил использовать память (или сразу top-k, если шлюз отключён). |
-| **llm_mode** | строка | Режим **финального ответа**: `stub` — заглушка без сети; `openrouter` / `api` — один запрос chat-completions на `llm_api_url`; `local` — не реализован. |
-| **llm_api_url** | строка | Базовый URL OpenAI-совместимого API (для OpenRouter: `https://openrouter.ai/api/v1`). |
-| **llm_api_key** | строка | Ключ API; часто задают `"${OPENROUTER_API_KEY}"` и выставляют ключ в `.env`. |
-| **llm_model** | строка | Идентификатор модели у провайдера (например `openai/gpt-oss-120b:free`). |
-| **llm_temperature** | число | Температура генерации финального ответа. |
-| **llm_max_tokens** | целое | Лимит токенов ответа финальной модели. |
-| **openrouter_http_referer** | строка | Необязательный заголовок `Referer` для OpenRouter (атрибуция приложения). |
-| **openrouter_x_title** | строка | Необязательный заголовок `X-OpenRouter-Title`. |
-| **no_final_llm** | bool | Если **true**, в `pipeline jsonl` финальный вызов LLM пропускается (в логах остаётся только состояние памяти). |
-| **log_level** | строка | Уровень логирования Python (`INFO`, `DEBUG`, …). |
-| **slot_use_stub** | bool | Если **true**, решения **имён слотов** и **операций обновления** идут через заглушки без локальной CausalLM. |
-| **slot_model_path** | строка | Локальный путь или HF id **одной** модели для слотов и шлюза памяти (общий `LocalHFServing`). |
-| **slot_max_slots_per_message** | целое | Максимум слотов, которые может предложить модель на одно пользовательское сообщение при записи в DST. |
+| key | type | description |
+|---|---|---|
+| `importance_model_path` | str | путь к модели бинарного классификатора важности |
+| `importance_threshold` | float | порог класса important |
+| `retrieval_top_k` | int | top-k для debug retrieval/сопутствующих запросов |
+| `graph_top_k_records` | int | top-k для стратегии `topk_graph_records` |
+| `recent_history_pairs` | int | размер окна последних пар user/assistant |
+| `disable_memory_gate` | bool | отключить LLM gate для `relevant_slots_full` |
+| `memory_gate_use_stub` | bool | использовать эвристику вместо локальной gate LLM |
+| `memory_strategy` | str | `full_graph_json` \| `relevant_slots_full` \| `topk_graph_records` |
+| `llm_mode` | str | `openrouter` \| `api` \| `stub` \| `local` |
+| `llm_api_url` | str | OpenAI-compatible endpoint |
+| `llm_api_key` | str | API key, можно через `${OPENROUTER_API_KEY}` |
+| `llm_model` | str | model id провайдера |
+| `llm_temperature` | float | температура final LLM |
+| `llm_max_tokens` | int | max tokens final LLM |
+| `openrouter_http_referer` | str | optional Referer header |
+| `openrouter_x_title` | str | optional X-OpenRouter-Title |
+| `no_final_llm` | bool | вернуть только структуру ответа без вызова final LLM |
+| `log_level` | str | `INFO`, `DEBUG`, ... |
+| `slot_use_stub` | bool | включить slot-triplet stub режим |
+| `slot_model_path` | str | путь/id локальной slot LLM |
+| `slot_max_slots_per_message` | int | лимит слотов на сообщение |
+| `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
+| `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
+| `ragu_storage_path` | str | путь к RAGU storage |
 
----
+## `pipeline_jsonl`
 
-## Секция `pipeline_jsonl`
+- `dataset_path`: path to jsonl
+- `output_path`: output json
 
-| Параметр | Смысл |
-|----------|--------|
-| **dataset_path** | Путь к JSONL датасету для прогона пайплайна. |
-| **output_path** | Куда писать сжатый JSON с результатами; рядом создаётся `*_logs.json`. |
+Используется в `pipeline test`.
 
-Оба можно не задавать в файле и передавать только через `--dataset-path` / `--output-path`.
+## `pipeline_interactive`
 
----
+- `dialogue_id`: default id для `pipeline inference interactive`.
 
-## Секция `pipeline_interactive`
+## Пояснение стратегий
 
-| Параметр | Смысл |
-|----------|--------|
-| **dialogue_id** | Идентификатор диалога по умолчанию в интерактивном режиме. |
+### `full_graph_json`
 
----
+Final LLM получает полный JSON активной памяти:
 
-## Сводка режимов памяти для финального ответа
+```json
+{
+  "dialogue_id": "...",
+  "slots": [
+    {
+      "slot": "FAMILY",
+      "messages": [ ... ]
+    }
+  ]
+}
+```
 
-| `memory_context_source` | Шлюз включён (`disable_memory_gate: false`) | Шлюз выключен |
-|-------------------------|-----------------------------------------------|----------------|
-| **slots** | Локальная LLM выбирает **имена слотов** → в финал идут **все активные записи** только этих слотов. | В финал — **все записи всех слотов**. |
-| **vector** | Локальная LLM решает **нужна ли память** (при необходимости допускается `use_memory: true`, `slots: []`) → в финал — **top `retrieval_top_k`** из векторного индекса по вопросу. | В финал — **top `retrieval_top_k`** без решения LLM. |
+### `relevant_slots_full`
 
-Локальная модель для шлюза и для слотов — **одна и та же** (`slot_model_path`), если не включён `slot_use_stub` / `memory_gate_use_stub`.
+1. Берутся активные слоты.
+2. LLM-gate выбирает релевантные слоты.
+3. В final LLM передается полное содержимое выбранных слотов.
+
+Если `disable_memory_gate=true`, передаются все активные слоты.
+
+### `topk_graph_records`
+
+1. RAGU semantic search по всему графу.
+2. Возвращаются top-k строк-графовых записей (`graph_top_k_records`).
+3. Этот список идет в final LLM.
+
+## История последних пар
+
+`recent_history_pairs` задает размер окна из последних:
+
+```json
+[
+  {"user": "...", "assistant": "..."},
+  ...
+]
+```
+
+Окно передается в final LLM вместе с memory context.

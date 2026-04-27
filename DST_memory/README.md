@@ -1,181 +1,75 @@
 # DST_memory
 
-Независимый модуль долгосрочной памяти в стиле DST для LLM, выделенный из текущего состояния репозитория и приведенный к рабочему, чистому виду.
+`DST_memory` — модуль долгосрочной памяти LLM на основе DST-графа фактов и RAGU retrieval.
 
-## Что реализовано сейчас
+## Что это за проект
 
-- Отдельный Python-модуль `dst_memory` (без Docker/окружений/соревновательного адаптера).
-- Подключен классификатор значимости сообщений из:
-  - `message_important_learning/best_model-full_tune`
-- Добавлен отдельный клиент для модели слотов (`Meno-Lite`-style):
-  - диалог собирается в `slot_messages.build_messages`: system, few-shot, финальный user (сообщение в fenced-блоке `text`)
-  - модель возвращает JSON: `slot_assignments` — список строк или `[]`, если личной информации для памяти нет
-  - имена затем нормализуются (см. ниже)
-  - имена приводятся к lower case, нормализуются (pymorphy2; при необходимости pyspellchecker ru)
-  - новый слот создаётся, если такого имени ещё нет в состоянии; иначе запись добавляется в существующий слот
-  - до 5 имён на сообщение (с требованием минимизировать число слотов)
-- Реализован in-memory векторный стор как отдельный модуль:
-  - `dst_memory/vector_store.py`
-- Реализован оркестратор пайплайна:
-  - `dst_memory/pipeline.py`
-- Реализован запуск:
-  - отдельных модулей (`module ...`)
-  - полного пайплайна (`pipeline ...`)
-- Финальная LLM сейчас в режиме `stub` (шаблонный ответ).
-- Есть режим работы без финальной LLM:
-  - `--no-final-llm` возвращает структуру памяти и retrieved факты.
-- Компактный output хранит память в формате:
-  - `memory_slots: [ { "slot": "<имя>", "messages": [ ... ] }, ... ]`
-  - в каждом слоте — массив сохранённых пользовательских сообщений (полный текст реплики).
-- Векторная индексация выполняется по названию слота, а текст сообщения хранится в метаданных.
+- Память строится из сообщений пользователя.
+- Из важных сообщений извлекаются триплеты `subject-relation-object`.
+- Триплеты пишутся в состояние DST и синхронно зеркалятся в граф RAGU.
+- При ответе формируется memory context одной из стратегий и передается в final LLM.
+- Дополнительно передаются последние пары `user/assistant`.
 
-## Структура
+## Что входит в каталог
 
-- `dst_memory/config.py` — конфиг пайплайна и порог классификатора.
-- `dst_memory/classifier.py` — бинарный классификатор значимости.
-- `dst_memory/dst_manager.py` — менеджер слотов (upsert + заглушка delete policy).
-- `dst_memory/slot_client.py` — клиент модели принятия решения по слотам.
-- `dst_memory/slot_messages.py` — system + few-shot + user для Meno (JSON `slot_assignments`, допускается `[]`).
-- `dst_memory/slot_name_normalize.py` — нормализация имён слотов (pymorphy2 / pyspellchecker).
-- `dst_memory/embedder.py` — эмбеддинги.
-- `dst_memory/vector_store.py` — in-memory vector DB.
-- `dst_memory/retriever.py` — retrieval по векторному стору.
-- `dst_memory/llm_client.py` — клиент финальной LLM (`stub`/`TODO local`/`TODO api`).
-- `dst_memory/pipeline.py` — полный пайплайн.
-- `dst_memory/io_utils.py` — чтение jsonl и извлечение user-сообщений.
 - `run.py` — единая CLI-точка запуска.
+- `dst_memory/` — вся логика пайплайна.
+- `run_config.json` — runtime-конфиг по умолчанию.
+- `CONFIG.md` — описание параметров.
+- `PIPELINE.md` — максимально подробная техническая документация по архитектуре и сценариям.
 
-## Быстрый старт
+## Режимы запуска
 
-Установка:
+### Test
 
-```bash
-pip install -r DST_memory/requirements.txt
-```
-
-### 1) Запуск отдельных модулей
-
-Классификатор:
+Batch-прогон jsonl: сообщения проходят запись в память, затем вызывается ответ на финальный вопрос.
 
 ```bash
-python DST_memory/run.py module classifier --text "Я живу в Москве и люблю футбол"
+python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
 ```
 
-DST (решение по слотам). Для запуска без модели слотов включи заглушку:
+### Inference Interactive
+
+Пошаговый режим: новое сообщение -> запись в память -> ответ LLM.
 
 ```bash
-python DST_memory/run.py --slot-use-stub module dst --dialogue-id d1 --text "У меня есть кот Барсик"
+python DST_memory/run.py pipeline inference interactive --dialogue-id demo
 ```
 
-Векторный стор:
+### Inference Single-turn
+
+Один запрос на вход, один ответ на выход.
 
 ```bash
-python DST_memory/run.py module vector --dialogue-id d1 --query "Как зовут кота?" --memory-lines "питомцы: кот Барсик" "город: Москва"
+python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --message "..."
 ```
 
-### 2) Запуск полного пайплайна
+## Стратегии памяти
 
-По `jsonl`:
+Переключаются `--memory-strategy`:
 
-```bash
-python DST_memory/run.py --slot-use-stub --no-final-llm pipeline jsonl --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
-```
+- `full_graph_json` — полный активный граф памяти в JSON.
+- `relevant_slots_full` — LLM-gate выбирает слоты, передается полное содержимое выбранных слотов.
+- `topk_graph_records` — top-k наиболее релевантных записей по всему графу (RAGU search).
 
-Интерактивно:
+## Важные флаги
 
-```bash
-python DST_memory/run.py --slot-use-stub --no-final-llm pipeline interactive --dialogue-id demo
-```
+- `--memory-strategy`
+- `--graph-top-k-records`
+- `--recent-history-pairs`
+- `--slot-model-path`
+- `--importance-model-path`
+- `--ragu-embedder-model`
+- `--ragu-storage-path`
+- `--llm-mode` (`openrouter|api|stub|local`)
+- `--no-final-llm`
 
-Команды в интерактивном режиме:
-- обычный текст: записать user-сообщение в память;
-- `/ask <вопрос>`: получить ответ;
-- `/clear`: очистить память;
-- `/exit`: выйти.
+## Ключевые ограничения
 
-### 3) Флаги для модели слотов
+- Проект зафиксирован как RAGU-only.
+- `llm_mode=local` для final LLM пока не реализован.
+- TTL/временная инвалидизация фактов не реализованы.
 
-- `--slot-use-stub` — использовать заглушку вместо модели слотов.
-- `--slot-model-path` — путь до модели слотов (по умолчанию `models/Meno-Lite-0.1`).
-- `--slot-max-slots-per-message` — максимум имён слотов на сообщение (по умолчанию `5`).
+## Подробная техдокументация
 
-### 4) Подробный запуск с реальной slot-моделью
-
-Ниже пример для режима **без заглушки**, когда решения по слотам делает сама модель.
-
-#### 4.1 Где должны лежать веса
-
-Рекомендуемый вариант:
-
-- положить модель в `DST_memory/models/Meno-Lite-0.1`
-- запускать с `--slot-model-path DST_memory/models/Meno-Lite-0.1`
-
-Пример структуры (минимум):
-
-```text
-GigaMemory/
-  DST_memory/
-    models/
-      Meno-Lite-0.1/
-        config.json
-        tokenizer.json (или tokenizer.model + tokenizer_config.json)
-        model.safetensors (или sharded safetensors)
-        special_tokens_map.json
-```
-
-Важно:
-- путь `--slot-model-path` должен указывать **на директорию модели**, а не на отдельный файл;
-- формат должен быть HF-совместимым для `AutoTokenizer` + `AutoModelForCausalLM`;
-- если путь неверный, пайплайн упадет с явной ошибкой.
-
-#### 4.2 Запуск jsonl-прогона со slot-моделью
-
-```bash
-python DST_memory/run.py \
-  --slot-model-path DST_memory/models/Meno-Lite-0.1 \
-  --slot-max-slots-per-message 5 \
-  --no-final-llm \
-  pipeline jsonl \
-  --dataset-path dataset_generation/GigaMemory_data/format_example_short.jsonl \
-  --output-path DST_memory/test_output.json
-```
-
-Что получишь:
-- `DST_memory/test_output.json` — компактная память по слотам;
-- `DST_memory/test_output_logs.json` — подробные логи решений.
-
-#### 4.3 Запуск интерактивного режима со slot-моделью
-
-```bash
-python DST_memory/run.py \
-  --slot-model-path DST_memory/models/Meno-Lite-0.1 \
-  --no-final-llm \
-  pipeline interactive \
-  --dialogue-id demo
-```
-
-Команды:
-- обычный ввод: новое user-сообщение (пройдет классификатор + slot-модель);
-- `/ask <вопрос>`: retrieval + вывод памяти;
-- `/clear`: очистка состояния диалога;
-- `/exit`: выход.
-
-## Важные ограничения текущей версии
-
-- Модель слотов ожидается как локальная HF-совместимая CausalLM; API-режим для нее пока не добавлен.
-- Если модель слотов вернула невалидный JSON после 1 ретрая — сообщение пропускается (fallback отсутствует).
-- Логика удаления/обновления противоречивых фактов — заглушка (`TODO`).
-- Финальная генерация ответа:
-  - `stub` работает,
-  - `local` и `api` пока `NotImplementedError` с явным `TODO`.
-- Векторный стор в оперативной памяти, без персистентности.
-
-## TODO (следующие шаги)
-
-- Реализовать LLM-based выделение слотов и update/delete политику.
-- Добавить темпоральные правила актуальности фактов по типам слотов.
-- Реализовать backend финальной LLM:
-  - `local` (например vLLM/transformers),
-  - `api` (HTTP client + retries + timeouts).
-- Добавить персистентное векторное хранилище и миграцию с in-memory.
-- Добавить unit-тесты на DST state transitions и retrieval.
+См. `PIPELINE.md` — полный разбор всех этапов, связей между модулями, форматов данных и поведения в разных сценариях.
