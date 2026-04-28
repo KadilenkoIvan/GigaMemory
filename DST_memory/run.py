@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -364,13 +365,23 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
     print(f"Saved: {args.output_path}")
 
 
+def _wipe_ragu_storage(args: argparse.Namespace) -> None:
+    """Delete all files in ragu_storage before a fresh pipeline test run."""
+    storage_path = getattr(args, "ragu_storage_path", "") or None
+    if storage_path is None:
+        storage_path = str(Path(__file__).resolve().parent / "ragu_storage")
+    p = Path(storage_path)
+    if p.exists():
+        shutil.rmtree(p)
+        logger.info("pipeline test: wiped ragu_storage at %s", p)
+    p.mkdir(parents=True, exist_ok=True)
+
+
 def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
     if not args.dataset_path or not args.output_path:
         raise SystemExit("pipeline test requires --dataset-path and --output-path")
+    _wipe_ragu_storage(args)
     pipeline = build_pipeline(args)
-    # Always clear graph on pipeline test — each test run is a fresh evaluation
-    logger.info("pipeline test: clearing RAGU storage for a clean run")
-    pipeline.ragu_processor.clear_all()
     rows = read_jsonl(args.dataset_path)
     results_logs = []
     results_compact = []
