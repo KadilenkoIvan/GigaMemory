@@ -36,14 +36,18 @@ class SlotSelectClient:
             max_slots=self.max_slots,
         )
         tries = self.max_retries + 1
-        for _ in range(tries):
+        for attempt in range(1, tries + 1):
             raw = self.serving.generate_chat(
                 messages,
                 generation_config=GenerationConfig(max_new_tokens=220, do_sample=False),
             )
+            logger.info("Slot selector raw attempt=%d: %s", attempt, raw[:500])
             parsed = self._parse(raw)
             if parsed is not None:
-                return parsed[: self.max_slots]
+                result = parsed[: self.max_slots]
+                logger.info("Slot selector resolved slots=%s", result)
+                return result
+        logger.warning("Slot selector failed to parse, returning []")
         return []
 
     def _parse(self, text: str) -> Optional[List[str]]:

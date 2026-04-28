@@ -80,7 +80,8 @@ class TripletExtractionClient:
                 messages,
                 generation_config=GenerationConfig(max_new_tokens=512, do_sample=False),
             )
-            logger.info("SLOT: [%s] Triplet extractor raw attempt=%d: %s", slot_name, attempt, last[:800])
+            slot_label = slot_name if slot_name is not None else "SINGLE_PASS"
+            logger.info("Triplet extractor slot=[%s] attempt=%d raw: %s", slot_label, attempt, last[:800])
             parsed = self._parse(last, forced_slot=slot_name)
             if parsed is not None:
                 return parsed

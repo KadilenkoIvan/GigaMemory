@@ -47,8 +47,14 @@ SLOT_SELECT_FEWSHOT: List[Tuple[str, str]] = [
     ("аллергия на арахис с детства", '{"slot_assignments":["ЗДОРОВЬЕ","ЕДА"]}'),
     # ситуативные факты — краткосрочное событие, не спорт/еда
     ("вернулась только что из бара, я такая пьяненькая", '{"slot_assignments":["СОБЫТИЯ"]}'),
-    ("я купила собачку, мальтийскую болонку. её джесси зовут", '{"slot_assignments":["ПИТОМЦЫ"]}'),
+    ("взяли из питомника щенка, золотистый ретривер", '{"slot_assignments":["ПИТОМЦЫ"]}'),
     ("младшей сестрёнке нужен в школе пересказ гранатового браслета", '{"slot_assignments":["СЕМЬЯ"]}'),
+    # острая болезнь — ЗДОРОВЬЕ, не СОБЫТИЯ
+    ("простудился, сижу с температурой 38", '{"slot_assignments":["ЗДОРОВЬЕ"]}'),
+    # стажировка — и РАБОТА
+    ("взяли на стажировку в яндекс на 2 месяца", '{"slot_assignments":["РАБОТА"]}'),
+    # просто эмоция — ничего не сохраняем
+    ("ура, пятница!", '{"slot_assignments":[]}'),
 ]
 
 
@@ -91,7 +97,7 @@ TRIPLET_PER_SLOT_SHARED_BASE: List[Tuple[str, List[dict]]] = [
         "мы с женой семь лет в браке, есть сын Артём",
         [
             {"subject": "пользователь", "relation": "есть жена", "object": "жена пользователя", "ttl": "inf"},
-            {"subject": "пользователь", "relation": "лет в браке", "object": "7", "ttl": "inf"},
+            {"subject": "пользователь", "relation": "стаж брака", "object": "7 лет", "ttl": "inf"},
             {"subject": "пользователь", "relation": "есть сын", "object": "сын пользователя", "ttl": "inf"},
             {"subject": "сын пользователя", "relation": "имя", "object": "артём", "ttl": "inf"},
         ],
@@ -168,7 +174,16 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
         (
             "уволился с прошлой работы в марте",
             [
-                {"subject": "пользователь", "relation": "уволился", "object": "март", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "дата увольнения с прошлой работы", "object": "март", "ttl": "1y"},
+            ],
+        ),
+        # Нетипичный пример: WORK обычно 1y, но временная стажировка — 3m
+        (
+            "взяли на двухмесячную стажировку в Газпром, начну в июне",
+            [
+                {"subject": "пользователь", "relation": "стажировка в", "object": "газпром", "ttl": "3m"},
+                {"subject": "пользователь", "relation": "длительность стажировки", "object": "2 месяца", "ttl": "3m"},
+                {"subject": "пользователь", "relation": "начало стажировки", "object": "июнь", "ttl": "3m"},
             ],
         ),
         (
@@ -186,11 +201,18 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
             ],
         ),
         (
-            "я купила собачку, мальтийскую болонку. её джесси зовут",
+            "забрали из питомника щенка, золотистый ретривер, назвали рыжик",
             [
                 {"subject": "пользователь", "relation": "есть собака", "object": "собака пользователя", "ttl": "inf"},
-                {"subject": "собака пользователя", "relation": "порода", "object": "мальтийская болонка", "ttl": "inf"},
-                {"subject": "собака пользователя", "relation": "имя", "object": "джесси", "ttl": "inf"},
+                {"subject": "собака пользователя", "relation": "порода", "object": "золотистый ретривер", "ttl": "inf"},
+                {"subject": "собака пользователя", "relation": "имя", "object": "рыжик", "ttl": "inf"},
+            ],
+        ),
+        # Нетипичный пример: PETS обычно inf, но тут временное содержание — короткий TTL
+        (
+            "присматриваю за хомяком соседки пока та в больнице, наверное дней десять",
+            [
+                {"subject": "пользователь", "relation": "временно содержит питомца", "object": "хомяк соседки", "ttl": "10d"},
             ],
         ),
         (
@@ -220,6 +242,13 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
                 {"subject": "пользователь", "relation": "нравится", "object": "борщ и соленья", "ttl": "6m"},
             ],
         ),
+        # Опыт с едой в путешествии — subject пользователь, чёткая relation
+        (
+            "в Англии еда совсем не понравилась, пресно и скучно",
+            [
+                {"subject": "пользователь", "relation": "не нравится еда", "object": "английская кухня", "ttl": "6m"},
+            ],
+        ),
         (
             "я работаю в банке и у меня кот барсик",
             [],
@@ -239,6 +268,16 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
                 {"subject": "пользователь", "relation": "диагноз", "object": "гипертония", "ttl": "inf"},
                 {"subject": "пользователь", "relation": "контролирует", "object": "давление", "ttl": "inf"},
                 {"subject": "пользователь", "relation": "частота контроля давления", "object": "каждый день", "ttl": "inf"},
+            ],
+        ),
+        # Нетипичный пример: HEALTH обычно хранит хронические диагнозы (1y+),
+        # но острая болезнь — временный факт с коротким TTL
+        (
+            "заболел гриппом, температура 38.7, пью жаропонижающее",
+            [
+                {"subject": "пользователь", "relation": "болен", "object": "грипп", "ttl": "10d"},
+                {"subject": "пользователь", "relation": "температура", "object": "38.7", "ttl": "3d"},
+                {"subject": "пользователь", "relation": "принимает", "object": "жаропонижающее", "ttl": "3d"},
             ],
         ),
         (
@@ -356,6 +395,19 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
                 {"subject": "пользователь", "relation": "едет с", "object": "семья", "ttl": "3m"},
             ],
         ),
+        # Путешествие упоминается вскользь — важно не пропустить факт о поездке
+        (
+            "последний раз была в Англии — еда вообще не понравилась",
+            [
+                {"subject": "пользователь", "relation": "была в", "object": "англия", "ttl": "3m"},
+                {"subject": "пользователь", "relation": "впечатление от еды в", "object": "англия — не понравилась", "ttl": "3m"},
+            ],
+        ),
+        # Отрицательный пример — нет факта о путешествии
+        (
+            "мне нравится японская кухня",
+            [],
+        ),
     ],
     "HOBBIES": [
         (
@@ -393,14 +445,14 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
         (
             "по вторникам и четвергам до девяти на работе",
             [
-                {"subject": "пользователь", "relation": "график работы", "object": "вт чт до 21 00", "ttl": "1m"},
+                {"subject": "пользователь", "relation": "рабочий день до", "object": "21:00 вт, чт", "ttl": "1m"},
             ],
         ),
         (
             "по будням встаю в 6 утра и ложусь около 23:00",
             [
-                {"subject": "пользователь", "relation": "время подъёма", "object": "6 утра", "ttl": "1m"},
-                {"subject": "пользователь", "relation": "время отхода ко сну", "object": "23 00", "ttl": "1m"},
+                {"subject": "пользователь", "relation": "время подъёма по будням", "object": "06:00", "ttl": "1m"},
+                {"subject": "пользователь", "relation": "время отхода ко сну", "object": "23:00", "ttl": "1m"},
             ],
         ),
     ],
@@ -408,13 +460,20 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
         (
             "хочу сдать IELTS на семь с половиной",
             [
-                {"subject": "пользователь", "relation": "цель", "object": "ielts 7 5", "ttl": "3m"},
+                {"subject": "пользователь", "relation": "цель", "object": "ielts 7.5", "ttl": "3m"},
             ],
         ),
         (
             "хочу через год перейти в продуктовую аналитику",
             [
                 {"subject": "пользователь", "relation": "цель", "object": "перейти в продуктовую аналитику через год", "ttl": "3m"},
+            ],
+        ),
+        # Нетипичный пример: GOALS обычно 3m, но давняя мечта — бессрочно
+        (
+            "с детства мечтаю побывать на Байкале, всю жизнь об этом думаю",
+            [
+                {"subject": "пользователь", "relation": "давняя мечта", "object": "побывать на байкале", "ttl": "inf"},
             ],
         ),
     ],
@@ -437,6 +496,15 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
             [
                 {"subject": "пользователь", "relation": "вернулась из", "object": "бар", "ttl": "1d"},
                 {"subject": "пользователь", "relation": "состояние", "object": "выпившая", "ttl": "1d"},
+            ],
+        ),
+        # Нетипичный пример: событие с долгосрочным последствием — сам факт события 2w,
+        # но результирующий статус (учёная степень) — inf, и он лучше идёт в EDUCATION
+        (
+            "сегодня защитил диссертацию, теперь я кандидат наук!",
+            [
+                {"subject": "пользователь", "relation": "событие", "object": "защита диссертации", "ttl": "2w"},
+                {"subject": "пользователь", "relation": "учёная степень", "object": "кандидат наук", "ttl": "inf"},
             ],
         ),
     ],
@@ -510,7 +578,7 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
         (
             "лечь спать до полуночи стараюсь каждый день",
             [
-                {"subject": "пользователь", "relation": "привычка сон", "object": "до 00 00", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "привычка сон", "object": "до 00:00", "ttl": "inf"},
             ],
         ),
         (
@@ -618,6 +686,22 @@ TRIPLET_SINGLE_PASS_BASE: List[Tuple[str, List[dict]]] = [
             {"slot": "СОБЫТИЯ", "subject": "пользователь", "relation": "состояние", "object": "выпившая", "ttl": "1d"},
         ],
     ),
+    # Нетипичный пример: слот ЗДОРОВЬЕ обычно хранит долгосрочные диагнозы (inf, 1y),
+    # но временная болезнь — короткий TTL 3d–10d
+    (
+        "простудился, сижу дома с температурой 37.8",
+        [
+            {"slot": "ЗДОРОВЬЕ", "subject": "пользователь", "relation": "болен", "object": "простуда", "ttl": "10d"},
+            {"slot": "ЗДОРОВЬЕ", "subject": "пользователь", "relation": "температура", "object": "37.8", "ttl": "3d"},
+        ],
+    ),
+    # Нетипичный пример: слот ЦЕЛИ обычно 3m, но давняя мечта — inf
+    (
+        "всегда хотел научиться играть на гитаре, с самого детства",
+        [
+            {"slot": "ЦЕЛИ", "subject": "пользователь", "relation": "давняя мечта", "object": "научиться играть на гитаре", "ttl": "inf"},
+        ],
+    ),
 ]
 
 
@@ -643,14 +727,21 @@ def triplet_single_pass_few_shot_messages(
 # ---------------------------------------------------------------------------
 
 MEMORY_GATE_FEWSHOT: List[Tuple[str, str, str]] = [
-    ("как зовут мою жену?", "FAMILY\nWORK", '{"use_memory": true, "slots": ["FAMILY"]}'),
+    # Прямые личные вопросы — основной + смежные слоты
+    ("как зовут мою жену?", "FAMILY\nWORK\nROMANCE", '{"use_memory": true, "slots": ["FAMILY", "ROMANCE"]}'),
     ("что такое квантовая механика?", "FAMILY\nWORK", '{"use_memory": false, "slots": []}'),
-    ("напомни, где я работаю", "WORK\nLOCATION", '{"use_memory": true, "slots": ["WORK"]}'),
+    ("напомни, где я работаю и как добраться", "WORK\nLOCATION\nVEHICLES", '{"use_memory": true, "slots": ["WORK", "LOCATION", "VEHICLES"]}'),
     ("как дела?", "FAMILY\nHEALTH", '{"use_memory": false, "slots": []}'),
-    ("расскажи про моих питомцев", "PETS\nFOOD", '{"use_memory": true, "slots": ["PETS"]}'),
-    ("сравни мой график и цели", "SCHEDULE\nGOALS\nWORK", '{"use_memory": true, "slots": ["SCHEDULE", "GOALS", "WORK"]}'),
-    ("что посмотреть вечером из сериалов", "HOBBIES\nPREFERENCES", '{"use_memory": true, "slots": ["HOBBIES", "PREFERENCES"]}'),
+    ("расскажи про моих питомцев", "PETS\nFOOD\nHEALTH", '{"use_memory": true, "slots": ["PETS", "FOOD", "HEALTH"]}'),
+    ("сравни мой график и цели", "SCHEDULE\nGOALS\nWORK\nHABITS", '{"use_memory": true, "slots": ["SCHEDULE", "GOALS", "WORK", "HABITS"]}'),
+    ("что посмотреть вечером из сериалов", "HOBBIES\nPREFERENCES\nEVENTS", '{"use_memory": true, "slots": ["HOBBIES", "PREFERENCES"]}'),
     ("сколько будет два плюс два", "EDUCATION\nWORK", '{"use_memory": false, "slots": []}'),
+    # Косвенные вопросы — включаем все смежные слоты
+    ("посоветуй, что поесть сегодня", "FOOD\nHEALTH\nHABITS\nPREFERENCES", '{"use_memory": true, "slots": ["FOOD", "HEALTH", "HABITS", "PREFERENCES"]}'),
+    ("хочу заняться спортом, что посоветуешь?", "SPORTS\nHEALTH\nSCHEDULE\nGOALS", '{"use_memory": true, "slots": ["SPORTS", "HEALTH", "SCHEDULE", "GOALS"]}'),
+    ("могу ли я позволить себе новую машину?", "FINANCE\nVEHICLES\nWORK", '{"use_memory": true, "slots": ["FINANCE", "VEHICLES", "WORK"]}'),
+    ("напомни про мои планы", "GOALS\nSCHEDULE\nTRAVEL\nEVENTS", '{"use_memory": true, "slots": ["GOALS", "SCHEDULE", "TRAVEL", "EVENTS"]}'),
+    ("расскажи о моём здоровье", "HEALTH\nMENTAL_HEALTH\nHABITS\nSPORTS\nFOOD", '{"use_memory": true, "slots": ["HEALTH", "MENTAL_HEALTH", "HABITS", "SPORTS", "FOOD"]}'),
 ]
 
 

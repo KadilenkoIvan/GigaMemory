@@ -145,6 +145,30 @@ class RaguGraphProcessor:
     # Public sync API
     # ------------------------------------------------------------------
 
+    def clear_all(self) -> None:
+        """
+        Remove all entities and relations from RAGU storage.
+        Called at the start of pipeline test to ensure a clean run.
+        Also clears the internal record→id mapping.
+        """
+        _run_in_new_loop(self._async_clear_all())
+        self._record_to_ids.clear()
+        logger.info("RAGU graph cleared (all entities and relations removed)")
+
+    async def _async_clear_all(self) -> None:
+        """Delete every entity (relations cascade via RAGU's index)."""
+        try:
+            # RAGU stores entities in the graph; iterate and delete all
+            all_entity_ids = list(self.kg.graph.nodes())
+            for eid in all_entity_ids:
+                try:
+                    await self.kg.delete_entity(eid)
+                except Exception:
+                    pass
+            logger.debug("RAGU async clear: removed %d entity nodes", len(all_entity_ids))
+        except Exception as exc:
+            logger.warning("RAGU clear_all failed: %s", exc)
+
     def upsert_triplet_deltas(self, deltas: List["GraphTripletDelta"]) -> None:
         """Insert new triplets into RAGU (sync wrapper)."""
         if not deltas:
@@ -266,6 +290,15 @@ class RaguGraphProcessor:
         finally:
             del self._record_to_ids[delta.record_id]
         logger.debug("RAGU delete record_id=%d relation_id=%s", delta.record_id, ids.relation_id)
+
+        # Clean up orphan entity nodes (no remaining edges → isolated in graph)
+        for entity_id in (ids.subject_entity_id, ids.object_entity_id):
+            try:
+                if entity_id in self.kg.graph and self.kg.graph.degree(entity_id) == 0:
+                    await self.kg.delete_entity(entity_id)
+                    logger.debug("RAGU delete orphan entity_id=%s", entity_id)
+            except Exception as exc:
+                logger.debug("RAGU orphan entity cleanup skipped entity_id=%s: %s", entity_id, exc)
 
     # ------------------------------------------------------------------
     # Formatting helpers

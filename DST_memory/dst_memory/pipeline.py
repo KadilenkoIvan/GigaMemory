@@ -294,6 +294,7 @@ class DSTMemoryPipeline:
             memory_context=memory_context,
             recent_pairs=self.recent_pairs(dialogue_id),
         )
+        logger.info("Final LLM answer dialogue_id=%s: %s", dialogue_id, answer_text[:500])
         return answer_text
 
     def clear_memory(self, dialogue_id: str) -> None:

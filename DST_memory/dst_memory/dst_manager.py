@@ -158,10 +158,11 @@ class DSTManager:
 
         if best_sim >= self.semantic_dedup_threshold and best_rec is not None:
             logger.info(
-                "Semantic dedup: sim=%.4f >= %.2f for [%s|%s|%s] vs existing record_id=%d",
+                "Semantic dedup: sim=%.4f >= %.2f | new=[%s|%s|%s] vs existing record_id=%d [%s|%s|%s]",
                 best_sim, self.semantic_dedup_threshold,
                 new_triplet.subject, new_triplet.relation, new_triplet.object,
                 best_rec.record_id,
+                best_rec.subject, best_rec.relation, best_rec.object,
             )
             return best_rec
         return None

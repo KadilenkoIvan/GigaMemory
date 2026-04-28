@@ -147,6 +147,14 @@ def create_parser(
     parser.add_argument("--slot-max-slots-per-message", type=int, default=int(s.get("slot_max_slots_per_message", 5)))
     parser.add_argument("--ragu-embedder-model", type=str, default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")))
     parser.add_argument("--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", "")))
+    parser.add_argument(
+        "--clear-ragu-graph",
+        dest="clear_ragu_graph",
+        action="store_const",
+        const=True,
+        default=bool(s.get("clear_ragu_graph", False)),
+        help="Clear RAGU graph storage before starting (recommended for pipeline test)",
+    )
 
     # TTL parameters
     parser.add_argument(
@@ -360,6 +368,9 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
     if not args.dataset_path or not args.output_path:
         raise SystemExit("pipeline test requires --dataset-path and --output-path")
     pipeline = build_pipeline(args)
+    # Always clear graph on pipeline test — each test run is a fresh evaluation
+    logger.info("pipeline test: clearing RAGU storage for a clean run")
+    pipeline.ragu_processor.clear_all()
     rows = read_jsonl(args.dataset_path)
     results_logs = []
     results_compact = []
@@ -389,10 +400,13 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
             answer = pipeline.answer(dialogue_id=dialogue_id, question=question)
 
         # Build the log entry with full prompt context
+        llm_answer_text = answer if isinstance(answer, str) else None
         log_entry = {
             "dialogue_id": dialogue_id,
             "question": question,
             "write_logs": write_logs,
+            # When no_final_llm=True: answer is the verbose dict; extract none for text answer
+            "llm_answer": llm_answer_text,
             "answer": answer,
             # Full final LLM prompt (system + user with memory context)
             "final_llm_prompt": (

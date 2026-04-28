@@ -49,11 +49,17 @@ class FinalLLMClient:
         recent_pairs: Optional[List[Dict[str, str]]] = None,
     ) -> List[Dict[str, str]]:
         """Build the chat messages list without sending. Exposed for logging."""
+        import datetime
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
         system = (
-            "Ты помощник в диалоге с долговременной памятью в виде слотов. "
-            "Отвечай по-русски, кратко и по делу. "
-            "Если в блоке памяти есть релевантные факты — опирайся на них; "
-            "если память пуста или не относится к вопросу — отвечай из общих знаний, не выдумывай факты о пользователе."
+            "Ты помощник в диалоге с долговременной памятью в виде слотов.\n"
+            "Отвечай по-русски, кратко и по делу.\n"
+            "Если в блоке памяти есть релевантные факты — опирайся на них.\n"
+            "Если память пуста или не относится к вопросу — отвечай из общих знаний, не выдумывай факты о пользователе.\n"
+            "ВАЖНО: каждый факт в памяти имеет поле created_at_datetime — дату сохранения. "
+            "При наличии конфликтующих или обновлённых сведений — более свежий факт (более позднее created_at_datetime) приоритетнее. "
+            f"Текущее время: {now_str}."
         )
         mem_block = json.dumps(memory_context or {}, ensure_ascii=False, indent=2)
         pairs_block = (
@@ -62,6 +68,7 @@ class FinalLLMClient:
             else "[]"
         )
         user = (
+            f"Текущая дата и время: {now_str}\n\n"
             "Контекст памяти (JSON):\n"
             f"{mem_block}\n\n"
             "Последние 5 пар user/assistant (JSON):\n"
