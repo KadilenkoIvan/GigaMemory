@@ -23,7 +23,11 @@
     "slot_max_slots_per_message": 5,
     "use_ragu": true,
     "ragu_embedder_model": "deepvk/USER-bge-m3",
-    "ragu_storage_path": ""
+    "ragu_storage_path": "",
+    "ttl_mode": "mode2",
+    "ttl_semantic_dedup_enabled": true,
+    "ttl_semantic_dedup_threshold": 0.9,
+    "ttl_slot_overrides": {}
   },
   "pipeline_jsonl": {
     "dataset_path": null,

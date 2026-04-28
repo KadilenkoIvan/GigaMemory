@@ -11,8 +11,10 @@
 Цели:
 - записывать только значимую пользовательскую информацию;
 - поддерживать обновление/деактивацию конфликтующих фактов;
+- управлять временем жизни (TTL) каждого факта и автоматически «протухать» устаревшие записи;
+- дедуплицировать семантически близкие факты в рамках одного слота;
 - извлекать релевантный memory context для ответа;
-- передавать memory context в final LLM в контролируемом формате.
+- передавать memory context в final LLM в контролируемом формате с полными промптами в логах.
 
 ---
 
@@ -68,15 +70,17 @@ flowchart TD
 - `dst_memory/dst_manager.py`
   - хранит `DialogueMemoryState`;
   - записывает факты в слоты;
-  - конфликт-резолвинг;
+  - **семантическая дедупликация** (pre-pass, threshold 0.9): при обнаружении семантически близкого факта в том же слоте старый деактивируется, новый вставляется;
+  - конфликт-резолвинг (rule-based + LLM);
+  - **TTL expiry**: ленивая проверка `is_active=False` при каждом чтении/записи;
   - синхронизация вставок/удалений в RAGU;
-  - выдача active slots и slot payload.
+  - выдача active slots, expired facts и slot payload.
 
 ### 3.4 Модели и форматы
 
 - `dst_memory/models.py`
   - `Message`
-  - `FactRecord`
+  - `FactRecord` — теперь включает `ttl: str` и `created_at_datetime: str` (ISO); метод `is_expired()` для ленивой проверки
   - `MemoryFact`
   - `DialogueMemoryState`:
     - `step`
@@ -110,20 +114,26 @@ flowchart TD
 Шаги:
 1. Проверка роли: записываются только `user`-сообщения.
 2. Importance classifier:
-   - если сообщение неважное -> `saved=False, reason=not_important`.
+   - если сообщение неважное → `saved=False, reason=not_important`.
 3. Slot selection (`SlotSelectClient`):
    - выбираются целевые слоты по онтологии.
-4. Triplet extraction (`TripletExtractionClient`):
-   - извлекаются триплеты по слотам.
-5. Conflict resolution (`TripletConflictClient`):
+4. TTL expiry pre-pass:
+   - все факты в затронутых слотах проверяются на `is_expired()`; протухшие деактивируются (`is_active=False`) и синхронизируются в RAGU.
+5. Triplet extraction (`TripletExtractionClient`):
+   - извлекаются триплеты по слотам (lowercase/русский язык);
+   - в режиме `ttl_mode=mode2` модель дополнительно генерирует поле `ttl` для каждого триплета.
+6. Семантическая дедупликация (pre-pass, только в рамках одного слота):
+   - для каждого нового триплета вычисляется косинусное сходство с активными записями слота;
+   - если сходство ≥ `ttl_semantic_dedup_threshold` (default 0.9), старый факт деактивируется, новый вставляется (таймер TTL обновляется).
+7. Conflict resolution (`TripletConflictClient`):
    - rule-layer + LLM-layer;
    - возможна деактивация старых записей и/или skip новых.
-6. Обновление DST state:
-   - добавляются `FactRecord`;
+8. Обновление DST state:
+   - добавляются `FactRecord` с полями `ttl` и `created_at_datetime`;
    - обновляется `step`, `record_id`.
-7. RAGU sync:
-   - новые записи -> `upsert_triplet_deltas`;
-   - деактивации -> `delete_triplet_deltas`.
+9. RAGU sync:
+   - новые записи → `upsert_triplet_deltas` (TTL хранится в поле `description` ребра);
+   - деактивации → `delete_triplet_deltas`.
 
 ---
 
@@ -156,7 +166,9 @@ flowchart TD
           "object": "...",
           "created_at_step": 1,
           "updated_at_step": 1,
-          "is_active": true
+          "is_active": true,
+          "ttl": "inf",
+          "created_at_datetime": "2025-01-01T12:00:00"
         }
       ]
     }
@@ -223,13 +235,15 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 Назначение: онлайн-диалог.
 
 Логика на шаг:
-- user message -> `write_to_memory`;
-- ответ -> `answer`;
+- user message → `write_to_memory`;
+- ответ → `answer`;
 - пара добавляется в `recent_pairs`.
 
 Команды:
-- `/clear`
-- `/exit`
+- `/clear` — сбросить память текущего диалога
+- `/exit` — завершить сессию
+- `/memory` — вывести активные слоты и факты в JSON
+- `/expired` — вывести протухшие факты (is_active=False) в JSON
 
 ## 7.3 `pipeline inference single-turn`
 
@@ -249,7 +263,12 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 Для каждого триплета:
 - `Entity(subject, entity_type=slot)`
 - `Entity(object, entity_type=slot)`
-- `Relation(subject -> object, relation_type, slot)`
+- `Relation(subject → object, relation_type, slot)`
+
+TTL хранится в поле `description` ребра в виде аннотации `[ttl:Xm]`, например:
+```
+пользователь есть сестра сестра пользователя [ttl:inf]
+```
 
 `record_id` хранится в mapping для последующего delete.
 
@@ -296,11 +315,13 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 - `recent_pairs`
 - `retrieved`
 - `memory_slots`
+- `final_llm_prompt` — полные system + user промпты для final LLM
+- `expired_facts` — список деактивированных фактов (TTL-expiry)
 
 ### 10.2 `pipeline test` файлы
 
 - `<output>.json` — compact результат по диалогам.
-- `<output>_logs.json` — подробные write/answer-логи.
+- `<output>_logs.json` — подробные write/answer-логи, включая `final_llm_prompt` (полные промпты) и `expired_facts`.
 
 ---
 
@@ -316,6 +337,10 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 - `ragu_embedder_model`
 - `ragu_storage_path`
 - `llm_mode`, `llm_api_url`, `llm_api_key`, `llm_model`
+- `ttl_mode` — режим TTL: `mode1` (per-slot defaults), `mode2` (модель генерирует TTL вместе с триплетом), `mode3` (отдельный вызов)
+- `ttl_slot_overrides` — JSON-словарь переопределений TTL по слоту, напр. `{"EVENTS": "1d"}`
+- `ttl_semantic_dedup_enabled` — включить семантическую дедупликацию
+- `ttl_semantic_dedup_threshold` — порог косинусного сходства для дедупликации (default 0.9)
 
 Полная таблица: `CONFIG.md`.
 
@@ -347,8 +372,9 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 
 - На Python 3.13 возможны проблемы совместимости зависимостей RAGU (в т.ч. transitive deps).
 - `local` final LLM backend не реализован.
-- TTL и политика протухания фактов не реализованы.
+- `ttl_mode=mode3` (отдельный вызов модели для TTL) не реализован — используется `mode2`.
 - Качество retrieval зависит от выбранной embedder-модели и качества триплетов.
+- Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен, дедупликация пропускается с предупреждением в логе.
 
 ---
 

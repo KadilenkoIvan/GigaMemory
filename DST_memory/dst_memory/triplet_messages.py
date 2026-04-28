@@ -19,13 +19,13 @@ def build_triplet_messages(
     include_slot: bool = False,
     ontology_slots: List[str] | None = None,
     max_triplets: int = 12,
+    ttl_mode: str = "mode2",
 ) -> List[Dict[str, Any]]:
     _ = ontology_slots or DEFAULT_USER_SLOTS.slot_names
     slots_ru_json = json.dumps(RU_SLOT_LABELS_ORDERED, ensure_ascii=False)
 
     ru_slot = CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else None
 
-    # Slot header goes FIRST in system prompt so the model sees it immediately.
     slot_header = ""
     if slot_name and ru_slot:
         slot_header = (
@@ -35,17 +35,39 @@ def build_triplet_messages(
             "В JSON НЕ УКАЗЫВАЙ ПОЛЕ slot — СЛОТ ЗАДАЁТСЯ СИСТЕМОЙ.\n\n"
         )
 
-    # Schema examples use lowercase (model must output lowercase, postprocessing uppercases).
-    output_schema_no_slot = (
-        '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси"}]}'
-    )
-    output_schema_with_slot = (
-        '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}]}'
-    )
+    use_ttl = (ttl_mode == "mode2")
 
-    output_schema = output_schema_with_slot if include_slot else output_schema_no_slot
-
-    # build_triplet_messages — системный промпт
+    if use_ttl:
+        if include_slot:
+            output_schema = (
+                '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер","ttl":"1y"}]}'
+            )
+        else:
+            output_schema = (
+                '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси","ttl":"1y"}]}'
+            )
+        ttl_block = (
+            "\nДОПОЛНИТЕЛЬНО К КАЖДОМУ ТРИПЛЕТУ ДОБАВЛЯЙ ПОЛЕ TTL (время жизни факта).\n"
+            "ДОПУСТИМЫЕ ЗНАЧЕНИЯ TTL: 1d, 3d, 10d, 2w, 3w, 1m, 3m, 6m, 1y, inf\n"
+            "ПРАВИЛА ВЫБОРА TTL:\n"
+            "  inf  — имя, пол, национальность, члены семьи, питомцы, устойчивые привычки (кофе по утрам)\n"
+            "  1y   — работа, учёба, жильё, здоровье (диагнозы), авто, местоположение\n"
+            "  6m   — хобби, спорт, предпочтения, психическое состояние, знакомства\n"
+            "  3m   — цели, романтические отношения, финансовые планы\n"
+            "  1m   — расписание, планы на ближайшее будущее, еда\n"
+            "  2w   — конкретные события (был на свадьбе, сдал экзамен)\n"
+            "  1d   — сиюминутные состояния (пьяная, устала, злюсь)\n"
+        )
+    else:
+        if include_slot:
+            output_schema = (
+                '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}]}'
+            )
+        else:
+            output_schema = (
+                '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси"}]}'
+            )
+        ttl_block = ""
 
     system = (
         slot_header
@@ -55,7 +77,6 @@ def build_triplet_messages(
         "НЕ ИСПОЛЬЗУЙ СИМВОЛ ПОДЧЁРКИВАНИЯ «_» — РАЗДЕЛЯЙ СЛОВА ТОЛЬКО ПРОБЕЛАМИ.\n"
         "ДЛЯ ФАКТОВ О САМОМ ПОЛЬЗОВАТЕЛЕ ИСПОЛЬЗУЙ СУБЪЕКТ: пользователь.\n"
 
-        # --- правило ролей (усилено) ---
         "ЕСЛИ УПОМЯНУТА СВЯЗАННАЯ СУЩНОСТЬ (член семьи, коллега, питомец и т.п.):\n"
         "  1. ДОБАВЬ ТРИПЛЕТ СВЯЗИ: пользователь → отношение → роль сущности "
         "(например: пользователь → есть сын → сын пользователя).\n"
@@ -67,18 +88,16 @@ def build_triplet_messages(
         "     ВЕРНО:     {\"subject\":\"сын пользователя\",\"relation\":\"имя\",\"object\":\"миша\"}\n"
         "     ВЕРНО:     {\"subject\":\"сын пользователя\",\"relation\":\"возраст\",\"object\":\"1\"}\n"
 
-        # --- правило самодостаточности (новое) ---
         "КАЖДЫЙ ТРИПЛЕТ ДОЛЖЕН БЫТЬ САМОДОСТАТОЧНЫМ: читаться и пониматься независимо от других триплетов.\n"
         "RELATION ДОЛЖЕН ОДНОЗНАЧНО ОПИСЫВАТЬ СМЫСЛ БЕЗ КОНТЕКСТА СОСЕДНИХ ТРИПЛЕТОВ.\n"
         "     ЗАПРЕЩЕНО: {\"subject\":\"пользователь\",\"relation\":\"частота\",\"object\":\"раз в неделю\"}\n"
-        "     ЗАПРЕЩЕНО: {\"subject\":\"пользователь\",\"relation\":\"место\",\"object\":\"озеро\"}\n"
         "     ВЕРНО:     {\"subject\":\"пользователь\",\"relation\":\"частота рыбалки\",\"object\":\"раз в неделю\"}\n"
-        "     ВЕРНО:     {\"subject\":\"пользователь\",\"relation\":\"место рыбалки\",\"object\":\"озеро\"}\n"
 
         "РАЗРЕШИ КОРЕФЕРЕНЦИЮ ВНУТРИ СООБЩЕНИЯ.\n"
         "НЕ ВЫДУМЫВАЙ ФАКТЫ.\n"
         "ИГНОРИРУЙ ЧИСТЫЕ ЭМОЦИИ БЕЗ ПРОВЕРЯЕМЫХ ФАКТОВ.\n"
-        f"ОНТОЛОГИЯ СЛОТОВ (СПРАВОЧНО): {slots_ru_json}\n"
+        + ttl_block
+        + f"ОНТОЛОГИЯ СЛОТОВ (СПРАВОЧНО): {slots_ru_json}\n"
         "ОТВЕТ ТОЛЬКО ВАЛИДНЫЙ JSON. БЕЗ MARKDOWN. БЕЗ ТЕКСТА ВНЕ JSON.\n"
         "СХЕМА ОТВЕТА:\n"
         f"{output_schema}\n"
@@ -97,18 +116,16 @@ def build_triplet_messages(
         )
 
     if include_slot:
-        # Single-pass mode: extract all slots at once, slot field appears in JSON output.
-        few_shot = triplet_single_pass_few_shot_messages(user_turn_no_slot)
+        few_shot = triplet_single_pass_few_shot_messages(user_turn_no_slot, use_ttl=use_ttl)
         user_turn = user_turn_no_slot
     elif slot_name and ru_slot:
-        # Per-slot mode: shared examples without slot hint, per-slot examples with slot hint.
         few_shot = triplet_per_slot_few_shot_messages(
-            user_turn_no_slot, user_turn_with_slot, slot_name
+            user_turn_no_slot, user_turn_with_slot, slot_name, use_ttl=use_ttl
         )
         user_turn = user_turn_with_slot
     else:
         few_shot = triplet_per_slot_few_shot_messages(
-            user_turn_no_slot, user_turn_no_slot, None
+            user_turn_no_slot, user_turn_no_slot, None, use_ttl=use_ttl
         )
         user_turn = user_turn_no_slot
 

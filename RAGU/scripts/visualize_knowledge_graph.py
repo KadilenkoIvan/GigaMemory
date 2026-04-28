@@ -2,19 +2,20 @@
 Knowledge Graph Visualization Script using PyVis.
 
 This script loads a RAGU knowledge graph from storage files and creates
-an interactive HTML visualization showing entities, relations, and metadata.
+an interactive HTML visualization showing entities, relations, TTL metadata,
+and per-slot color coding.
+
+Edge colors indicate TTL status:
+  Green  — long-lived facts (inf, 1y, 6m)
+  Yellow — medium-lived facts (3m, 1m, 2w, 3w)
+  Red    — short-lived / expired facts (10d, 3d, 1d)
 
 Usage:
     python visualize_knowledge_graph.py [--graph-path PATH] [--output OUTPUT]
 
 Examples:
-    # Use default path (./ragu_working_dir/*/knowledge_graph.gml)
     python visualize_knowledge_graph.py
-
-    # Specify a custom graph file
-    python visualize_knowledge_graph.py --graph-path ./my_data/knowledge_graph.gml
-
-    # Specify output file
+    python visualize_knowledge_graph.py --graph-path ./ragu_storage/knowledge_graph.gml
     python visualize_knowledge_graph.py --output my_graph.html
 """
 
@@ -22,6 +23,7 @@ import argparse
 import colorsys
 import json
 import os
+import re
 from glob import glob
 from typing import Dict, List, Optional
 
@@ -31,70 +33,93 @@ from pyvis.network import Network
 
 DEFAULT_NODE_COLOR = "#BDC3C7"
 
+# TTL → edge color (green=long, yellow=medium, red=short/expired)
+TTL_EDGE_COLORS: Dict[str, str] = {
+    "inf": "#27AE60",   # green
+    "1y":  "#2ECC71",   # light green
+    "6m":  "#A9DFBF",   # pale green
+    "3m":  "#F39C12",   # amber
+    "1m":  "#E67E22",   # orange
+    "3w":  "#E67E22",
+    "2w":  "#E67E22",
+    "10d": "#E74C3C",   # red
+    "3d":  "#C0392B",   # dark red
+    "1d":  "#922B21",   # very dark red
+}
+TTL_DEFAULT_EDGE_COLOR = "#95A5A6"  # grey — unknown TTL
+
+
+def _parse_ttl_from_description(description: str) -> Optional[str]:
+    """Extract '[ttl:Xm]' annotation from a relation description."""
+    m = re.search(r'\[ttl:([^\]]+)\]', description or "")
+    return m.group(1).strip() if m else None
+
+
+def _ttl_edge_color(ttl: Optional[str]) -> str:
+    if not ttl:
+        return TTL_DEFAULT_EDGE_COLOR
+    return TTL_EDGE_COLORS.get(ttl, TTL_DEFAULT_EDGE_COLOR)
+
+
+def _ttl_display(ttl: Optional[str]) -> str:
+    """Human-readable TTL label for tooltips."""
+    labels = {
+        "inf": "бессрочно",
+        "1y":  "1 год",
+        "6m":  "6 месяцев",
+        "3m":  "3 месяца",
+        "1m":  "1 месяц",
+        "3w":  "3 недели",
+        "2w":  "2 недели",
+        "10d": "10 дней",
+        "3d":  "3 дня",
+        "1d":  "1 день",
+    }
+    if not ttl:
+        return "неизвестно"
+    return labels.get(ttl, ttl)
+
+
 def generate_distinct_colors(n: int) -> List[str]:
-    """
-    Generate n visually distinct colors using golden ratio distribution in HSL space.
-    """
     colors = []
     golden_ratio = 0.618033988749895
-
     for i in range(n):
         hue = (i * golden_ratio) % 1.0
-        # Vary saturation and lightness slightly for more distinction
         saturation = 0.65 + (i % 3) * 0.1
         lightness = 0.5 + (i % 2) * 0.1
-
         rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
         hex_color = "#{:02x}{:02x}{:02x}".format(
             int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255)
         )
         colors.append(hex_color)
-
     return colors
 
 
 def build_entity_color_map(entity_types: set) -> Dict[str, str]:
-    """
-    Build a color map for a set of entity types.
-    """
     sorted_types = sorted(entity_types)
     colors = generate_distinct_colors(len(sorted_types))
     return {entity_type: colors[i] for i, entity_type in enumerate(sorted_types)}
 
 
 def get_latest_graph_path() -> Optional[str]:
-    """
-    Find the most recent knowledge graph file in the default working directory.
-    """
     base_path = os.path.join(os.getcwd(), "ragu_working_dir")
     if not os.path.exists(base_path):
         return None
-
     pattern = os.path.join(base_path, "*", "knowledge_graph.gml")
     graph_files = glob(pattern)
-
     if not graph_files:
         return None
-
-    # Sort by modification time, get the most recent
     graph_files.sort(key=os.path.getmtime, reverse=True)
     return graph_files[0]
 
 
 def load_graph(graph_path: str) -> nx.Graph:
-    """
-    Load a NetworkX graph from a GML file.
-    """
     if not os.path.exists(graph_path):
         raise FileNotFoundError(f"Graph file not found: {graph_path}")
-
     return nx.read_gml(graph_path)
 
 
 def load_chunks(graph_dir: str) -> Dict[str, dict]:
-    """
-    Load chunk data from KV storage if available.
-    """
     chunks_path = os.path.join(graph_dir, "kv_chunks.json")
     if os.path.exists(chunks_path):
         with open(chunks_path, "r", encoding="utf-8") as f:
@@ -103,31 +128,21 @@ def load_chunks(graph_dir: str) -> Dict[str, dict]:
 
 
 def get_node_color(entity_type: str, color_map: Dict[str, str]) -> str:
-    """
-    Get color for an entity type from the provided color map.
-    """
     return color_map.get(entity_type, DEFAULT_NODE_COLOR)
 
 
 def truncate_text(text: str, max_length: int = 200) -> str:
-    """
-    Truncate text to a maximum length with ellipsis.
-    """
     if len(text) <= max_length:
         return text
     return text[:max_length] + "..."
 
 
 def format_node_title(node_id: str, attrs: dict, chunks: Dict[str, dict]) -> str:
-    """
-    Format the hover tooltip for a node.
-    """
     lines = [
         f"<b>ID:</b> {node_id}",
         f"<b>Name:</b> {attrs.get('entity_name', 'Unknown')}",
-        f"<b>Type:</b> {attrs.get('entity_type', 'Unknown')}",
+        f"<b>Type (slot):</b> {attrs.get('entity_type', 'Unknown')}",
     ]
-
     description = attrs.get("description", "")
     if description:
         lines.append(f"<b>Description:</b> {truncate_text(description)}")
@@ -142,8 +157,8 @@ def format_node_title(node_id: str, attrs: dict, chunks: Dict[str, dict]) -> str
     if clusters:
         if isinstance(clusters, str):
             try:
-                clusters = eval(clusters)  # Parse string representation of list
-            except:
+                clusters = eval(clusters)
+            except Exception:
                 clusters = []
         if clusters:
             cluster_info = ", ".join(
@@ -156,17 +171,23 @@ def format_node_title(node_id: str, attrs: dict, chunks: Dict[str, dict]) -> str
 
 
 def format_edge_title(edge_data: dict) -> str:
-    """
-    Format the hover tooltip for an edge.
-    """
     lines = []
 
     description = edge_data.get("description", "")
-    if description:
-        lines.append(f"<b>Relation:</b> {truncate_text(description)}")
+    ttl = _parse_ttl_from_description(description)
+
+    # Strip [ttl:...] from description for cleaner display
+    clean_desc = re.sub(r'\s*\[ttl:[^\]]+\]', '', description).strip()
+    if clean_desc:
+        lines.append(f"<b>Relation:</b> {truncate_text(clean_desc)}")
+
+    if ttl:
+        lines.append(f"<b>TTL:</b> {ttl} ({_ttl_display(ttl)})")
+    else:
+        lines.append("<b>TTL:</b> не задан")
 
     strength = edge_data.get("relation_strength", 1.0)
-    lines.append(f"<b>Strength:</b> {strength:.2f}")
+    lines.append(f"<b>Strength:</b> {float(strength):.2f}")
 
     source_chunks = edge_data.get("source_chunk_id", [])
     if source_chunks:
@@ -190,9 +211,8 @@ def create_visualization(
     bgcolor: str = "#222222",
     font_color: str = "white",
 ) -> None:
-    """Create an interactive PyVis visualization of the knowledge graph."""
+    """Create an interactive PyVis visualization of the knowledge graph with TTL coloring."""
 
-    # Build color map for all entity types in the graph
     entity_types = set()
     for node_id in graph.nodes():
         entity_type = graph.nodes[node_id].get("entity_type", "Unknown")
@@ -211,29 +231,17 @@ def create_visualization(
         cdn_resources='remote',
     )
 
-    # Configure physics for better layout
     net.set_options("""
     {
         "nodes": {
-            "font": {
-                "size": 14,
-                "face": "arial"
-            },
+            "font": {"size": 14, "face": "arial"},
             "borderWidth": 2,
             "borderWidthSelected": 4
         },
         "edges": {
-            "color": {
-                "inherit": false
-            },
-            "smooth": {
-                "type": "continuous",
-                "forceDirection": "none"
-            },
-            "font": {
-                "size": 10,
-                "align": "middle"
-            }
+            "color": {"inherit": false},
+            "smooth": {"type": "continuous", "forceDirection": "none"},
+            "font": {"size": 10, "align": "middle"}
         },
         "physics": {
             "enabled": true,
@@ -245,11 +253,7 @@ def create_visualization(
                 "springConstant": 0.08,
                 "damping": 0.4
             },
-            "stabilization": {
-                "enabled": true,
-                "iterations": 200,
-                "updateInterval": 25
-            }
+            "stabilization": {"enabled": true, "iterations": 200, "updateInterval": 25}
         },
         "interaction": {
             "hover": true,
@@ -260,21 +264,17 @@ def create_visualization(
     }
     """)
 
-    degrees = dict(graph.degree()) # type: ignore
+    degrees = dict(graph.degree())  # type: ignore
     max_degree = max(degrees.values()) if degrees else 1
-    min_size = 15
-    max_size = 50
+    min_size, max_size = 15, 50
 
     for node_id in graph.nodes():
         attrs = dict(graph.nodes[node_id])
         entity_name = attrs.get("entity_name", str(node_id))
         entity_type = attrs.get("entity_type", "Unknown")
-
         degree = degrees.get(node_id, 1)
         size = min_size + (max_size - min_size) * (degree / max_degree)
-
         color = get_node_color(entity_type, color_map)
-
         title = format_node_title(node_id, attrs, chunks)
 
         net.add_node(
@@ -290,11 +290,16 @@ def create_visualization(
     for source, target, edge_data in graph.edges(data=True):
         title = format_edge_title(edge_data)
 
+        description = edge_data.get("description", "")
+        ttl = _parse_ttl_from_description(description)
+        edge_color = _ttl_edge_color(ttl)
+
         strength = float(edge_data.get("relation_strength", 1.0))
         width = 1 + min(strength * 2, 5)
 
-        description = edge_data.get("description", "")
-        label = truncate_text(description, 30) if description else ""
+        # Edge label: relation type without [ttl:...] annotation
+        clean_desc = re.sub(r'\s*\[ttl:[^\]]+\]', '', description).strip()
+        label = truncate_text(clean_desc, 30) if clean_desc else ""
 
         net.add_edge(
             source,
@@ -302,7 +307,7 @@ def create_visualization(
             title=title,
             width=width,
             label=label,
-            color="#888888",
+            color=edge_color,
         )
 
     net.save_graph(output_path)
@@ -315,43 +320,50 @@ def create_visualization(
 
 
 def add_legend_to_html(html_path: str, graph: nx.Graph, color_map: Dict[str, str]) -> None:
-    """
-    Add a legend showing entity type colors to the HTML file.
-    """
+    """Add entity type legend + TTL color legend to the HTML file."""
 
-    legend_items = []
+    # Entity type legend
+    entity_legend_items = []
     for entity_type in sorted(color_map.keys()):
         color = color_map.get(entity_type, DEFAULT_NODE_COLOR)
-        legend_items.append(
-            f'<div style="display: flex; align-items: center; margin: 3px 0;">'
-            f'<span style="display: inline-block; width: 16px; height: 16px; '
-            f'background-color: {color}; border-radius: 50%; margin-right: 8px;"></span>'
+        entity_legend_items.append(
+            f'<div style="display:flex;align-items:center;margin:3px 0;">'
+            f'<span style="display:inline-block;width:16px;height:16px;'
+            f'background-color:{color};border-radius:50%;margin-right:8px;"></span>'
             f'<span>{entity_type}</span></div>'
         )
 
+    # TTL color legend
+    ttl_legend_items = [
+        ('<span style="color:#27AE60">■</span> inf / 1y — бессрочно / 1 год'),
+        ('<span style="color:#A9DFBF">■</span> 6m — 6 месяцев'),
+        ('<span style="color:#F39C12">■</span> 3m / 1m — 1–3 месяца'),
+        ('<span style="color:#E67E22">■</span> 2w / 3w — 2–3 недели'),
+        ('<span style="color:#E74C3C">■</span> 10d — 10 дней'),
+        ('<span style="color:#C0392B">■</span> 3d — 3 дня'),
+        ('<span style="color:#922B21">■</span> 1d — 1 день'),
+        ('<span style="color:#95A5A6">■</span> — TTL не задан'),
+    ]
+
     legend_html = f'''
     <div id="legend" style="
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        background: rgba(0, 0, 0, 0.8);
-        padding: 15px;
-        border-radius: 8px;
-        color: white;
-        font-family: Arial, sans-serif;
-        font-size: 12px;
-        max-height: 400px;
-        overflow-y: auto;
-        z-index: 1000;
+        position:absolute;top:10px;right:10px;
+        background:rgba(0,0,0,0.85);padding:15px;border-radius:8px;
+        color:white;font-family:Arial,sans-serif;font-size:12px;
+        max-height:500px;overflow-y:auto;z-index:1000;min-width:200px;
     ">
-        <div style="font-weight: bold; margin-bottom: 10px; font-size: 14px;">Entity Types</div>
-        {''.join(legend_items)}
-        <hr style="border-color: #444; margin: 10px 0;">
-        <div style="font-size: 11px; color: #aaa;">
-            <div>Nodes: {graph.number_of_nodes()}</div>
-            <div>Edges: {graph.number_of_edges()}</div>
-            <div style="margin-top: 5px;">Node size = degree</div>
-            <div>Edge width = strength</div>
+        <div style="font-weight:bold;margin-bottom:8px;font-size:14px;">Слоты (цвет узлов)</div>
+        {''.join(entity_legend_items)}
+        <hr style="border-color:#444;margin:10px 0;">
+        <div style="font-weight:bold;margin-bottom:6px;font-size:13px;">TTL (цвет рёбер)</div>
+        {''.join(f"<div style='margin:2px 0;'>{item}</div>" for item in ttl_legend_items)}
+        <hr style="border-color:#444;margin:10px 0;">
+        <div style="font-size:11px;color:#aaa;">
+            <div>Узлов: {graph.number_of_nodes()}</div>
+            <div>Рёбер: {graph.number_of_edges()}</div>
+            <div style="margin-top:5px;">Размер узла = степень</div>
+            <div>Ширина ребра = strength</div>
+            <div>Цвет ребра = TTL</div>
         </div>
     </div>
     '''
@@ -367,39 +379,18 @@ def add_legend_to_html(html_path: str, graph: nx.Graph, color_map: Dict[str, str
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Visualize a RAGU knowledge graph using PyVis",
+        description="Visualize a RAGU knowledge graph using PyVis (with TTL coloring)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument(
-        "--graph-path",
-        type=str,
-        default=None,
-        help="Path to the knowledge_graph.gml file. If not specified, uses the most recent graph in ./ragu_working_dir/"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="knowledge_graph_visualization.html",
-        help="Output HTML file path (default: knowledge_graph_visualization.html)"
-    )
-    parser.add_argument(
-        "--height",
-        type=str,
-        default="900px",
-        help="Height of the visualization (default: 900px)"
-    )
-    parser.add_argument(
-        "--width",
-        type=str,
-        default="100%",
-        help="Width of the visualization (default: 100%%)"
-    )
-    parser.add_argument(
-        "--light-theme",
-        action="store_true",
-        help="Use light theme instead of dark theme"
-    )
+    parser.add_argument("--graph-path", type=str, default=None,
+                        help="Path to knowledge_graph.gml. If omitted, uses most recent in ./ragu_working_dir/")
+    parser.add_argument("--output", type=str, default="knowledge_graph_visualization.html",
+                        help="Output HTML file (default: knowledge_graph_visualization.html)")
+    parser.add_argument("--height", type=str, default="900px")
+    parser.add_argument("--width", type=str, default="100%")
+    parser.add_argument("--light-theme", action="store_true",
+                        help="Use light theme instead of dark")
 
     args = parser.parse_args()
 
@@ -408,7 +399,7 @@ def main():
         graph_path = get_latest_graph_path()
         if graph_path is None:
             print("Error: No knowledge graph found in ./ragu_working_dir/")
-            print("Please specify --graph-path or run a graph extraction first.")
+            print("Specify --graph-path or run graph extraction first.")
             return 1
         print(f"Using graph: {graph_path}")
 
@@ -428,12 +419,8 @@ def main():
     graph_dir = os.path.dirname(graph_path)
     chunks = load_chunks(graph_dir)
 
-    if args.light_theme:
-        bgcolor = "#ffffff"
-        font_color = "#333333"
-    else:
-        bgcolor = "#222222"
-        font_color = "white"
+    bgcolor = "#ffffff" if args.light_theme else "#222222"
+    font_color = "#333333" if args.light_theme else "white"
 
     create_visualization(
         graph=graph,

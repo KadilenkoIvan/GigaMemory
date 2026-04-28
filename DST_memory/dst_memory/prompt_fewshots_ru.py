@@ -1,9 +1,14 @@
 """
 Русскоязычные few-shot для промптов DST_memory (чередование user + assistant).
+
+ФОРМАТ ТРИПЛЕТОВ:
+  subject / relation / object — строчные буквами с пробелами (lowercase).
+  НЕ ИСПОЛЬЗУЙ UPPER_CASE_UNDERSCORE — это нечитаемо для Meno-Lite-0.1.
+  Правильно:  "subject": "пользователь",  "relation": "есть собака",  "object": "собака пользователя"
+  Неверно:    "subject": "ПОЛЬЗОВАТЕЛЬ",  "relation": "ЕСТЬ_СОБАКА",  "object": "СОБАКА_ПОЛЬЗОВАТЕЛЯ"
+
 Слоты в slot_assignments: русские метки (СЕМЬЯ, РАБОТА) — резолвятся в ontology.RU_SLOT_TO_CANONICAL.
 В memory gate списки слотов — канонические английские ключи (как в DialogueMemoryState).
-Связи в триплетах: русские метки, ВЕРХНИЙ_РЕГИСТР_С_ПОДЧЁРКИВАНИЕМ.
-Субъект пользователя по умолчанию: ПОЛЬЗОВАТЕЛЬ.
 """
 
 from __future__ import annotations
@@ -11,7 +16,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Tuple
 
-# --- Выбор слотов ---
+# ---------------------------------------------------------------------------
+# Выбор слотов
+# ---------------------------------------------------------------------------
+
 SLOT_SELECT_FEWSHOT: List[Tuple[str, str]] = [
     ("мы с женой женаты десять лет, у нас есть сын", '{"slot_assignments":["СЕМЬЯ"]}'),
     ("работаю водителем такси и по выходным играю в футбол", '{"slot_assignments":["РАБОТА","СПОРТ"]}'),
@@ -37,6 +45,10 @@ SLOT_SELECT_FEWSHOT: List[Tuple[str, str]] = [
     ("сделал ремонт на кухне, живём в двушке", '{"slot_assignments":["ДОМ"]}'),
     ("курю по пачке в день, стыдно", '{"slot_assignments":["ПРИВЫЧКИ","ЗДОРОВЬЕ"]}'),
     ("аллергия на арахис с детства", '{"slot_assignments":["ЗДОРОВЬЕ","ЕДА"]}'),
+    # ситуативные факты — краткосрочное событие, не спорт/еда
+    ("вернулась только что из бара, я такая пьяненькая", '{"slot_assignments":["СОБЫТИЯ"]}'),
+    ("я купила собачку, мальтийскую болонку. её джесси зовут", '{"slot_assignments":["ПИТОМЦЫ"]}'),
+    ("младшей сестрёнке нужен в школе пересказ гранатового браслета", '{"slot_assignments":["СЕМЬЯ"]}'),
 ]
 
 
@@ -48,547 +60,588 @@ def slot_select_few_shot_messages(user_turn_fn) -> List[Dict[str, Any]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Хелперы для сборки JSON триплетов
+# ---------------------------------------------------------------------------
+
 def _t(items: List[dict]) -> str:
     return json.dumps({"triplets": items}, ensure_ascii=False)
 
 
-# Общие примеры для per-slot (без указания слота в user-turn — базовый формат).
-# Субъект, связь и объект — строчными буквами без символа «_».
-# Постобработка в TripletExtractionClient._normalize_field переведёт их в UPPER_CASE с _.
-TRIPLET_PER_SLOT_SHARED: List[Tuple[str, str]] = [
+def _t_ttl(items: List[dict], ttl_map: Dict[int, str] | None = None) -> str:
+    """Same as _t, but adds ttl field from ttl_map (index → ttl value)."""
+    result = []
+    for i, item in enumerate(items):
+        entry = dict(item)
+        if ttl_map and i in ttl_map:
+            entry["ttl"] = ttl_map[i]
+        elif "ttl" not in entry:
+            entry["ttl"] = "inf"
+        result.append(entry)
+    return json.dumps({"triplets": result}, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Общие примеры для per-slot (без указания слота в user-turn).
+# Субъект, связь и объект — строчными буквами с пробелами.
+# ---------------------------------------------------------------------------
+
+TRIPLET_PER_SLOT_SHARED_BASE: List[Tuple[str, List[dict]]] = [
     (
         "мы с женой семь лет в браке, есть сын Артём",
-        _t(
-            [
-                {"subject": "пользователь", "relation": "есть жена", "object": "жена пользователя"},
-                {"subject": "пользователь", "relation": "лет в браке", "object": "7"},
-                {"subject": "пользователь", "relation": "есть сын", "object": "сын пользователя"},
-                {"subject": "сын пользователя", "relation": "имя", "object": "артём"},
-            ]
-        ),
+        [
+            {"subject": "пользователь", "relation": "есть жена", "object": "жена пользователя", "ttl": "inf"},
+            {"subject": "пользователь", "relation": "лет в браке", "object": "7", "ttl": "inf"},
+            {"subject": "пользователь", "relation": "есть сын", "object": "сын пользователя", "ttl": "inf"},
+            {"subject": "сын пользователя", "relation": "имя", "object": "артём", "ttl": "inf"},
+        ],
     ),
     (
         "жена получила повышение, она теперь руководит отделом",
-        _t(
-            [
-                {"subject": "жена пользователя", "relation": "получила", "object": "повышение"},
-                {"subject": "жена пользователя", "relation": "руководит", "object": "отдел"},
-            ]
-        ),
+        [
+            {"subject": "жена пользователя", "relation": "получила", "object": "повышение", "ttl": "6m"},
+            {"subject": "жена пользователя", "relation": "руководит", "object": "отдел", "ttl": "1y"},
+        ],
     ),
     (
         "просто спасибо",
-        '{"triplets":[]}',
+        [],
     ),
 ]
 
 
-TRIPLET_PER_SLOT_BY_SLOT: Dict[str, List[Tuple[str, str]]] = {
+def _build_shared(use_ttl: bool) -> List[Tuple[str, str]]:
+    out = []
+    for msg, items in TRIPLET_PER_SLOT_SHARED_BASE:
+        if not items:
+            out.append((msg, '{"triplets":[]}'))
+        elif use_ttl:
+            out.append((msg, _t(items)))
+        else:
+            out.append((msg, _t([{k: v for k, v in item.items() if k != "ttl"} for item in items])))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Per-slot few-shot examples (slot-scoped extraction with negative examples).
+# ---------------------------------------------------------------------------
+
+TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
     "FAMILY": [
         (
             "у меня есть сын Ромка, ему нет ещё года",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "есть сын", "object": "сын пользователя"},
-                    {"subject": "сын пользователя", "relation": "имя", "object": "ромка"},
-                    {"subject": "сын пользователя", "relation": "возраст", "object": "менее одного года"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "есть сын", "object": "сын пользователя", "ttl": "inf"},
+                {"subject": "сын пользователя", "relation": "имя", "object": "ромка", "ttl": "inf"},
+                {"subject": "сын пользователя", "relation": "возраст", "object": "менее одного года", "ttl": "1y"},
+            ],
         ),
         (
             "мы с сыном ходим на бокс два раза в неделю",
-            _t(
-                [
-                    # только семейные факты: кто с кем и чем занимается сын —
-                    # частота и сам спорт относятся к слоту SPORTS, здесь не указываем
-                    {"subject": "пользователь", "relation": "занимается вместе с", "object": "сын пользователя"},
-                    {"subject": "сын пользователя", "relation": "занимается", "object": "бокс"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "занимается вместе с", "object": "сын пользователя", "ttl": "6m"},
+                {"subject": "сын пользователя", "relation": "занимается", "object": "бокс", "ttl": "6m"},
+            ],
+        ),
+        # Показываем как правильно добавлять факт "есть сестра" при упоминании сестры
+        (
+            "младшей сестрёнке нужен в школе пересказ гранатового браслета",
+            [
+                {"subject": "пользователь", "relation": "есть сестра", "object": "сестра пользователя", "ttl": "inf"},
+                {"subject": "сестра пользователя", "relation": "учится в", "object": "школа", "ttl": "1y"},
+                {"subject": "сестра пользователя", "relation": "нужен", "object": "пересказ гранатового браслета", "ttl": "2w"},
+            ],
         ),
         (
             "устроился в яндекс аналитиком",
-            '{"triplets":[]}',
+            [],
         ),
     ],
     "WORK": [
         (
             "устроился в Яндекс аналитиком данных",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "работает в", "object": "яндекс"},
-                    {"subject": "пользователь", "relation": "должность", "object": "аналитик данных"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "работает в", "object": "яндекс", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "должность", "object": "аналитик данных", "ttl": "1y"},
+            ],
         ),
         (
             "уволился с прошлой работы в марте",
-            _t([{"subject": "пользователь", "relation": "уволился", "object": "март"}]),
+            [
+                {"subject": "пользователь", "relation": "уволился", "object": "март", "ttl": "1y"},
+            ],
         ),
         (
             "у меня кот барсик",
-            '{"triplets":[]}',
+            [],
         ),
     ],
     "PETS": [
         (
             "у меня кот, зовут Барсик, не переносит других котов",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "есть кот", "object": "кот пользователя"},
-                    {"subject": "кот пользователя", "relation": "имя", "object": "барсик"},
-                    {"subject": "кот пользователя", "relation": "не переносит", "object": "другие коты"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "есть кот", "object": "кот пользователя", "ttl": "inf"},
+                {"subject": "кот пользователя", "relation": "имя", "object": "барсик", "ttl": "inf"},
+                {"subject": "кот пользователя", "relation": "не переносит", "object": "другие коты", "ttl": "6m"},
+            ],
+        ),
+        (
+            "я купила собачку, мальтийскую болонку. её джесси зовут",
+            [
+                {"subject": "пользователь", "relation": "есть собака", "object": "собака пользователя", "ttl": "inf"},
+                {"subject": "собака пользователя", "relation": "порода", "object": "мальтийская болонка", "ttl": "inf"},
+                {"subject": "собака пользователя", "relation": "имя", "object": "джесси", "ttl": "inf"},
+            ],
         ),
         (
             "собаку зовут Луна, гуляю с ней утром",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "есть собака", "object": "собака пользователя"},
-                    {"subject": "собака пользователя", "relation": "имя", "object": "луна"},
-                    {"subject": "пользователь", "relation": "выгул собаки", "object": "утро"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "есть собака", "object": "собака пользователя", "ttl": "inf"},
+                {"subject": "собака пользователя", "relation": "имя", "object": "луна", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "выгул собаки", "object": "утро", "ttl": "inf"},
+            ],
         ),
         (
             "я работаю в банке",
-            '{"triplets":[]}',
+            [],
         ),
     ],
     "FOOD": [
         (
             "не ем глютен и лактозу",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "исключает", "object": "глютен"},
-                    {"subject": "пользователь", "relation": "исключает", "object": "лактоза"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "исключает", "object": "глютен", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "исключает", "object": "лактоза", "ttl": "inf"},
+            ],
         ),
         (
             "люблю борщ и соленья",
-            _t([{"subject": "пользователь", "relation": "нравится", "object": "борщ и соленья"}]),
+            [
+                {"subject": "пользователь", "relation": "нравится", "object": "борщ и соленья", "ttl": "6m"},
+            ],
         ),
         (
             "я работаю в банке и у меня кот барсик",
-            '{"triplets":[]}',
+            [],
         ),
     ],
     "HEALTH": [
         (
             "диабет второго типа, на учёте у эндокринолога",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "диагноз", "object": "диабет 2 типа"},
-                    {"subject": "пользователь", "relation": "на учёте", "object": "эндокринолог"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "диагноз", "object": "диабет 2 типа", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "на учёте", "object": "эндокринолог", "ttl": "1y"},
+            ],
         ),
         (
             "гипертония, слежу за давлением каждый день",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "диагноз", "object": "гипертония"},
-                    {"subject": "пользователь", "relation": "контролирует", "object": "давление"},
-                    {"subject": "пользователь", "relation": "частота контроля давления", "object": "каждый день"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "диагноз", "object": "гипертония", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "контролирует", "object": "давление", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "частота контроля давления", "object": "каждый день", "ttl": "inf"},
+            ],
         ),
         (
             "сегодня на работе было всё окей",
-            '{"triplets":[]}',
+            [],
         ),
     ],
     "MENTAL_HEALTH": [
         (
             "ходил к психотерапевту полгода, стало легче",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "ходил к", "object": "психотерапевт"},
-                    {"subject": "пользователь", "relation": "длительность терапии", "object": "полгода"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "ходил к", "object": "психотерапевт", "ttl": "6m"},
+                {"subject": "пользователь", "relation": "длительность терапии", "object": "полгода", "ttl": "6m"},
+            ],
         ),
         (
             "часто тревожность перед выступлениями",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "часто чувствует", "object": "тревожность перед выступлениями"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "часто чувствует", "object": "тревожность перед выступлениями", "ttl": "6m"},
+            ],
         ),
     ],
     "EDUCATION": [
         (
             "магистратура в НГУ, кафедра ИИ",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "учится в", "object": "нгу магистратура"},
-                    {"subject": "пользователь", "relation": "кафедра", "object": "ии"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "учится в", "object": "нгу магистратура", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "кафедра", "object": "ии", "ttl": "1y"},
+            ],
         ),
         (
             "закончил НГУ по специальности прикладная математика",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "закончил", "object": "нгу"},
-                    {"subject": "пользователь", "relation": "специализация", "object": "прикладная математика"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "закончил", "object": "нгу", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "специализация", "object": "прикладная математика", "ttl": "inf"},
+            ],
         ),
     ],
     "SPORTS": [
         (
             "бегаю десять километров по воскресеньям",
-            _t([{"subject": "пользователь", "relation": "занимается", "object": "бег 10 км воскресенье"}]),
+            [
+                {"subject": "пользователь", "relation": "занимается", "object": "бег 10 км воскресенье", "ttl": "6m"},
+            ],
         ),
         (
             "каждую субботу играю в футбол с друзьями",
-            _t([{"subject": "пользователь", "relation": "играет", "object": "футбол по субботам"}]),
+            [
+                {"subject": "пользователь", "relation": "играет", "object": "футбол по субботам", "ttl": "6m"},
+            ],
         ),
         (
             "ну да, спорт это полезно, но сегодня лень",
-            '{"triplets":[]}',
+            [],
         ),
     ],
     "LOCATION": [
         (
             "переехал в Красноярск из Иркутска",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "живёт в", "object": "красноярск"},
-                    {"subject": "пользователь", "relation": "ранее жил в", "object": "иркутск"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "живёт в", "object": "красноярск", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "ранее жил в", "object": "иркутск", "ttl": "1y"},
+            ],
         ),
         (
             "сейчас живу в Москве, снял квартиру в Митино",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "живёт в", "object": "москва"},
-                    {"subject": "пользователь", "relation": "район проживания", "object": "митино"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "живёт в", "object": "москва", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "район проживания", "object": "митино", "ttl": "1y"},
+            ],
         ),
     ],
     "FINANCE": [
         (
             "ипотека в Сбере, платёж сорок тысяч",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "ипотека", "object": "сбер"},
-                    {"subject": "пользователь", "relation": "платёж по ипотеке", "object": "40000 руб"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "ипотека", "object": "сбер", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "платёж по ипотеке", "object": "40000 руб", "ttl": "3m"},
+            ],
         ),
         (
             "откладываю 20 процентов зарплаты на подушку безопасности",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "откладывает", "object": "20 процентов зарплаты"},
-                    {"subject": "пользователь", "relation": "цель накоплений", "object": "подушка безопасности"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "откладывает", "object": "20 процентов зарплаты", "ttl": "3m"},
+                {"subject": "пользователь", "relation": "цель накоплений", "object": "подушка безопасности", "ttl": "3m"},
+            ],
         ),
     ],
     "VEHICLES": [
         (
             "поменял масло, езжу на форде",
-            _t([{"subject": "пользователь", "relation": "авто", "object": "форд"}]),
+            [
+                {"subject": "пользователь", "relation": "авто", "object": "форд", "ttl": "1y"},
+            ],
         ),
         (
             "у меня kia rio, а до этого была renault logan",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "авто", "object": "kia rio"},
-                    {"subject": "пользователь", "relation": "было авто", "object": "renault logan"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "авто", "object": "kia rio", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "было авто", "object": "renault logan", "ttl": "1y"},
+            ],
         ),
     ],
     "TRAVEL": [
         (
             "в сентябре лечу в Токио",
-            _t([{"subject": "пользователь", "relation": "поездка", "object": "токио сентябрь"}]),
+            [
+                {"subject": "пользователь", "relation": "поездка", "object": "токио сентябрь", "ttl": "3m"},
+            ],
         ),
         (
             "в августе планируем поездку в Казань с семьей",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "планирует поездку", "object": "казань август"},
-                    {"subject": "пользователь", "relation": "едет с", "object": "семья"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "планирует поездку", "object": "казань август", "ttl": "3m"},
+                {"subject": "пользователь", "relation": "едет с", "object": "семья", "ttl": "3m"},
+            ],
         ),
     ],
     "HOBBIES": [
         (
             "собираю виниловые пластинки уже пятнадцать лет",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "коллекционирует", "object": "винил"},
-                    {"subject": "пользователь", "relation": "стаж коллекционирования винила", "object": "15 лет"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "коллекционирует", "object": "винил", "ttl": "6m"},
+                {"subject": "пользователь", "relation": "стаж коллекционирования винила", "object": "15 лет", "ttl": "6m"},
+            ],
         ),
         (
             "увлекаюсь фотографией, снимаю на зеркалку",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "хобби", "object": "фотография"},
-                    {"subject": "пользователь", "relation": "снимает на", "object": "зеркальная камера"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "хобби", "object": "фотография", "ttl": "6m"},
+                {"subject": "пользователь", "relation": "снимает на", "object": "зеркальная камера", "ttl": "6m"},
+            ],
         ),
     ],
     "TECH": [
         (
             "основной телефон самсунг, ноутбук леново",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "телефон", "object": "samsung"},
-                    {"subject": "пользователь", "relation": "ноутбук", "object": "lenovo"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "телефон", "object": "samsung", "ttl": "6m"},
+                {"subject": "пользователь", "relation": "ноутбук", "object": "lenovo", "ttl": "6m"},
+            ],
         ),
         (
             "пользуюсь айфоном и макбуком для работы",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "использует для работы", "object": "айфон"},
-                    {"subject": "пользователь", "relation": "использует для работы", "object": "макбук"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "использует для работы", "object": "айфон", "ttl": "6m"},
+                {"subject": "пользователь", "relation": "использует для работы", "object": "макбук", "ttl": "6m"},
+            ],
         ),
     ],
     "SCHEDULE": [
         (
             "по вторникам и четвергам до девяти на работе",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "график работы", "object": "вт чт до 21 00"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "график работы", "object": "вт чт до 21 00", "ttl": "1m"},
+            ],
         ),
         (
             "по будням встаю в 6 утра и ложусь около 23:00",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "время подъёма", "object": "6 утра"},
-                    {"subject": "пользователь", "relation": "время отхода ко сну", "object": "23 00"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "время подъёма", "object": "6 утра", "ttl": "1m"},
+                {"subject": "пользователь", "relation": "время отхода ко сну", "object": "23 00", "ttl": "1m"},
+            ],
         ),
     ],
     "GOALS": [
         (
             "хочу сдать IELTS на семь с половиной",
-            _t([{"subject": "пользователь", "relation": "цель", "object": "ielts 7 5"}]),
+            [
+                {"subject": "пользователь", "relation": "цель", "object": "ielts 7 5", "ttl": "3m"},
+            ],
         ),
         (
             "хочу через год перейти в продуктовую аналитику",
-            _t([{"subject": "пользователь", "relation": "цель", "object": "перейти в продуктовую аналитику через год"}]),
+            [
+                {"subject": "пользователь", "relation": "цель", "object": "перейти в продуктовую аналитику через год", "ttl": "3m"},
+            ],
         ),
     ],
     "EVENTS": [
         (
             "на прошлой неделе был на свадьбе у кузена",
-            _t([{"subject": "пользователь", "relation": "был на", "object": "свадьба кузена"}]),
+            [
+                {"subject": "пользователь", "relation": "был на", "object": "свадьба кузена", "ttl": "2w"},
+            ],
         ),
         (
             "в прошлом месяце выступал на конференции Data Fest",
-            _t([{"subject": "пользователь", "relation": "выступал на", "object": "конференция data fest"}]),
+            [
+                {"subject": "пользователь", "relation": "выступал на", "object": "конференция data fest", "ttl": "3m"},
+            ],
+        ),
+        # Ситуативные события с коротким TTL
+        (
+            "вернулась только что из бара, я такая пьяненькая",
+            [
+                {"subject": "пользователь", "relation": "вернулась из", "object": "бар", "ttl": "1d"},
+                {"subject": "пользователь", "relation": "состояние", "object": "выпившая", "ttl": "1d"},
+            ],
         ),
     ],
     "HOME": [
         (
             "снял однушку на окраине, пятый этаж",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "жильё", "object": "однушка окраина"},
-                    {"subject": "пользователь", "relation": "этаж", "object": "5"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "жильё", "object": "однушка окраина", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "этаж", "object": "5", "ttl": "1y"},
+            ],
         ),
         (
             "живу в двухкомнатной квартире, недавно сделал ремонт кухни",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "жильё", "object": "двухкомнатная квартира"},
-                    {"subject": "пользователь", "relation": "сделал", "object": "ремонт кухни"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "жильё", "object": "двухкомнатная квартира", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "сделал", "object": "ремонт кухни", "ttl": "6m"},
+            ],
         ),
     ],
     "IDENTITY": [
         (
             "меня зовут Алексей, мне тридцать два",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "имя", "object": "алексей"},
-                    {"subject": "пользователь", "relation": "возраст", "object": "32"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "имя", "object": "алексей", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "возраст", "object": "32", "ttl": "1y"},
+            ],
         ),
         (
-            # только чистые факты идентичности — без профессии (WORK) и города (LOCATION)
             "я мужчина, мне двадцать восемь, по национальности татарин",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "пол", "object": "мужчина"},
-                    {"subject": "пользователь", "relation": "возраст", "object": "28"},
-                    {"subject": "пользователь", "relation": "национальность", "object": "татарин"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "пол", "object": "мужчина", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "возраст", "object": "28", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "национальность", "object": "татарин", "ttl": "inf"},
+            ],
         ),
     ],
     "ROMANCE": [
         (
             "мы с партнёром живём вместе второй год",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "есть партнёр", "object": "партнёр пользователя"},
-                    {"subject": "пользователь", "relation": "живёт вместе с", "object": "партнёр пользователя"},
-                    {"subject": "пользователь", "relation": "совместное проживание длится", "object": "2 года"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "есть партнёр", "object": "партнёр пользователя", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "живёт вместе с", "object": "партнёр пользователя", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "совместное проживание длится", "object": "2 года", "ttl": "1y"},
+            ],
         ),
         (
             "встречаюсь с девушкой уже полтора года",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "есть девушка", "object": "девушка пользователя"},
-                    {"subject": "пользователь", "relation": "встречается с девушкой", "object": "полтора года"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "есть девушка", "object": "девушка пользователя", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "встречается с девушкой", "object": "полтора года", "ttl": "1y"},
+            ],
         ),
     ],
     "FRIENDS": [
         (
             "каждую пятницу встречаемся с компанией в баре",
-            _t([{"subject": "пользователь", "relation": "встреча с друзьями", "object": "пятница бар"}]),
+            [
+                {"subject": "пользователь", "relation": "встреча с друзьями", "object": "пятница бар", "ttl": "6m"},
+            ],
         ),
         (
             "мы с лучшим другом Димой дружим со школы",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "есть лучший друг", "object": "лучший друг пользователя"},
-                    {"subject": "лучший друг пользователя", "relation": "имя", "object": "дима"},
-                    {"subject": "пользователь", "relation": "дружба с лучшим другом с", "object": "школа"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "есть лучший друг", "object": "лучший друг пользователя", "ttl": "inf"},
+                {"subject": "лучший друг пользователя", "relation": "имя", "object": "дима", "ttl": "inf"},
+                {"subject": "пользователь", "relation": "дружба с лучшим другом с", "object": "школа", "ttl": "inf"},
+            ],
         ),
     ],
     "HABITS": [
         (
             "лечь спать до полуночи стараюсь каждый день",
-            _t([{"subject": "пользователь", "relation": "привычка сон", "object": "до 00 00"}]),
+            [
+                {"subject": "пользователь", "relation": "привычка сон", "object": "до 00 00", "ttl": "inf"},
+            ],
         ),
         (
             "каждое утро пью кофе и читаю новости",
-            _t([{"subject": "пользователь", "relation": "утренняя привычка", "object": "кофе и новости"}]),
+            [
+                {"subject": "пользователь", "relation": "утренняя привычка", "object": "кофе и новости", "ttl": "inf"},
+            ],
         ),
     ],
     "PREFERENCES": [
         (
             "не люблю сладкое в кофе",
-            _t([{"subject": "пользователь", "relation": "не любит", "object": "сахар в кофе"}]),
+            [
+                {"subject": "пользователь", "relation": "не любит", "object": "сахар в кофе", "ttl": "inf"},
+            ],
         ),
         (
             "предпочитаю тёмные интерфейсы и минимализм в дизайне",
-            _t(
-                [
-                    {"subject": "пользователь", "relation": "предпочитает", "object": "тёмные интерфейсы"},
-                    {"subject": "пользователь", "relation": "предпочитает", "object": "минимализм"},
-                ]
-            ),
+            [
+                {"subject": "пользователь", "relation": "предпочитает", "object": "тёмные интерфейсы", "ttl": "6m"},
+                {"subject": "пользователь", "relation": "предпочитает", "object": "минимализм", "ttl": "6m"},
+            ],
         ),
     ],
 }
+
+
+def _build_per_slot(
+    slot_name: str | None,
+    use_ttl: bool,
+) -> List[Tuple[str, str]]:
+    entries = TRIPLET_PER_SLOT_BY_SLOT_BASE.get(slot_name or "", [])
+    out: List[Tuple[str, str]] = []
+    for msg, items in entries:
+        if not items:
+            out.append((msg, '{"triplets":[]}'))
+        elif use_ttl:
+            out.append((msg, _t(items)))
+        else:
+            out.append((msg, _t([{k: v for k, v in item.items() if k != "ttl"} for item in items])))
+    return out
 
 
 def triplet_per_slot_few_shot_messages(
     shared_user_turn_fn,
     per_slot_user_turn_fn,
     slot_name: str | None,
+    use_ttl: bool = False,
 ) -> List[Dict[str, Any]]:
-    """
-    Build few-shot messages for per-slot triplet extraction.
-
-    shared_user_turn_fn  — used for TRIPLET_PER_SLOT_SHARED (no slot hint in user-turn,
-                           demonstrates the basic triplet format).
-    per_slot_user_turn_fn — used for TRIPLET_PER_SLOT_BY_SLOT entries (slot hint present,
-                            demonstrates slot-scoped extraction and negative examples).
-    """
     out: List[Dict[str, Any]] = []
-    for msg, assistant_json in TRIPLET_PER_SLOT_SHARED:
+    for msg, assistant_json in _build_shared(use_ttl):
         out.append({"role": "user", "content": shared_user_turn_fn(msg)})
         out.append({"role": "assistant", "content": assistant_json})
-    if slot_name and slot_name in TRIPLET_PER_SLOT_BY_SLOT:
-        for msg, assistant_json in TRIPLET_PER_SLOT_BY_SLOT[slot_name]:
+    if slot_name:
+        for msg, assistant_json in _build_per_slot(slot_name, use_ttl):
             out.append({"role": "user", "content": per_slot_user_turn_fn(msg)})
             out.append({"role": "assistant", "content": assistant_json})
     return out
 
 
-# Single-pass: в JSON есть поле slot — русские метки.
-# Субъект, связь и объект — строчными буквами без «_».
-TRIPLET_SINGLE_PASS_FEWSHOT: List[Tuple[str, str]] = [
+# ---------------------------------------------------------------------------
+# Single-pass few-shot (все слоты за один проход, slot field в JSON)
+# ---------------------------------------------------------------------------
+
+TRIPLET_SINGLE_PASS_BASE: List[Tuple[str, List[dict]]] = [
     (
         "женат, сын в школе, работаю инженером",
-        _t(
-            [
-                {"slot": "СЕМЬЯ", "subject": "пользователь", "relation": "женат", "object": "да"},
-                {"slot": "СЕМЬЯ", "subject": "сын", "relation": "учится в", "object": "школа"},
-                {"slot": "РАБОТА", "subject": "пользователь", "relation": "работает как", "object": "инженер"},
-            ]
-        ),
+        [
+            {"slot": "СЕМЬЯ", "subject": "пользователь", "relation": "женат", "object": "да", "ttl": "inf"},
+            {"slot": "СЕМЬЯ", "subject": "пользователь", "relation": "есть сын", "object": "сын пользователя", "ttl": "inf"},
+            {"slot": "СЕМЬЯ", "subject": "сын пользователя", "relation": "учится в", "object": "школа", "ttl": "1y"},
+            {"slot": "РАБОТА", "subject": "пользователь", "relation": "работает как", "object": "инженер", "ttl": "1y"},
+        ],
     ),
     (
-        "кот Мурзик, не ем сахар",
-        _t(
-            [
-                {"slot": "ПИТОМЦЫ", "subject": "пользователь", "relation": "имеет", "object": "кот мурзик"},
-                {"slot": "ЕДА", "subject": "пользователь", "relation": "исключает", "object": "сахар"},
-            ]
-        ),
+        "у меня кот Мурзик, не ем сахар",
+        [
+            {"slot": "ПИТОМЦЫ", "subject": "пользователь", "relation": "есть кот", "object": "кот пользователя", "ttl": "inf"},
+            {"slot": "ПИТОМЦЫ", "subject": "кот пользователя", "relation": "имя", "object": "мурзик", "ttl": "inf"},
+            {"slot": "ЕДА", "subject": "пользователь", "relation": "исключает", "object": "сахар", "ttl": "inf"},
+        ],
     ),
     (
         "погода сегодня супер",
-        '{"triplets":[]}',
+        [],
     ),
     (
         "переехал в Екатеринбург, ипотека в ВТБ",
-        _t(
-            [
-                {"slot": "ЛОКАЦИЯ", "subject": "пользователь", "relation": "живёт в", "object": "екатеринбург"},
-                {"slot": "ФИНАНСЫ", "subject": "пользователь", "relation": "ипотека", "object": "втб"},
-            ]
-        ),
+        [
+            {"slot": "ЛОКАЦИЯ", "subject": "пользователь", "relation": "живёт в", "object": "екатеринбург", "ttl": "1y"},
+            {"slot": "ФИНАНСЫ", "subject": "пользователь", "relation": "ипотека", "object": "втб", "ttl": "1y"},
+        ],
     ),
     (
         "бегаю марафоны и не пью алкоголь",
-        _t(
-            [
-                {"slot": "СПОРТ", "subject": "пользователь", "relation": "занимается", "object": "марафоны"},
-                {"slot": "ПРИВЫЧКИ", "subject": "пользователь", "relation": "не употребляет", "object": "алкоголь"},
-            ]
-        ),
+        [
+            {"slot": "СПОРТ", "subject": "пользователь", "relation": "занимается", "object": "марафоны", "ttl": "6m"},
+            {"slot": "ПРИВЫЧКИ", "subject": "пользователь", "relation": "не употребляет", "object": "алкоголь", "ttl": "inf"},
+        ],
+    ),
+    (
+        "вернулась только что из бара, я такая пьяненькая",
+        [
+            {"slot": "СОБЫТИЯ", "subject": "пользователь", "relation": "вернулась из", "object": "бар", "ttl": "1d"},
+            {"slot": "СОБЫТИЯ", "subject": "пользователь", "relation": "состояние", "object": "выпившая", "ttl": "1d"},
+        ],
     ),
 ]
 
 
-def triplet_single_pass_few_shot_messages(user_turn_fn) -> List[Dict[str, Any]]:
+def triplet_single_pass_few_shot_messages(
+    user_turn_fn,
+    use_ttl: bool = False,
+) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-    for msg, assistant_json in TRIPLET_SINGLE_PASS_FEWSHOT:
+    for msg, items in TRIPLET_SINGLE_PASS_BASE:
+        if not items:
+            assistant_json = '{"triplets":[]}'
+        elif use_ttl:
+            assistant_json = _t(items)
+        else:
+            assistant_json = _t([{k: v for k, v in item.items() if k != "ttl"} for item in items])
         out.append({"role": "user", "content": user_turn_fn(msg)})
         out.append({"role": "assistant", "content": assistant_json})
     return out
 
 
-# Memory gate: слоты в списке — как в состоянии (англ. ключи)
+# ---------------------------------------------------------------------------
+# Memory gate few-shots
+# ---------------------------------------------------------------------------
+
 MEMORY_GATE_FEWSHOT: List[Tuple[str, str, str]] = [
     ("как зовут мою жену?", "FAMILY\nWORK", '{"use_memory": true, "slots": ["FAMILY"]}'),
     ("что такое квантовая механика?", "FAMILY\nWORK", '{"use_memory": false, "slots": []}'),
@@ -627,7 +680,10 @@ MEMORY_GATE_FEWSHOT_VECTOR: List[Tuple[str, str, str]] = [
 ]
 
 
-# Slot update — дополнительные пары (к основным в slot_update_messages)
+# ---------------------------------------------------------------------------
+# Slot update extra few-shots
+# ---------------------------------------------------------------------------
+
 SLOT_UPDATE_EXTRA_FEWSHOT: List[Tuple[str, list, str]] = [
     (
         "дочка теперь в другой школе",
@@ -658,78 +714,76 @@ SLOT_UPDATE_EXTRA_FEWSHOT: List[Tuple[str, list, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# Triplet Conflict Resolution few-shots
-# ---------------------------------------------------------------------------
+# Conflict Resolution few-shots
 # Формат запроса: slot, existing_triplets (list with record_id), new_triplets (indexed list)
 # Формат ответа: {"deactivate":[record_ids], "skip_new":[new_indices]}
-# Если нет конфликтов — {"deactivate":[], "skip_new":[]}
+# ВАЖНО: triplets теперь в lowercase с пробелами (без UPPER_CASE_UNDERSCORE)
 # ---------------------------------------------------------------------------
 
 def _cr(existing: list, new_triplets: list, answer: str) -> tuple:
-    """Helper: returns (existing_json, new_json, answer_json)."""
     return (json.dumps(existing, ensure_ascii=False),
             json.dumps(new_triplets, ensure_ascii=False),
             answer)
 
 
 CONFLICT_RESOLUTION_FEWSHOT: List[Tuple[str, str, str]] = [
-    # Смена работы: РАБОТАЕТ_В меняется → деактивировать старый
+    # Смена работы
     _cr(
-        existing=[{"record_id": 1, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАБОТАЕТ_В", "object": "ЯНДЕКС"},
-                  {"record_id": 2, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДОЛЖНОСТЬ", "object": "АНАЛИТИК_ДАННЫХ"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАБОТАЕТ_В", "object": "СБЕР"}],
+        existing=[{"record_id": 1, "subject": "пользователь", "relation": "работает в", "object": "яндекс"},
+                  {"record_id": 2, "subject": "пользователь", "relation": "должность", "object": "аналитик данных"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "работает в", "object": "сбер"}],
         answer='{"deactivate":[1],"skip_new":[]}',
     ),
-    # Переезд: старый город → деактивировать
+    # Переезд
     _cr(
-        existing=[{"record_id": 5, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖИВЁТ_В", "object": "МОСКВА"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖИВЁТ_В", "object": "ТОМСК"}],
+        existing=[{"record_id": 5, "subject": "пользователь", "relation": "живёт в", "object": "москва"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "живёт в", "object": "томск"}],
         answer='{"deactivate":[5],"skip_new":[]}',
     ),
-    # Развод: ЖЕНАТ_С → В_РАЗВОДЕ — другой relation, деактивировать «женат»
+    # Развод
     _cr(
-        existing=[{"record_id": 3, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ЖЕНАТ_С", "object": "ЛЮДМИЛА"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "В_РАЗВОДЕ", "object": "ЛЮДМИЛА"}],
+        existing=[{"record_id": 3, "subject": "пользователь", "relation": "женат с", "object": "людмила"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "в разводе", "object": "людмила"}],
         answer='{"deactivate":[3],"skip_new":[]}',
     ),
-    # Дубль: тот же факт — пропустить новый
+    # Дубль — пропустить новый
     _cr(
-        existing=[{"record_id": 7, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_КОТА", "object": "БАРСИК"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_КОТА", "object": "БАРСИК"}],
+        existing=[{"record_id": 7, "subject": "пользователь", "relation": "есть кот", "object": "барсик"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "есть кот", "object": "барсик"}],
         answer='{"deactivate":[],"skip_new":[0]}',
     ),
-    # Новый факт, не противоречащий ничему — оставить всё
+    # Новый факт — оставить всё
     _cr(
-        existing=[{"record_id": 2, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАБОТАЕТ_В", "object": "ЯНДЕКС"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДОЛЖНОСТЬ", "object": "ТИМЛИД"}],
+        existing=[{"record_id": 2, "subject": "пользователь", "relation": "работает в", "object": "яндекс"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "должность", "object": "тимлид"}],
         answer='{"deactivate":[],"skip_new":[]}',
     ),
-    # Новая машина: старая → деактивировать, новый тип транспорта → добавить
+    # Новая машина
     _cr(
-        existing=[{"record_id": 8, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_МАШИНУ", "object": "KIA_RIO"},
-                  {"record_id": 9, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_ВЕЛОСИПЕД", "object": "ГОРОДСКОЙ"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_МАШИНУ", "object": "FORD_FOCUS"},
-                      {"idx": 1, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_САМОКАТ", "object": "ДЛЯ_ГОРОДА"}],
+        existing=[{"record_id": 8, "subject": "пользователь", "relation": "авто", "object": "kia rio"},
+                  {"record_id": 9, "subject": "пользователь", "relation": "есть велосипед", "object": "городской"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "авто", "object": "ford focus"},
+                      {"idx": 1, "subject": "пользователь", "relation": "есть самокат", "object": "для города"}],
         answer='{"deactivate":[8],"skip_new":[]}',
     ),
-    # Смена диагноза: обновить диагноз, оставить врача
+    # Смена диагноза
     _cr(
-        existing=[{"record_id": 11, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДИАГНОЗ", "object": "ГИПЕРТОНИЯ"},
-                  {"record_id": 12, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "НА_УЧЁТЕ", "object": "КАРДИОЛОГ"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДИАГНОЗ", "object": "ГИПЕРТОНИЯ_2_СТЕПЕНИ"}],
+        existing=[{"record_id": 11, "subject": "пользователь", "relation": "диагноз", "object": "гипертония"},
+                  {"record_id": 12, "subject": "пользователь", "relation": "на учёте", "object": "кардиолог"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "диагноз", "object": "гипертония 2 степени"}],
         answer='{"deactivate":[11],"skip_new":[]}',
     ),
-    # Смена должности при той же компании
+    # Смена должности
     _cr(
-        existing=[{"record_id": 4, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "РАБОТАЕТ_В", "object": "СБЕР"},
-                  {"record_id": 6, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДОЛЖНОСТЬ", "object": "АНАЛИТИК"}],
-        new_triplets=[{"idx": 0, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ДОЛЖНОСТЬ", "object": "СТАРШИЙ_АНАЛИТИК"}],
+        existing=[{"record_id": 4, "subject": "пользователь", "relation": "работает в", "object": "сбер"},
+                  {"record_id": 6, "subject": "пользователь", "relation": "должность", "object": "аналитик"}],
+        new_triplets=[{"idx": 0, "subject": "пользователь", "relation": "должность", "object": "старший аналитик"}],
         answer='{"deactivate":[6],"skip_new":[]}',
     ),
-    # Нет конфликтов, нет дублей — ничего не деактивировать
+    # Нет конфликтов
     _cr(
-        existing=[{"record_id": 10, "subject": "ПОЛЬЗОВАТЕЛЬ", "relation": "ИМЕЕТ_КОТА", "object": "БАРСИК"}],
-        new_triplets=[{"idx": 0, "subject": "КОТ_БАРСИК", "relation": "ПОРОДА", "object": "МЕЙН-КУН"}],
+        existing=[{"record_id": 10, "subject": "пользователь", "relation": "есть кот", "object": "барсик"}],
+        new_triplets=[{"idx": 0, "subject": "кот пользователя", "relation": "порода", "object": "мейн кун"}],
         answer='{"deactivate":[],"skip_new":[]}',
     ),
 ]

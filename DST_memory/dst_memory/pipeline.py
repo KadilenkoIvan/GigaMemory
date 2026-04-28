@@ -42,7 +42,7 @@ class DSTMemoryPipeline:
 
         logger.info(
             "Initializing pipeline threshold=%.3f top_k=%d llm_mode=%s gate=%s "
-            "memory_gate_stub=%s memory_strategy=%s ragu=%s",
+            "memory_gate_stub=%s memory_strategy=%s ragu=%s ttl_mode=%s semantic_dedup=%s",
             config.importance_threshold,
             config.retrieval_top_k,
             config.llm_mode,
@@ -50,6 +50,8 @@ class DSTMemoryPipeline:
             config.memory_gate_use_stub,
             config.memory_strategy,
             ragu_processor is not None,
+            config.ttl_mode,
+            config.ttl_semantic_dedup_enabled,
         )
         self.classifier = ImportanceClassifier(
             model_path=config.importance_model_path,
@@ -63,6 +65,7 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_triplets=max(6, config.slot_max_slots_per_message * 3),
             max_retries=1,
+            ttl_mode=config.ttl_mode,
         )
         slot_selector = SlotSelectClient(
             use_stub=config.slot_use_stub,
@@ -81,6 +84,10 @@ class DSTMemoryPipeline:
             conflict_resolver=conflict_resolver,
             single_pass_fallback=True,
             ragu_processor=ragu_processor,
+            ttl_mode=config.ttl_mode,
+            ttl_slot_overrides=config.ttl_slot_overrides,
+            semantic_dedup_enabled=config.ttl_semantic_dedup_enabled,
+            semantic_dedup_threshold=config.ttl_semantic_dedup_threshold,
         )
         gate_stub = config.memory_gate_use_stub or slot_serving is None
         self.memory_gate = MemoryGateClient(
@@ -102,9 +109,7 @@ class DSTMemoryPipeline:
     def write_to_memory(self, dialogue_id: str, message: Message) -> Dict:
         logger.info(
             "write_to_memory dialogue_id=%s role=%s content_len=%d",
-            dialogue_id,
-            message.role,
-            len(message.content),
+            dialogue_id, message.role, len(message.content),
         )
         if message.role != "user":
             return {"saved": False, "reason": "only_user_messages_supported"}
@@ -112,15 +117,15 @@ class DSTMemoryPipeline:
         cls = self.classifier.predict(message.content)
         logger.info(
             "classifier result dialogue_id=%s p_important=%.4f is_important=%s",
-            dialogue_id,
-            cls["p_important"],
-            cls["is_important"],
+            dialogue_id, cls["p_important"], cls["is_important"],
         )
         if not bool(cls["is_important"]):
-            return {"message": message.content,
-                    "saved": False, 
-                    "reason": "not_important", 
-                    "classifier": cls}
+            return {
+                "message": message.content,
+                "saved": False,
+                "reason": "not_important",
+                "classifier": cls,
+            }
 
         new_facts, selected_slots = self.dst.upsert_from_message(dialogue_id, message.content)
         if not new_facts:
@@ -145,19 +150,14 @@ class DSTMemoryPipeline:
         state = self.dst.get_state(dialogue_id)
         if not user_text.strip() or not assistant_text.strip():
             return
-        state.recent_pairs.append(
-            {
-                "user": user_text.strip(),
-                "assistant": assistant_text.strip(),
-            }
-        )
+        state.recent_pairs.append({"user": user_text.strip(), "assistant": assistant_text.strip()})
         keep = max(1, int(self.config.recent_history_pairs))
         if len(state.recent_pairs) > keep:
             state.recent_pairs = state.recent_pairs[-keep:]
 
     def recent_pairs(self, dialogue_id: str) -> List[Dict[str, str]]:
         state = self.dst.get_state(dialogue_id)
-        return list(state.recent_pairs[-max(1, int(self.config.recent_history_pairs)) :])
+        return list(state.recent_pairs[-max(1, int(self.config.recent_history_pairs)):])
 
     def _memory_context_for_question(
         self, dialogue_id: str, question: str
@@ -251,24 +251,43 @@ class DSTMemoryPipeline:
             slot_names=list(selected_slots) if selected_slots else None,
             top_k=self.config.retrieval_top_k,
         )
+
+        # Build the prompt that WOULD be sent to final LLM (for logging)
+        prompt_messages = self.final_llm.build_messages(
+            question=question,
+            memory_context=memory_context,
+            recent_pairs=self.recent_pairs(dialogue_id),
+        )
+        logger.debug(
+            "answer_without_final_llm prompt:\nSYSTEM:\n%s\n\nUSER:\n%s",
+            prompt_messages[0]["content"],
+            prompt_messages[1]["content"],
+        )
+
         return {
             "dialogue_id": dialogue_id,
             "question": question,
             "use_memory": bool(gate_meta.get("use_memory")),
             "memory_gate": gate_meta,
             "memory_context_for_final_llm": memory_context,
+            "final_llm_prompt": prompt_messages,  # full prompt for logs
             "recent_pairs": self.recent_pairs(dialogue_id),
             "retrieved": retrieved,
             "memory_slots": self.dst.slots_with_messages(dialogue_id),
+            "expired_facts": self.dst.expired_facts(dialogue_id),
         }
 
     def answer(self, dialogue_id: str, question: str) -> str:
         logger.info("answer dialogue_id=%s", dialogue_id)
         memory_context, gate_meta = self._memory_context_for_question(dialogue_id, question)
         logger.info(
-            "answer memory context ready mode=%s gate=%s",
+            "answer memory context ready mode=%s active_slots=%s",
             gate_meta.get("mode"),
-            gate_meta,
+            gate_meta.get("selected_slots"),
+        )
+        logger.debug(
+            "answer memory_context full:\n%s",
+            __import__("json").dumps(memory_context, ensure_ascii=False, indent=2),
         )
         answer_text = self.final_llm.generate(
             question=question,

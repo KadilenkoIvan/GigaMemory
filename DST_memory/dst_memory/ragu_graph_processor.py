@@ -6,16 +6,20 @@ Responsibilities:
   - Translate DST triplet add/delete operations into RAGU Entity + Relation CRUD.
   - Wrap SentenceTransformer as a RAGU-compatible async Embedder.
   - Provide slot-filtered semantic search via LocalSearchEngine.
+  - Expose embed_text_sync() for semantic deduplication in DSTManager.
+  - Store TTL metadata in Entity/Relation attributes for visualization.
 
 Slot encoding strategy
 -----------------------
   Entity.entity_type  = slot name  (e.g. "FAMILY")
   Relation.slot       = slot name  (e.g. "FAMILY")
 
-This makes ПОЛЬЗОВАТЕЛЬ(FAMILY) and ПОЛЬЗОВАТЕЛЬ(WORK) separate nodes,
+This makes пользователь(FAMILY) and пользователь(WORK) separate nodes,
 naturally creating per-slot subgraphs while sharing the same NetworkX graph.
 IDs are deterministic (MD5-based), so inserting the same entity twice is safe
 (RAGU merges duplicate IDs automatically).
+
+Triplet values are stored in lowercase with spaces (natural Russian), not UPPER_CASE_UNDERSCORE.
 """
 
 from __future__ import annotations
@@ -51,7 +55,6 @@ class SentenceTransformerEmbedder(Embedder):
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         self._model = SentenceTransformer(model_name)
-        # Determine dimension by encoding an empty string probe
         probe = self._model.encode([""], normalize_embeddings=True)
         self._dim: int = int(probe.shape[1])
 
@@ -82,6 +85,10 @@ class SentenceTransformerEmbedder(Embedder):
         )
         return vectors
 
+    def encode_sync(self, text: str) -> List[float]:
+        """Synchronous encode for use outside async context."""
+        return self._model.encode([text], normalize_embeddings=True)[0].tolist()
+
 
 # ---------------------------------------------------------------------------
 # Internal mapping entry
@@ -107,25 +114,32 @@ class RaguGraphProcessor:
     runs the async operation in a dedicated thread with its own event loop via
     ``_run_in_new_loop()``.  This avoids conflicts with any outer event loop
     and is safe for the single-threaded synchronous pipeline.
-
-    Parameters
-    ----------
-    knowledge_graph:
-        A fully initialised ``KnowledgeGraph`` instance (no chunker, no LLM,
-        community summaries disabled).
-    local_search:
-        A ``LocalSearchEngine`` bound to the same ``knowledge_graph``.
     """
 
     def __init__(
         self,
         knowledge_graph: KnowledgeGraph,
         local_search: LocalSearchEngine,
+        embedder: Optional[SentenceTransformerEmbedder] = None,
     ) -> None:
         self.kg = knowledge_graph
         self.local_search = local_search
-        # record_id (int) → (_RecordIds) for delete / update routing
+        self.embedder = embedder
         self._record_to_ids: dict[int, _RecordIds] = {}
+
+    # ------------------------------------------------------------------
+    # Embedding (for semantic dedup in DSTManager)
+    # ------------------------------------------------------------------
+
+    def embed_text_sync(self, text: str) -> List[float]:
+        """Synchronously embed text. Used by DSTManager for semantic dedup."""
+        if self.embedder is None:
+            return []
+        try:
+            return self.embedder.encode_sync(text)
+        except Exception as exc:
+            logger.warning("embed_text_sync failed: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     # Public sync API
@@ -154,7 +168,7 @@ class RaguGraphProcessor:
 
         Returns a list of formatted strings like::
 
-            [FAMILY] ПОЛЬЗОВАТЕЛЬ --ЖЕНАТ_С--> ЖЕНА
+            [FAMILY] пользователь --есть жена--> жена пользователя (ttl: inf)
 
         Optionally filters results to ``slot_names`` when provided.
         """
@@ -189,7 +203,6 @@ class RaguGraphProcessor:
             source_chunk_id=[chunk_id],
         )
 
-        # Entities must exist before relations can reference them
         await self.kg.insert_entities([subj_entity, obj_entity])
 
         relation = Relation(
@@ -203,17 +216,31 @@ class RaguGraphProcessor:
             source_chunk_id=[chunk_id],
         )
 
-        await self.kg.insert_relations([relation])
+        # Store TTL in relation metadata via description extension and extra attrs
+        # (RAGU's Relation doesn't have a custom field; we encode TTL in description)
+        # TTL is appended so visualize_knowledge_graph.py can read it.
+        relation_with_ttl = Relation(
+            subject_id=subj_entity.id,
+            object_id=obj_entity.id,
+            subject_name=delta.subject,
+            object_name=delta.object,
+            relation_type=delta.relation,
+            description=f"{delta.subject} {delta.relation} {delta.object} [ttl:{delta.ttl}]",
+            slot=delta.slot,
+            source_chunk_id=[chunk_id],
+        )
+
+        await self.kg.insert_relations([relation_with_ttl])
 
         self._record_to_ids[delta.record_id] = _RecordIds(
             subject_entity_id=subj_entity.id,
             object_entity_id=obj_entity.id,
-            relation_id=relation.id,
+            relation_id=relation_with_ttl.id,
             slot=delta.slot,
         )
         logger.debug(
-            "RAGU upsert record_id=%d slot=%s [%s|%s|%s]",
-            delta.record_id, delta.slot, delta.subject, delta.relation, delta.object,
+            "RAGU upsert record_id=%d slot=%s [%s|%s|%s] ttl=%s",
+            delta.record_id, delta.slot, delta.subject, delta.relation, delta.object, delta.ttl,
         )
 
     async def _async_delete(self, deltas: List["GraphTripletDelete"]) -> None:
@@ -238,13 +265,18 @@ class RaguGraphProcessor:
             logger.warning("RAGU delete_relation failed record_id=%d: %s", delta.record_id, exc)
         finally:
             del self._record_to_ids[delta.record_id]
-        logger.debug(
-            "RAGU delete record_id=%d relation_id=%s", delta.record_id, ids.relation_id
-        )
+        logger.debug("RAGU delete record_id=%d relation_id=%s", delta.record_id, ids.relation_id)
 
     # ------------------------------------------------------------------
     # Formatting helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_ttl_from_description(description: str) -> Optional[str]:
+        """Parse '[ttl:Xm]' annotation from relation description."""
+        import re
+        m = re.search(r'\[ttl:([^\]]+)\]', description or "")
+        return m.group(1) if m else None
 
     @staticmethod
     def _format_result(
@@ -258,12 +290,13 @@ class RaguGraphProcessor:
             if slot_filter and rel.slot not in slot_filter:
                 continue
             slot_tag = f"[{rel.slot}] " if rel.slot else ""
-            line = f"{slot_tag}{rel.subject_name} --{rel.relation_type}--> {rel.object_name}"
+            ttl = RaguGraphProcessor._extract_ttl_from_description(getattr(rel, "description", ""))
+            ttl_tag = f" (ttl: {ttl})" if ttl else ""
+            line = f"{slot_tag}{rel.subject_name} --{rel.relation_type}--> {rel.object_name}{ttl_tag}"
             if line not in seen:
                 seen.add(line)
                 lines.append(line)
 
-        # Fall back to entity names if no relations matched
         if not lines:
             for ent in result.entities:
                 if slot_filter and ent.entity_type not in slot_filter:
@@ -284,10 +317,6 @@ class RaguGraphProcessor:
 def _run_in_new_loop(coro) -> Any:
     """
     Execute *coro* in a brand-new event loop running in a daemon thread.
-
-    This is the only safe way to call async code from a synchronous caller
-    when there may or may not already be a running loop in the current thread.
-    The thread is started, joined, and discarded for every call.
     """
     result_box: list = []
     exc_box: list = []
@@ -304,7 +333,7 @@ def _run_in_new_loop(coro) -> Any:
 
     t = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = t.submit(_target)
-    future.result()  # blocks until done; propagates thread exceptions
+    future.result()
     t.shutdown(wait=False)
 
     if exc_box:
@@ -318,9 +347,7 @@ def _run_in_new_loop(coro) -> Any:
 
 @dataclass
 class GraphTripletDelta:
-    """
-    Payload for inserting a new triplet into the knowledge graph.
-    """
+    """Payload for inserting a new triplet into the knowledge graph."""
     record_id: int
     dialogue_id: str
     step: int
@@ -328,13 +355,12 @@ class GraphTripletDelta:
     subject: str
     relation: str
     object: str
+    ttl: str = "inf"
 
 
 @dataclass
 class GraphTripletDelete:
-    """
-    Payload for removing a triplet (deactivated by conflict resolution).
-    """
+    """Payload for removing a triplet (deactivated by conflict resolution or TTL)."""
     record_id: int
     dialogue_id: str
     slot: str
@@ -352,22 +378,6 @@ def build_ragu_processor(
     """
     Convenience factory: creates Embedder → KnowledgeGraph → LocalSearchEngine
     → RaguGraphProcessor in one call.
-
-    Parameters
-    ----------
-    embedder_model:
-        SentenceTransformer model name.
-    storage_path:
-        Absolute path for RAGU persistence files.  When *None* a default
-        ``ragu_storage`` folder next to this file is used.
-    language:
-        Language tag passed to RAGU's ``Settings``.
-
-    Returns
-    -------
-    (kg, processor)
-        The ``KnowledgeGraph`` (useful if you need direct access) and the
-        ``RaguGraphProcessor`` that the pipeline uses.
     """
     import os
     from pathlib import Path
@@ -411,5 +421,6 @@ def build_ragu_processor(
     processor = RaguGraphProcessor(
         knowledge_graph=kg,
         local_search=local_search,
+        embedder=embedder,
     )
     return kg, processor

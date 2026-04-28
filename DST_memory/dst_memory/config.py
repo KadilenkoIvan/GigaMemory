@@ -1,5 +1,35 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Dict
+
+
+# Default TTL values per slot (used for Mode 1 and as fallback in Mode 2/3).
+# Values must be from models.VALID_TTL_VALUES: 1d 3d 10d 2w 3w 1m 3m 6m 1y inf
+SLOT_DEFAULT_TTL: Dict[str, str] = {
+    "IDENTITY":     "inf",
+    "FAMILY":       "inf",
+    "FRIENDS":      "inf",
+    "ROMANCE":      "1y",
+    "WORK":         "1y",
+    "EDUCATION":    "1y",
+    "FINANCE":      "3m",
+    "HEALTH":       "1y",
+    "MENTAL_HEALTH":"6m",
+    "HABITS":       "inf",
+    "PREFERENCES":  "6m",
+    "HOBBIES":      "6m",
+    "SPORTS":       "6m",
+    "FOOD":         "1m",
+    "HOME":         "1y",
+    "LOCATION":     "1y",
+    "TRAVEL":       "3m",
+    "PETS":         "inf",
+    "TECH":         "6m",
+    "VEHICLES":     "1y",
+    "SCHEDULE":     "1m",
+    "GOALS":        "3m",
+    "EVENTS":       "2w",
+}
 
 
 @dataclass
@@ -38,20 +68,36 @@ class PipelineConfig:
     openrouter_x_title: str = ""
 
     # Slot decision model config (Meno-Lite style)
-    # If True -> use stub logic for slot decisions.
-    # If False -> use slot decision model.
     slot_use_stub: bool = False
     slot_model_path: str = "models/Meno-Lite-0.1"
     slot_max_slots_per_message: int = 5
-    # Генерация слотов: greedy + temperature=0 в slot_client (детерминированный выбор токена).
 
-    # Финальная LLM (когда будут реализованы local/api): temperature=0 для воспроизводимости.
+    # Финальная LLM temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0
 
     # RAGU knowledge-graph backend (required in this project).
     use_ragu: bool = True
-    # SentenceTransformer model for RAGU's embedder.
     ragu_embedder_model: str = "deepvk/USER-bge-m3"
-    # Folder where RAGU persists its storage files (graph, vectors, KV).
-    # Empty string → <repo_root>/ragu_storage
     ragu_storage_path: str = ""
+
+    # -------------------------------------------------------------------
+    # TTL (Time-To-Live) configuration
+    # -------------------------------------------------------------------
+    # TTL mode:
+    # - "mode1": per-slot fixed TTL from slot_ttl_defaults (fast, coarse-grained)
+    # - "mode2": model generates ttl field together with each triplet (default)
+    # - "mode3": separate LLM call after triplet extraction (slower, not implemented yet)
+    ttl_mode: str = "mode2"
+
+    # Fallback TTL when mode2 model omits the ttl field, or for mode1.
+    # Keys are canonical slot names; override any slot from SLOT_DEFAULT_TTL.
+    ttl_slot_overrides: Dict[str, str] = field(default_factory=dict)
+
+    # -------------------------------------------------------------------
+    # Semantic deduplication
+    # -------------------------------------------------------------------
+    # When True: before inserting a new triplet, check cosine similarity with
+    # existing active triplets in the SAME slot. If similarity >= threshold,
+    # deactivate the old record and insert the new one (refreshed TTL).
+    ttl_semantic_dedup_enabled: bool = True
+    ttl_semantic_dedup_threshold: float = 0.9

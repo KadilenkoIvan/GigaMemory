@@ -63,6 +63,10 @@ def build_pipeline(args: argparse.Namespace):
         use_ragu=True,
         ragu_embedder_model=getattr(args, "ragu_embedder_model", "deepvk/USER-bge-m3"),
         ragu_storage_path=getattr(args, "ragu_storage_path", ""),
+        ttl_mode=getattr(args, "ttl_mode", "mode2"),
+        ttl_slot_overrides=json.loads(getattr(args, "ttl_slot_overrides", "{}") or "{}"),
+        ttl_semantic_dedup_enabled=getattr(args, "ttl_semantic_dedup_enabled", True),
+        ttl_semantic_dedup_threshold=float(getattr(args, "ttl_semantic_dedup_threshold", 0.9)),
     )
 
     logger.info(
@@ -110,7 +114,6 @@ def create_parser(
         action="store_const",
         const=True,
         default=bool(s.get("disable_memory_gate", False)),
-        help="Disable slot relevance gate for relevant_slots_full strategy.",
     )
     parser.add_argument(
         "--memory-gate-use-stub",
@@ -144,6 +147,38 @@ def create_parser(
     parser.add_argument("--slot-max-slots-per-message", type=int, default=int(s.get("slot_max_slots_per_message", 5)))
     parser.add_argument("--ragu-embedder-model", type=str, default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")))
     parser.add_argument("--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", "")))
+
+    # TTL parameters
+    parser.add_argument(
+        "--ttl-mode",
+        dest="ttl_mode",
+        type=str,
+        default=str(s.get("ttl_mode", "mode2")),
+        choices=["mode1", "mode2", "mode3"],
+        help="TTL mode: mode1=per-slot fixed, mode2=model generates ttl field, mode3=separate call",
+    )
+    parser.add_argument(
+        "--ttl-slot-overrides",
+        dest="ttl_slot_overrides",
+        type=str,
+        default=json.dumps(s.get("ttl_slot_overrides", {})),
+        help='JSON dict of slot->ttl overrides, e.g. \'{"EVENTS":"1d"}\'',
+    )
+    parser.add_argument(
+        "--ttl-semantic-dedup-enabled",
+        dest="ttl_semantic_dedup_enabled",
+        action="store_const",
+        const=True,
+        default=bool(s.get("ttl_semantic_dedup_enabled", True)),
+        help="Enable semantic deduplication of near-duplicate triplets",
+    )
+    parser.add_argument(
+        "--ttl-semantic-dedup-threshold",
+        dest="ttl_semantic_dedup_threshold",
+        type=float,
+        default=float(s.get("ttl_semantic_dedup_threshold", 0.9)),
+        help="Cosine similarity threshold for semantic dedup (default: 0.9)",
+    )
 
     sub = parser.add_subparsers(required=True)
     m = sub.add_parser("module", help="Run single module")
@@ -195,7 +230,6 @@ def create_parser(
 
 def cmd_module_classifier(args: argparse.Namespace) -> None:
     from dst_memory.classifier import ImportanceClassifier
-
     model = ImportanceClassifier(model_path=args.importance_model_path, threshold=args.importance_threshold)
     print(json.dumps(model.predict(args.text), ensure_ascii=False, indent=2))
 
@@ -214,6 +248,7 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
         serving=slot_serving,
         max_triplets=max(6, int(args.slot_max_slots_per_message) * 3),
         max_retries=1,
+        ttl_mode=getattr(args, "ttl_mode", "mode2"),
     )
     slot_selector = SlotSelectClient(
         use_stub=args.slot_use_stub,
@@ -221,13 +256,18 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
         max_slots=int(args.slot_max_slots_per_message),
         max_retries=1,
     )
-    dst = DSTManager(triplet_extractor=triplet_extractor, slot_selector=slot_selector, single_pass_fallback=True)
-    print(json.dumps([asdict(x) for x in dst.upsert_from_message(args.dialogue_id, args.text)], ensure_ascii=False, indent=2))
+    dst = DSTManager(
+        triplet_extractor=triplet_extractor,
+        slot_selector=slot_selector,
+        single_pass_fallback=True,
+        ttl_mode=getattr(args, "ttl_mode", "mode2"),
+    )
+    result, slots = dst.upsert_from_message(args.dialogue_id, args.text)
+    print(json.dumps([asdict(x) for x in result], ensure_ascii=False, indent=2))
 
 
 def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
     from dst_memory.llm_client import FinalLLMClient
-
     client = FinalLLMClient(
         mode="openrouter",
         api_url=args.llm_api_url,
@@ -260,9 +300,17 @@ def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
         serving=serving,
         max_triplets=max(6, int(args.slot_max_slots_per_message) * 3),
         max_retries=1,
+        ttl_mode=getattr(args, "ttl_mode", "mode2"),
     )
     triplets = client.extract_for_slot(msg, slot)
-    out = {"slot": slot, "message": msg, "triplets": [{"subject": t.subject, "relation": t.relation, "object": t.object} for t in triplets]}
+    out = {
+        "slot": slot,
+        "message": msg,
+        "triplets": [
+            {"subject": t.subject, "relation": t.relation, "object": t.object, "ttl": t.ttl}
+            for t in triplets
+        ],
+    }
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
@@ -283,6 +331,7 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
         serving=serving,
         max_triplets=max(6, int(args.slot_max_slots_per_message) * 3),
         max_retries=1,
+        ttl_mode=getattr(args, "ttl_mode", "mode2"),
     )
     results = []
     for idx, case in enumerate(cases, start=1):
@@ -293,7 +342,15 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
             results.append({"id": cid, "slot": slot, "message": msg, "error": "invalid_case", "triplets": []})
             continue
         triplets = client.extract_for_slot(msg, slot)
-        results.append({"id": cid, "slot": slot, "message": msg, "triplets": [{"subject": t.subject, "relation": t.relation, "object": t.object} for t in triplets]})
+        results.append({
+            "id": cid,
+            "slot": slot,
+            "message": msg,
+            "triplets": [
+                {"subject": t.subject, "relation": t.relation, "object": t.object, "ttl": t.ttl}
+                for t in triplets
+            ],
+        })
     with open(args.output_path, "w", encoding="utf-8") as f:
         json.dump({"results": results}, f, ensure_ascii=False, indent=2)
     print(f"Saved: {args.output_path}")
@@ -306,10 +363,12 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
     rows = read_jsonl(args.dataset_path)
     results_logs = []
     results_compact = []
+
     for row in rows:
         dialogue_id = str(row.get("id"))
         question = row.get("question", "")
         write_logs = []
+
         for msg in iter_user_messages(row):
             write_logs.append(pipeline.write_to_memory(dialogue_id=dialogue_id, message=msg))
 
@@ -321,25 +380,44 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
                 pipeline.add_recent_pair(dialogue_id, pending_user, msg.content)
                 pending_user = None
 
-        answer = (
-            pipeline.answer_without_final_llm(dialogue_id=dialogue_id, question=question)
-            if args.no_final_llm
-            else pipeline.answer(dialogue_id=dialogue_id, question=question)
-        )
-        results_logs.append({"dialogue_id": dialogue_id, "question": question, "write_logs": write_logs, "answer": answer})
-        compact_answer = answer if isinstance(answer, dict) else pipeline.answer_without_final_llm(dialogue_id=dialogue_id, question=question)
-        results_compact.append(
-            {
-                "dialogue_id": dialogue_id,
-                "question": question,
-                "use_memory": compact_answer.get("use_memory"),
-                "retrieved": compact_answer.get("retrieved", []),
-                "memory_slots": compact_answer.get("memory_slots", []),
-                "memory_context": compact_answer.get("memory_context_for_final_llm"),
-                "recent_pairs": compact_answer.get("recent_pairs", []),
-            }
-        )
+        # Always collect the verbose answer (includes final_llm_prompt for logs)
+        verbose_answer = pipeline.answer_without_final_llm(dialogue_id=dialogue_id, question=question)
+
+        if args.no_final_llm:
+            answer = verbose_answer
+        else:
+            answer = pipeline.answer(dialogue_id=dialogue_id, question=question)
+
+        # Build the log entry with full prompt context
+        log_entry = {
+            "dialogue_id": dialogue_id,
+            "question": question,
+            "write_logs": write_logs,
+            "answer": answer,
+            # Full final LLM prompt (system + user with memory context)
+            "final_llm_prompt": (
+                verbose_answer.get("final_llm_prompt")
+                if args.no_final_llm
+                else pipeline.final_llm._last_prompt_messages
+            ),
+            "memory_context_for_final_llm": verbose_answer.get("memory_context_for_final_llm"),
+            "expired_facts": verbose_answer.get("expired_facts", []),
+        }
+        results_logs.append(log_entry)
+
+        compact_answer = verbose_answer
+        results_compact.append({
+            "dialogue_id": dialogue_id,
+            "question": question,
+            "use_memory": compact_answer.get("use_memory"),
+            "retrieved": compact_answer.get("retrieved", []),
+            "memory_slots": compact_answer.get("memory_slots", []),
+            "memory_context": compact_answer.get("memory_context_for_final_llm"),
+            "recent_pairs": compact_answer.get("recent_pairs", []),
+            "expired_facts": compact_answer.get("expired_facts", []),
+        })
         pipeline.clear_memory(dialogue_id)
+
     with open(args.output_path, "w", encoding="utf-8") as f:
         json.dump(results_compact, f, ensure_ascii=False, indent=2)
     logs_output_path = args.output_path.removesuffix(".json") + "_logs.json"
@@ -354,7 +432,7 @@ def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
 
     pipeline = build_pipeline(args)
     did = args.dialogue_id
-    print("Inference mode. Commands: /clear, /exit")
+    print("Inference mode. Commands: /clear, /exit, /memory, /expired")
     while True:
         raw = input("user> ").strip()
         if not raw:
@@ -364,6 +442,14 @@ def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
         if raw == "/clear":
             pipeline.clear_memory(did)
             print("memory cleared")
+            continue
+        if raw == "/memory":
+            slots = pipeline.dst.slots_with_messages(did)
+            print(json.dumps(slots, ensure_ascii=False, indent=2))
+            continue
+        if raw == "/expired":
+            expired = pipeline.dst.expired_facts(did)
+            print(json.dumps(expired, ensure_ascii=False, indent=2))
             continue
         log = pipeline.write_to_memory(did, Message(role="user", content=raw))
         if args.no_final_llm:
@@ -389,7 +475,11 @@ def cmd_pipeline_inference_single_turn(args: argparse.Namespace) -> None:
         return
     answer = pipeline.answer(args.dialogue_id, msg)
     pipeline.add_recent_pair(args.dialogue_id, msg, answer)
-    print(json.dumps({"write_log": log, "answer": answer}, ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "write_log": log,
+        "answer": answer,
+        "final_llm_prompt": pipeline.final_llm._last_prompt_messages,
+    }, ensure_ascii=False, indent=2))
 
 
 def main() -> None:

@@ -32,6 +32,9 @@ class FinalLLMClient:
         self.max_tokens = max_tokens
         self.http_referer = http_referer or ""
         self.x_title = x_title or ""
+        # Last sent messages (system + user) — populated on every generate() call.
+        # Used for logging to *_logs.json.
+        self._last_prompt_messages: List[Dict[str, str]] = []
         logger.info(
             "FinalLLMClient initialized mode=%s model=%s temperature=%s",
             self.mode,
@@ -39,56 +42,13 @@ class FinalLLMClient:
             temperature,
         )
 
-    def generate(
+    def build_messages(
         self,
         question: str,
         memory_context: Any,
         recent_pairs: Optional[List[Dict[str, str]]] = None,
-    ) -> str:
-        logger.info(
-            "FinalLLM generate mode=%s question_len=%d has_memory=%s pairs=%d",
-            self.mode,
-            len(question),
-            bool(memory_context),
-            len(recent_pairs or []),
-        )
-        if self.mode == "stub":
-            compact = json.dumps(memory_context, ensure_ascii=False)[:300] if memory_context else "no-memory"
-            return f"[STUB_ANSWER] q='{question}' | memory='{compact}'"
-
-        if self.mode == "local":
-            raise NotImplementedError("TODO: local LLM backend is not implemented yet.")
-
-        if self.mode in ("api", "openrouter"):
-            return self._openai_compatible_chat(
-                question=question,
-                memory_context=memory_context,
-                recent_pairs=recent_pairs or [],
-            )
-
-        raise ValueError(f"Unknown llm_mode: {self.mode}")
-
-    def _chat_url(self) -> str:
-        base = self.api_url
-        if not base:
-            base = "https://openrouter.ai/api/v1"
-        if base.endswith("/chat/completions"):
-            return base
-        return f"{base.rstrip('/')}/chat/completions"
-
-    def _openai_compatible_chat(
-        self,
-        question: str,
-        memory_context: Any,
-        recent_pairs: List[Dict[str, str]],
-    ) -> str:
-        if not self.api_key.strip():
-            raise ValueError(
-                "llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY."
-            )
-        if not self.model.strip():
-            raise ValueError("llm_model is empty; set it in run_config.json or --llm-model.")
-
+    ) -> List[Dict[str, str]]:
+        """Build the chat messages list without sending. Exposed for logging."""
         system = (
             "Ты помощник в диалоге с долговременной памятью в виде слотов. "
             "Отвечай по-русски, кратко и по делу. "
@@ -109,15 +69,67 @@ class FinalLLMClient:
             "Текущий запрос пользователя:\n"
             f"{question}"
         )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
+    def generate(
+        self,
+        question: str,
+        memory_context: Any,
+        recent_pairs: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        messages = self.build_messages(question, memory_context, recent_pairs or [])
+        self._last_prompt_messages = messages
+
+        logger.info(
+            "FinalLLM generate mode=%s question_len=%d has_memory=%s pairs=%d",
+            self.mode,
+            len(question),
+            bool(memory_context),
+            len(recent_pairs or []),
+        )
+        # Full prompt at DEBUG level (console / file handler)
+        logger.debug(
+            "FinalLLM full prompt:\nSYSTEM:\n%s\n\nUSER:\n%s",
+            messages[0]["content"],
+            messages[1]["content"],
+        )
+
+        if self.mode == "stub":
+            compact = json.dumps(memory_context, ensure_ascii=False)[:300] if memory_context else "no-memory"
+            return f"[STUB_ANSWER] q='{question}' | memory='{compact}'"
+
+        if self.mode == "local":
+            raise NotImplementedError("TODO: local LLM backend is not implemented yet.")
+
+        if self.mode in ("api", "openrouter"):
+            return self._openai_compatible_chat(messages)
+
+        raise ValueError(f"Unknown llm_mode: {self.mode}")
+
+    def _chat_url(self) -> str:
+        base = self.api_url
+        if not base:
+            base = "https://openrouter.ai/api/v1"
+        if base.endswith("/chat/completions"):
+            return base
+        return f"{base.rstrip('/')}/chat/completions"
+
+    def _openai_compatible_chat(self, messages: List[Dict[str, str]]) -> str:
+        if not self.api_key.strip():
+            raise ValueError(
+                "llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY."
+            )
+        if not self.model.strip():
+            raise ValueError("llm_model is empty; set it in run_config.json or --llm-model.")
 
         body = {
             "model": self.model,
             "temperature": float(self.temperature),
             "max_tokens": int(self.max_tokens),
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
         }
 
         headers = {

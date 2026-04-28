@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from .models import VALID_TTL_VALUES
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology
 from .serving import GenerationConfig, LocalHFServing
 from .triplet_messages import build_triplet_messages
@@ -19,6 +20,7 @@ class ExtractedTriplet:
     subject: str
     relation: str
     object: str
+    ttl: str = "inf"
 
     def as_line(self) -> str:
         return f"{self.subject} | {self.relation} | {self.object}"
@@ -33,19 +35,21 @@ class TripletExtractionClient:
         ontology: SlotOntology = DEFAULT_USER_SLOTS,
         max_triplets: int = 12,
         max_retries: int = 1,
+        ttl_mode: str = "mode2",
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.ontology = ontology
         self.max_triplets = max_triplets
         self.max_retries = max_retries
+        self.ttl_mode = ttl_mode
 
         if self.use_stub:
             logger.info("Triplet extractor in STUB mode")
         elif self.serving is None:
             raise ValueError("TripletExtractionClient requires serving when use_stub is False")
         else:
-            logger.info("Triplet extractor using LocalHFServing device=%s", self.serving.device)
+            logger.info("Triplet extractor using LocalHFServing device=%s ttl_mode=%s", self.serving.device, ttl_mode)
 
     def extract(self, user_message: str) -> List[ExtractedTriplet]:
         return self._extract_impl(user_message, slot_name=None)
@@ -66,6 +70,7 @@ class TripletExtractionClient:
             include_slot=slot_name is None,
             ontology_slots=self.ontology.slot_names,
             max_triplets=self.max_triplets,
+            ttl_mode=self.ttl_mode,
         )
 
         tries = self.max_retries + 1
@@ -73,7 +78,7 @@ class TripletExtractionClient:
         for attempt in range(1, tries + 1):
             last = self.serving.generate_chat(
                 messages,
-                generation_config=GenerationConfig(max_new_tokens=450, do_sample=False),
+                generation_config=GenerationConfig(max_new_tokens=512, do_sample=False),
             )
             logger.info("SLOT: [%s] Triplet extractor raw attempt=%d: %s", slot_name, attempt, last[:800])
             parsed = self._parse(last, forced_slot=slot_name)
@@ -87,7 +92,6 @@ class TripletExtractionClient:
         blob = (text or "").strip()
         if not blob:
             return None
-        # Some models may wrap JSON into fences; tolerate it.
         if blob.startswith("```"):
             lines = blob.splitlines()
             if lines and lines[0].startswith("```"):
@@ -100,7 +104,6 @@ class TripletExtractionClient:
         try:
             obj = json.loads(blob)
         except Exception:
-            # try extracting first JSON object
             extracted = self._extract_first_json_object(blob)
             if not extracted:
                 return None
@@ -125,7 +128,10 @@ class TripletExtractionClient:
             objv = self._normalize_field(str(it.get("object", "")))
             if not slot or not subj or not rel or not objv:
                 continue
-            out.append(ExtractedTriplet(slot=slot, subject=subj, relation=rel, object=objv))
+            ttl = str(it.get("ttl", "inf")).strip().lower()
+            if ttl not in VALID_TTL_VALUES:
+                ttl = "inf"
+            out.append(ExtractedTriplet(slot=slot, subject=subj, relation=rel, object=objv, ttl=ttl))
 
         return out
 
@@ -133,15 +139,12 @@ class TripletExtractionClient:
     def _normalize_field(s: str) -> str:
         """
         Normalize a triplet field produced by the LLM.
-        Model is asked to output lowercase words separated by spaces (no underscores).
-        Post-processing: strip whitespace, uppercase, replace any run of
-        spaces / dashes / underscores with a single underscore.
+        Model outputs lowercase Russian words with spaces; we keep that format
+        (lowercase, single spaces) for natural language compatibility with Meno-Lite.
         """
-        s = s.strip()
-        if not s:
-            return s
-        s = re.sub(r"[\s\-_]+", "_", s).strip("_")
-        return s.upper()
+        s = s.strip().lower()
+        s = re.sub(r'\s+', ' ', s)
+        return s
 
     @staticmethod
     def _extract_first_json_object(text: str) -> Optional[str]:
@@ -158,4 +161,3 @@ class TripletExtractionClient:
                 if depth == 0:
                     return text[start : i + 1]
         return None
-
