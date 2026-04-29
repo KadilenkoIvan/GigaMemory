@@ -42,7 +42,11 @@ def build_conflict_messages(
         "and adds no new information.\n"
         "IF there is no conflict and no duplicate — return {\"deactivate\":[], \"skip_new\":[]}.\n"
         "DO NOT deactivate facts that remain valid alongside the new ones.\n"
-        "DO NOT skip new triplets that add genuinely new information.\n\n"
+        "DO NOT skip new triplets that add genuinely new information.\n"
+        "IMPORTANT: If the existing and new triplet have the SAME subject and SAME object but "
+        "DIFFERENT relations, they express COMPLEMENTARY information about the same entity "
+        "(e.g. 'есть партнёр' and 'живёт вместе с' for the same partner) — "
+        "keep BOTH, return {\"deactivate\":[], \"skip_new\":[]}.\n\n"
         f"SLOT: {slot_name}\n"
     )
 

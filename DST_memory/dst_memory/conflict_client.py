@@ -34,6 +34,15 @@ class TripletConflictClient:
 
     Rule-based pass runs first (no LLM). LLM is only called when rule pass
     finds same-subject candidates that were NOT handled by exact-match dedup.
+
+    allow_multi_relation_same_object:
+        When True (default), two triplets with the same subject AND the same object
+        but DIFFERENT relations are treated as complementary facts and the LLM
+        conflict check is skipped for them.
+        Example: "пользователь | есть партнёр | партнёр пользователя" and
+                 "пользователь | живёт вместе с | партнёр пользователя"
+                 → both are kept as separate, valid facts.
+        Set to False to always run the LLM check for any same-subject pair.
     """
 
     def __init__(
@@ -42,10 +51,12 @@ class TripletConflictClient:
         use_stub: bool,
         serving: Optional[LocalHFServing] = None,
         max_retries: int = 1,
+        allow_multi_relation_same_object: bool = True,
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
+        self.allow_multi_relation_same_object = allow_multi_relation_same_object
 
         if not use_stub and serving is None:
             raise ValueError("TripletConflictClient requires serving when use_stub is False")
@@ -106,7 +117,32 @@ class TripletConflictClient:
                 and e.record_id not in handled_existing
                 and e.relation != new_t.relation  # different relation — potential semantic conflict
             ]
-            if ambiguous_existing:
+            if not ambiguous_existing:
+                continue
+
+            if self.allow_multi_relation_same_object:
+                # Filter out complementary facts: same subject + same object + different relation.
+                # These add independent information and should NOT trigger conflict resolution.
+                truly_ambiguous = [
+                    e for e in ambiguous_existing
+                    if e.object != new_t.object  # different object → potentially conflicting
+                ]
+                if truly_ambiguous:
+                    subjects_needing_llm.add(new_t.subject)
+                    logger.debug(
+                        "Conflict LLM candidate: subj=%s new_rel=%s (complementary same-object "
+                        "excluded=%d, ambiguous=%d)",
+                        new_t.subject, new_t.relation,
+                        len(ambiguous_existing) - len(truly_ambiguous),
+                        len(truly_ambiguous),
+                    )
+                else:
+                    logger.debug(
+                        "Conflict: all ambiguous existing have same object as new triplet "
+                        "→ treating as complementary, skipping LLM for subj=%s",
+                        new_t.subject,
+                    )
+            else:
                 subjects_needing_llm.add(new_t.subject)
 
         if not subjects_needing_llm or self.use_stub:

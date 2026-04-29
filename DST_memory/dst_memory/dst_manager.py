@@ -629,7 +629,9 @@ class DSTManager:
         """
         Memory as an ordered list of slots with active records.
         Triggers lazy TTL expiry before building the payload.
+        Each slot dict includes 'slot_label' (Russian name) alongside 'slot' (canonical key).
         """
+        from .ontology import CANONICAL_TO_RU_LABEL
         state = self.get_state(dialogue_id)
         # Lazy expiry on read
         expired = self._expire_all(state)
@@ -655,7 +657,11 @@ class DSTManager:
                     "ttl": rec.ttl,
                     "created_at_datetime": rec.created_at_datetime,
                 })
-            result.append({"slot": slot, "messages": messages})
+            result.append({
+                "slot": slot,
+                "slot_label": CANONICAL_TO_RU_LABEL.get(slot, slot),
+                "messages": messages,
+            })
         return result
 
     def clear_dialogue(self, dialogue_id: str) -> None:

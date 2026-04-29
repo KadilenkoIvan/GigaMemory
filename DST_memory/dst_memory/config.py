@@ -129,3 +129,16 @@ class PipelineConfig:
     #   Использовать pymorphy2 для лемматизации при сравнении слов
     #   в режиме "heuristic". Улучшает попадание ("Москве" → "москва").
     deletion_use_pymorphy: bool = False
+
+    # -------------------------------------------------------------------
+    # Conflict resolver settings
+    # -------------------------------------------------------------------
+    # conflict_allow_multi_relation_same_object:
+    #   When True (default): if an existing fact and a new fact have the SAME
+    #   subject AND the same object but DIFFERENT relations, they are treated
+    #   as complementary facts and the LLM conflict check is skipped.
+    #   Example: "пользователь | есть партнёр | партнёр пользователя" and
+    #            "пользователь | живёт вместе с | партнёр пользователя"
+    #   → both survive without LLM intervention.
+    #   Set to False to always run the LLM check for any same-subject pair.
+    conflict_allow_multi_relation_same_object: bool = True
