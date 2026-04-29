@@ -89,26 +89,36 @@ class TripletExtractionClient:
         user_message: str,
         slot_name: str,
         existing_triplets: List[str],
+        enable_deletion: bool = False,
     ) -> Tuple[List[ExtractedTriplet], List[DeletionSignal]]:
         """
         Извлечение триплетов для конкретного слота с передачей контекста.
+        enable_deletion=True — включить инструкции про "delete" в промпт
+        (только для triplet_deletion_mode="llm_inline").
         Возвращает (новые триплеты, сигналы удаления).
         """
         slot = self.ontology.resolve(slot_name)
         if not slot:
             return [], []
-        return self._extract_impl(user_message, slot_name=slot, existing_triplets=existing_triplets)
+        return self._extract_impl(user_message, slot_name=slot,
+                                  existing_triplets=existing_triplets,
+                                  enable_deletion=enable_deletion)
 
     def _extract_impl(
         self,
         user_message: str,
         slot_name: Optional[str],
         existing_triplets: Optional[List[str]],
+        enable_deletion: Optional[bool] = None,
     ) -> Tuple[List[ExtractedTriplet], List[DeletionSignal]]:
         if self.use_stub:
             return [], []
 
-        enable_deletion = existing_triplets is not None
+        # enable_deletion=None → автоматически True только при llm_inline режиме.
+        # Вызывающий код должен явно передать True для llm_inline, иначе False.
+        # Контекст (existing_triplets) и инструкции удаления — независимы.
+        if enable_deletion is None:
+            enable_deletion = False
         messages = build_triplet_messages(
             user_message,
             slot_name=slot_name,

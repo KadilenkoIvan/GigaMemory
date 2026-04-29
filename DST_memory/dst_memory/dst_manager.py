@@ -305,10 +305,14 @@ class DSTManager:
                 existing_lines = [
                     r.as_line() for r in active_now[: self.slot_context_max_facts]
                 ]
+                # enable_deletion=True ONLY for llm_inline mode — other modes
+                # (heuristic, llm_separate, none) use context for awareness only,
+                # the model should NOT output delete arrays in those modes.
+                inline_mode = self.triplet_deletion_mode == "llm_inline"
                 slot_triplets, slot_deletions = self.triplet_extractor.extract_for_slot_with_context(
-                    user_text, slot, existing_lines
+                    user_text, slot, existing_lines, enable_deletion=inline_mode
                 )
-                if self.triplet_deletion_mode == "llm_inline":
+                if inline_mode:
                     inline_deletions_by_slot[slot].extend(slot_deletions)
             else:
                 slot_triplets = self.triplet_extractor.extract_for_slot(user_text, slot)
@@ -486,14 +490,41 @@ class DSTManager:
 
                 if all_existing:
                     resolution = self.conflict_resolver.resolve(slot, all_existing, slot_triplets)
+
+                    # Build record_id → triplet text map for logging
+                    _id_to_text = {e.record_id: f"{e.subject}|{e.relation}|{e.object}" for e in all_existing}
+
                     for rid in resolution.deactivate_ids:
                         for rec in state.slots.get(slot, []):
                             if rec.record_id == rid and rec.is_active:
                                 rec.is_active = False
                                 rec.updated_at_step = state.step
                                 deactivated_record_ids.append(rid)
-                                logger.info("Deactivated record_id=%d slot=%s step=%d", rid, slot, state.step)
+                                logger.info(
+                                    "Conflict resolver: DEACTIVATED record_id=%d slot=%s "
+                                    "triplet=[%s] step=%d",
+                                    rid, slot,
+                                    _id_to_text.get(rid, "?|?|?"),
+                                    state.step,
+                                )
+
+                    for idx in resolution.skip_new_indices:
+                        if 0 <= idx < len(slot_triplets):
+                            t = slot_triplets[idx]
+                            logger.info(
+                                "Conflict resolver: SKIPPED new idx=%d slot=%s "
+                                "triplet=[%s|%s|%s]",
+                                idx, slot, t.subject, t.relation, t.object,
+                            )
+
                     skip_indices = resolution.skip_new_indices
+
+                    if not resolution.deactivate_ids and not resolution.skip_new_indices:
+                        logger.debug(
+                            "Conflict resolver: no conflicts found slot=%s "
+                            "existing=%d new=%d",
+                            slot, len(all_existing), len(slot_triplets),
+                        )
 
             if self.ragu_processor is not None and deactivated_record_ids:
                 from .ragu_graph_processor import GraphTripletDelete
@@ -504,11 +535,14 @@ class DSTManager:
 
             # --- Insert surviving new triplets ---
             new_deltas = []
+            inserted_count = 0
             for idx, t in enumerate(slot_triplets):
                 if idx in skip_indices or idx in semantic_dedup_skip_new:
-                    logger.debug(
-                        "Skipping duplicate triplet idx=%d (%s|%s|%s)",
-                        idx, t.subject, t.relation, t.object,
+                    logger.info(
+                        "Conflict resolver: SKIPPED insertion idx=%d slot=%s "
+                        "triplet=[%s|%s|%s] reason=%s",
+                        idx, slot, t.subject, t.relation, t.object,
+                        "conflict_resolver" if idx in skip_indices else "semantic_dedup",
                     )
                     continue
 
@@ -558,9 +592,25 @@ class DSTManager:
                     ttl=ttl,
                     created_at_datetime=rec.created_at_datetime,
                 ))
+                inserted_count += 1
+                logger.info(
+                    "INSERTED record_id=%d slot=%s triplet=[%s|%s|%s] ttl=%s step=%d",
+                    rid, slot, t.subject, t.relation, t.object, ttl, state.step,
+                )
 
             if self.ragu_processor is not None and new_deltas:
                 self.ragu_processor.upsert_triplet_deltas(new_deltas)
+
+            logger.info(
+                "Slot %s summary step=%d: inserted=%d skipped=%d deactivated_conflict=%d "
+                "deactivated_deletion=%d deactivated_dedup=%d",
+                slot, state.step,
+                inserted_count,
+                len(skip_indices) + len(semantic_dedup_skip_new),
+                len(deactivated_record_ids),
+                len([s for s in deletion_signals]),
+                len(semantic_dedup_deactivate),
+            )
 
         return created, selected_slots
 
