@@ -70,13 +70,19 @@ def build_conflict_messages(
 
 def parse_conflict_response(text: str) -> Dict[str, List[int]]:
     """Parse model response → {deactivate: [...], skip_new: [...]}."""
-    # Strip markdown fences if model adds them
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
     data = json.loads(text)
+
+    def _to_int(x: Any) -> int:
+        """Accept plain int, str-int, or {"idx": N} / {"record_id": N} style objects."""
+        if isinstance(x, dict):
+            return int(x.get("idx") or x.get("record_id") or x.get("id") or 0)
+        return int(x)
+
     return {
-        "deactivate": [int(x) for x in data.get("deactivate", [])],
-        "skip_new": [int(x) for x in data.get("skip_new", [])],
+        "deactivate": [_to_int(x) for x in data.get("deactivate", [])],
+        "skip_new": [_to_int(x) for x in data.get("skip_new", [])],
     }

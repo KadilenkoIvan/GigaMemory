@@ -394,11 +394,29 @@ class DSTManager:
             if self.semantic_dedup_enabled:
                 for idx, new_t in enumerate(slot_triplets):
                     similar_rec = self._semantic_dedup(new_t, active_in_slot)
-                    if similar_rec is not None and similar_rec.record_id not in semantic_dedup_deactivate:
+                    if similar_rec is None or similar_rec.record_id in semantic_dedup_deactivate:
+                        continue
+
+                    new_len = len(new_t.as_line())
+                    old_len = len(similar_rec.value)
+
+                    if new_len > old_len:
+                        # New triplet is richer → replace old record with new
                         semantic_dedup_deactivate.append(similar_rec.record_id)
                         logger.info(
-                            "Semantic dedup: marking record_id=%d for deactivation (new triplet refreshes it)",
-                            similar_rec.record_id,
+                            "Semantic dedup: replacing record_id=%d (old_len=%d) "
+                            "with new triplet (new_len=%d) [%s|%s|%s]",
+                            similar_rec.record_id, old_len, new_len,
+                            new_t.subject, new_t.relation, new_t.object,
+                        )
+                    else:
+                        # Existing record is longer/richer → keep old, skip new
+                        semantic_dedup_skip_new.add(idx)
+                        logger.info(
+                            "Semantic dedup: keeping record_id=%d (old_len=%d >= new_len=%d), "
+                            "skipping new [%s|%s|%s]",
+                            similar_rec.record_id, old_len, new_len,
+                            new_t.subject, new_t.relation, new_t.object,
                         )
 
                 # Apply semantic dedup deactivations
@@ -459,7 +477,7 @@ class DSTManager:
             # --- Insert surviving new triplets ---
             new_deltas = []
             for idx, t in enumerate(slot_triplets):
-                if idx in skip_indices:
+                if idx in skip_indices or idx in semantic_dedup_skip_new:
                     logger.debug(
                         "Skipping duplicate triplet idx=%d (%s|%s|%s)",
                         idx, t.subject, t.relation, t.object,
