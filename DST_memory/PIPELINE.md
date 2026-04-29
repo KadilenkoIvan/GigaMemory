@@ -11,6 +11,7 @@
 Цели:
 - записывать только значимую пользовательскую информацию;
 - поддерживать обновление/деактивацию конфликтующих фактов;
+- **удалять устаревшие факты** при явном отказе пользователя (новые режимы);
 - управлять временем жизни (TTL) каждого факта и автоматически «протухать» устаревшие записи;
 - дедуплицировать семантически близкие факты в рамках одного слота;
 - извлекать релевантный memory context для ответа;
@@ -25,8 +26,17 @@ flowchart TD
     inputMsg[UserMessage] --> writePath[WritePath]
     writePath --> importance[ImportanceClassifier]
     importance --> slotSelect[SlotSelect]
-    slotSelect --> tripletExtract[TripletExtraction]
-    tripletExtract --> conflictResolve[ConflictResolver]
+    slotSelect --> contextGather{slot_context_enabled?}
+    contextGather -- "да: gather active facts" --> tripletExtractCtx[TripletExtraction+Context]
+    contextGather -- "нет" --> tripletExtract[TripletExtraction]
+    tripletExtractCtx --> deletionMode{triplet_deletion_mode}
+    tripletExtract --> deletionMode
+    deletionMode -- "llm_inline: delete signals from extraction" --> applyDeletions[ApplyDeletions]
+    deletionMode -- "heuristic: NegationDetector" --> applyDeletions
+    deletionMode -- "llm_separate: TripletDeletionClient" --> applyDeletions
+    deletionMode -- "none" --> semanticDedup[SemanticDedup]
+    applyDeletions --> semanticDedup
+    semanticDedup --> conflictResolve[ConflictResolver]
     conflictResolve --> dstState[DSTStateUpdate]
     dstState --> raguSync[RAGUSync]
 

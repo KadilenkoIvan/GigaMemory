@@ -4,7 +4,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import VALID_TTL_VALUES
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology
@@ -21,6 +21,17 @@ class ExtractedTriplet:
     relation: str
     object: str
     ttl: str = "inf"
+
+    def as_line(self) -> str:
+        return f"{self.subject} | {self.relation} | {self.object}"
+
+
+@dataclass(frozen=True)
+class DeletionSignal:
+    """Сигнал явного удаления факта, выданный моделью или детектором."""
+    subject: str
+    relation: str
+    object: str
 
     def as_line(self) -> str:
         return f"{self.subject} | {self.relation} | {self.object}"
@@ -52,18 +63,52 @@ class TripletExtractionClient:
             logger.info("Triplet extractor using LocalHFServing device=%s ttl_mode=%s", self.serving.device, ttl_mode)
 
     def extract(self, user_message: str) -> List[ExtractedTriplet]:
-        return self._extract_impl(user_message, slot_name=None)
+        triplets, _ = self._extract_impl(user_message, slot_name=None, existing_triplets=None)
+        return triplets
 
     def extract_for_slot(self, user_message: str, slot_name: str) -> List[ExtractedTriplet]:
         slot = self.ontology.resolve(slot_name)
         if not slot:
             return []
-        return self._extract_impl(user_message, slot_name=slot)
+        triplets, _ = self._extract_impl(user_message, slot_name=slot, existing_triplets=None)
+        return triplets
 
-    def _extract_impl(self, user_message: str, slot_name: Optional[str]) -> List[ExtractedTriplet]:
+    def extract_with_context(
+        self,
+        user_message: str,
+        existing_triplets: List[str],
+    ) -> Tuple[List[ExtractedTriplet], List[DeletionSignal]]:
+        """
+        Извлечение триплетов с передачей контекста текущих фактов (без указания слота).
+        Возвращает (новые триплеты, сигналы удаления).
+        """
+        return self._extract_impl(user_message, slot_name=None, existing_triplets=existing_triplets)
+
+    def extract_for_slot_with_context(
+        self,
+        user_message: str,
+        slot_name: str,
+        existing_triplets: List[str],
+    ) -> Tuple[List[ExtractedTriplet], List[DeletionSignal]]:
+        """
+        Извлечение триплетов для конкретного слота с передачей контекста.
+        Возвращает (новые триплеты, сигналы удаления).
+        """
+        slot = self.ontology.resolve(slot_name)
+        if not slot:
+            return [], []
+        return self._extract_impl(user_message, slot_name=slot, existing_triplets=existing_triplets)
+
+    def _extract_impl(
+        self,
+        user_message: str,
+        slot_name: Optional[str],
+        existing_triplets: Optional[List[str]],
+    ) -> Tuple[List[ExtractedTriplet], List[DeletionSignal]]:
         if self.use_stub:
-            return []
+            return [], []
 
+        enable_deletion = existing_triplets is not None
         messages = build_triplet_messages(
             user_message,
             slot_name=slot_name,
@@ -71,6 +116,8 @@ class TripletExtractionClient:
             ontology_slots=self.ontology.slot_names,
             max_triplets=self.max_triplets,
             ttl_mode=self.ttl_mode,
+            existing_triplets=existing_triplets,
+            enable_deletion=enable_deletion,
         )
 
         tries = self.max_retries + 1
@@ -82,14 +129,19 @@ class TripletExtractionClient:
             )
             slot_label = slot_name if slot_name is not None else "SINGLE_PASS"
             logger.info("Triplet extractor slot=[%s] attempt=%d raw: %s", slot_label, attempt, last[:800])
-            parsed = self._parse(last, forced_slot=slot_name)
+            parsed = self._parse(last, forced_slot=slot_name, with_deletions=enable_deletion)
             if parsed is not None:
                 return parsed
 
         logger.warning("Triplet extractor failed to parse JSON, returning empty list")
-        return []
+        return [], []
 
-    def _parse(self, text: str, forced_slot: Optional[str] = None) -> Optional[List[ExtractedTriplet]]:
+    def _parse(
+        self,
+        text: str,
+        forced_slot: Optional[str] = None,
+        with_deletions: bool = False,
+    ) -> Optional[Tuple[List[ExtractedTriplet], List[DeletionSignal]]]:
         blob = (text or "").strip()
         if not blob:
             return None
@@ -134,7 +186,21 @@ class TripletExtractionClient:
                 ttl = "inf"
             out.append(ExtractedTriplet(slot=slot, subject=subj, relation=rel, object=objv, ttl=ttl))
 
-        return out
+        # --- Parse deletion signals (only when with_deletions=True) ---
+        deletions: List[DeletionSignal] = []
+        if with_deletions:
+            delete_items = obj.get("delete", [])
+            if isinstance(delete_items, list):
+                for d in delete_items:
+                    if not isinstance(d, dict):
+                        continue
+                    ds = self._normalize_field(str(d.get("subject", "")))
+                    dr = self._normalize_field(str(d.get("relation", "")))
+                    do = self._normalize_field(str(d.get("object", "")))
+                    if ds and dr and do:
+                        deletions.append(DeletionSignal(subject=ds, relation=dr, object=do))
+
+        return out, deletions
 
     @staticmethod
     def _normalize_field(s: str) -> str:

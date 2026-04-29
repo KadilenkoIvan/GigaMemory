@@ -68,6 +68,10 @@ def build_pipeline(args: argparse.Namespace):
         ttl_slot_overrides=json.loads(getattr(args, "ttl_slot_overrides", "{}") or "{}"),
         ttl_semantic_dedup_enabled=getattr(args, "ttl_semantic_dedup_enabled", True),
         ttl_semantic_dedup_threshold=float(getattr(args, "ttl_semantic_dedup_threshold", 0.9)),
+        slot_context_enabled=getattr(args, "slot_context_enabled", False),
+        slot_context_max_facts=int(getattr(args, "slot_context_max_facts", 10)),
+        triplet_deletion_mode=getattr(args, "triplet_deletion_mode", "none"),
+        deletion_use_pymorphy=getattr(args, "deletion_use_pymorphy", False),
     )
 
     logger.info(
@@ -187,6 +191,45 @@ def create_parser(
         type=float,
         default=float(s.get("ttl_semantic_dedup_threshold", 0.9)),
         help="Cosine similarity threshold for semantic dedup (default: 0.9)",
+    )
+
+    # Slot context & deletion parameters
+    parser.add_argument(
+        "--slot-context-enabled",
+        dest="slot_context_enabled",
+        action="store_const",
+        const=True,
+        default=bool(s.get("slot_context_enabled", False)),
+        help="Pass current slot facts to extraction model (enables richer update/delete behaviour)",
+    )
+    parser.add_argument(
+        "--slot-context-max-facts",
+        dest="slot_context_max_facts",
+        type=int,
+        default=int(s.get("slot_context_max_facts", 10)),
+        help="Max facts per slot to include in extraction context (default: 10)",
+    )
+    parser.add_argument(
+        "--triplet-deletion-mode",
+        dest="triplet_deletion_mode",
+        type=str,
+        default=str(s.get("triplet_deletion_mode", "none")),
+        choices=["none", "heuristic", "llm_inline", "llm_separate"],
+        help=(
+            "Deletion mode: "
+            "none=disabled, "
+            "heuristic=rule-based negation (Variant C), "
+            "llm_inline=delete signals in extraction call (Variant A, requires slot_context_enabled), "
+            "llm_separate=separate LLM call (Variant B)"
+        ),
+    )
+    parser.add_argument(
+        "--deletion-use-pymorphy",
+        dest="deletion_use_pymorphy",
+        action="store_const",
+        const=True,
+        default=bool(s.get("deletion_use_pymorphy", False)),
+        help="Use pymorphy2 lemmatization in heuristic deletion mode",
     )
 
     sub = parser.add_subparsers(required=True)

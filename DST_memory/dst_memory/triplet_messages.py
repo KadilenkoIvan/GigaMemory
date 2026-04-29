@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .ontology import CANONICAL_TO_RU_LABEL, DEFAULT_USER_SLOTS, RU_SLOT_LABELS_ORDERED
 from .prompt_fewshots_ru import (
+    triplet_context_few_shot_messages,
     triplet_per_slot_few_shot_messages,
     triplet_single_pass_few_shot_messages,
 )
@@ -20,11 +21,29 @@ def build_triplet_messages(
     ontology_slots: List[str] | None = None,
     max_triplets: int = 12,
     ttl_mode: str = "mode2",
+    existing_triplets: Optional[List[str]] = None,
+    enable_deletion: bool = False,
 ) -> List[Dict[str, Any]]:
+    """
+    Построить чат-сообщения для экстракции триплетов.
+
+    Parameters
+    ----------
+    existing_triplets : list of str or None
+        Текущие активные факты слота в формате "subject | relation | object".
+        Если передано (даже пустой список) — добавляется контекстный блок.
+        None означает "без контекста" (старое поведение).
+    enable_deletion : bool
+        Расширить схему ответа полем "delete" для явных сигналов удаления.
+        Автоматически True когда existing_triplets is not None.
+    """
     _ = ontology_slots or DEFAULT_USER_SLOTS.slot_names
     slots_ru_json = json.dumps(RU_SLOT_LABELS_ORDERED, ensure_ascii=False)
 
     ru_slot = CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else None
+
+    use_context = existing_triplets is not None
+    use_deletion = enable_deletion or use_context
 
     slot_header = ""
     if slot_name and ru_slot:
@@ -35,16 +54,47 @@ def build_triplet_messages(
             "В JSON НЕ УКАЗЫВАЙ ПОЛЕ slot — СЛОТ ЗАДАЁТСЯ СИСТЕМОЙ.\n\n"
         )
 
+    # --- Блок контекста текущих фактов ---
+    context_block = ""
+    if use_context:
+        if existing_triplets:
+            facts_lines = "\n".join(f"  {line}" for line in existing_triplets)
+            context_block = (
+                f"ТЕКУЩИЕ ФАКТЫ В СЛОТЕ"
+                + (f" «{ru_slot}»" if ru_slot else "")
+                + " (УЖЕ СОХРАНЕНЫ В ПАМЯТИ):\n"
+                + facts_lines + "\n\n"
+                "ИНСТРУКЦИИ ПО РАБОТЕ С ТЕКУЩИМИ ФАКТАМИ:\n"
+                "  1. ЕСЛИ НОВЫЙ ФАКТ ЗАМЕНЯЕТ СУЩЕСТВУЮЩИЙ — добавь его в \"triplets\" И добавь\n"
+                "     старый факт в \"delete\". Для сохранения истории добавь в \"triplets\"\n"
+                "     факт с префиксом «бывшее/прежнее» (пример: «бывшее место жительства»).\n"
+                "  2. ЕСЛИ ПОЛЬЗОВАТЕЛЬ ЯВНО ОТМЕНЯЕТ ФАКТ БЕЗ ЗАМЕНЫ — добавь старый факт\n"
+                "     в \"delete\". Можно добавить исторический факт в \"triplets\".\n"
+                "  3. ЕСЛИ ФАКТ ПРОСТО УТОЧНЯЕТСЯ — обнови через \"delete\" + новый \"triplets\".\n"
+                "  4. ЕСЛИ НОВОЕ СООБЩЕНИЕ НЕ МЕНЯЕТ ИЗВЕСТНЫЕ ФАКТЫ — \"delete\":[].\n"
+                "  5. НЕ ДУБЛИРУЙ УЖЕ СУЩЕСТВУЮЩИЕ ФАКТЫ В \"triplets\".\n\n"
+            )
+        else:
+            context_block = (
+                "ТЕКУЩИЕ ФАКТЫ В СЛОТЕ"
+                + (f" «{ru_slot}»" if ru_slot else "")
+                + ": (пусто — новых фактов ещё нет)\n\n"
+            )
+
     use_ttl = (ttl_mode == "mode2")
 
     if use_ttl:
         if include_slot:
             output_schema = (
                 '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер","ttl":"1y"}]}'
+                if not use_deletion else
+                '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер","ttl":"1y"}],"delete":[{"subject":"пользователь","relation":"работает как","object":"водитель"}]}'
             )
         else:
             output_schema = (
                 '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси","ttl":"1y"}]}'
+                if not use_deletion else
+                '{"triplets":[{"subject":"пользователь","relation":"место жительства","object":"сызрань","ttl":"1y"},{"subject":"пользователь","relation":"бывшее место жительства","object":"москва","ttl":"1y"}],"delete":[{"subject":"пользователь","relation":"место жительства","object":"москва"}]}'
             )
         ttl_block = (
             "\nДОПОЛНИТЕЛЬНО К КАЖДОМУ ТРИПЛЕТУ ДОБАВЛЯЙ ПОЛЕ TTL (время жизни факта).\n"
@@ -62,15 +112,28 @@ def build_triplet_messages(
         if include_slot:
             output_schema = (
                 '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}]}'
+                if not use_deletion else
+                '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}],"delete":[{"subject":"пользователь","relation":"работает как","object":"водитель"}]}'
             )
         else:
             output_schema = (
                 '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси"}]}'
+                if not use_deletion else
+                '{"triplets":[{"subject":"пользователь","relation":"место жительства","object":"сызрань"}],"delete":[{"subject":"пользователь","relation":"место жительства","object":"москва"}]}'
             )
         ttl_block = ""
 
+    delete_block = ""
+    if use_deletion:
+        delete_block = (
+            "\nПОЛЕ \"delete\" — список фактов для явного удаления из памяти.\n"
+            "Добавляй в \"delete\" только факты из текущего списка фактов слота.\n"
+            "Если нечего удалять — \"delete\":[].\n"
+        )
+
     system = (
         slot_header
+        + context_block
         + "ТЫ СИСТЕМА ИЗВЛЕЧЕНИЯ ФАКТОВ ИЗ РЕПЛИКИ ПОЛЬЗОВАТЕЛЯ.\n"
         "ПРЕДСТАВЬ ФАКТЫ КАК ТРИПЛЕТЫ: СУБЪЕКТ, СВЯЗЬ, ОБЪЕКТ.\n"
         "СУБЪЕКТ, СВЯЗЬ И ОБЪЕКТ ПИШИ СТРОЧНЫМИ БУКВАМИ (lowercase).\n"
@@ -105,6 +168,7 @@ def build_triplet_messages(
         "НЕ ВЫДУМЫВАЙ ФАКТЫ — только то, что явно сказано в сообщении.\n"
         "ИГНОРИРУЙ ЧИСТЫЕ ЭМОЦИИ БЕЗ ПРОВЕРЯЕМЫХ ФАКТОВ.\n"
         + ttl_block
+        + delete_block
         + f"ОНТОЛОГИЯ СЛОТОВ (СПРАВОЧНО): {slots_ru_json}\n"
         "ОТВЕТ ТОЛЬКО ВАЛИДНЫЙ JSON. БЕЗ MARKDOWN. БЕЗ ТЕКСТА ВНЕ JSON.\n"
         "СХЕМА ОТВЕТА:\n"
@@ -123,7 +187,22 @@ def build_triplet_messages(
             f"Извлеки триплеты только для слота «{ru_slot}»."
         )
 
-    if include_slot:
+    def user_turn_with_context(msg: str) -> str:
+        facts_str = "\n".join(existing_triplets) if existing_triplets else "(нет фактов)"
+        slot_part = f"Слот: {ru_slot}\n" if ru_slot else ""
+        return (
+            f"{slot_part}"
+            f"Текущие факты:\n{facts_str}\n\n"
+            f"Сообщение пользователя:\n{msg}\n\n"
+            "Извлеки новые/изменённые факты и укажи факты для удаления."
+        )
+
+    if use_context:
+        few_shot = triplet_context_few_shot_messages(
+            user_turn_with_context, slot_name=slot_name, use_ttl=use_ttl
+        )
+        user_turn = user_turn_with_context
+    elif include_slot:
         few_shot = triplet_single_pass_few_shot_messages(user_turn_no_slot, use_ttl=use_ttl)
         user_turn = user_turn_no_slot
     elif slot_name and ru_slot:

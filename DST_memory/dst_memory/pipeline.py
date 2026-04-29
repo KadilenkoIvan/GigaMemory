@@ -42,7 +42,8 @@ class DSTMemoryPipeline:
 
         logger.info(
             "Initializing pipeline threshold=%.3f top_k=%d llm_mode=%s gate=%s "
-            "memory_gate_stub=%s memory_strategy=%s ragu=%s ttl_mode=%s semantic_dedup=%s",
+            "memory_gate_stub=%s memory_strategy=%s ragu=%s ttl_mode=%s semantic_dedup=%s "
+            "slot_context=%s deletion_mode=%s",
             config.importance_threshold,
             config.retrieval_top_k,
             config.llm_mode,
@@ -52,6 +53,8 @@ class DSTMemoryPipeline:
             ragu_processor is not None,
             config.ttl_mode,
             config.ttl_semantic_dedup_enabled,
+            config.slot_context_enabled,
+            config.triplet_deletion_mode,
         )
         self.classifier = ImportanceClassifier(
             model_path=config.importance_model_path,
@@ -78,6 +81,27 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_retries=1,
         )
+
+        # --- Deletion components ---
+        negation_detector = None
+        deletion_client = None
+
+        if config.triplet_deletion_mode == "heuristic":
+            from .negation_detector import NegationDeletionDetector
+            negation_detector = NegationDeletionDetector(
+                use_pymorphy=config.deletion_use_pymorphy
+            )
+            logger.info("NegationDeletionDetector enabled pymorphy=%s", config.deletion_use_pymorphy)
+
+        elif config.triplet_deletion_mode == "llm_separate":
+            from .deletion_client import TripletDeletionClient
+            deletion_client = TripletDeletionClient(
+                use_stub=config.slot_use_stub,
+                serving=slot_serving,
+                max_retries=1,
+            )
+            logger.info("TripletDeletionClient (llm_separate) enabled")
+
         self.dst = DSTManager(
             triplet_extractor=triplet_extractor,
             slot_selector=slot_selector,
@@ -88,6 +112,11 @@ class DSTMemoryPipeline:
             ttl_slot_overrides=config.ttl_slot_overrides,
             semantic_dedup_enabled=config.ttl_semantic_dedup_enabled,
             semantic_dedup_threshold=config.ttl_semantic_dedup_threshold,
+            slot_context_enabled=config.slot_context_enabled,
+            slot_context_max_facts=config.slot_context_max_facts,
+            triplet_deletion_mode=config.triplet_deletion_mode,
+            negation_detector=negation_detector,
+            deletion_client=deletion_client,
         )
         gate_stub = config.memory_gate_use_stub or slot_serving is None
         self.memory_gate = MemoryGateClient(

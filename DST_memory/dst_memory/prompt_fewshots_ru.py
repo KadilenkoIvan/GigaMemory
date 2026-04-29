@@ -813,6 +813,151 @@ SLOT_UPDATE_EXTRA_FEWSHOT: List[Tuple[str, list, str]] = [
 
 
 # ---------------------------------------------------------------------------
+# Context-aware triplet few-shots (slot_context_enabled=True, Вариант A)
+# Формат user-turn: текущие факты + сообщение
+# Формат assistant: {"triplets":[...], "delete":[...]}
+# ---------------------------------------------------------------------------
+
+_CONTEXT_FEWSHOTS: List[Tuple[str, List[str], str, dict]] = [
+    # --- Переезд с указанием нового места (обновление + история) ---
+    (
+        "переехал в Сызрань с семьёй",
+        ["пользователь | место жительства | москва"],
+        "HOME",
+        {
+            "triplets": [
+                {"subject": "пользователь", "relation": "место жительства", "object": "сызрань", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "бывшее место жительства", "object": "москва", "ttl": "1y"},
+            ],
+            "delete": [
+                {"subject": "пользователь", "relation": "место жительства", "object": "москва"},
+            ],
+        },
+    ),
+    # --- Явный отказ от места без нового (удаление + история) ---
+    (
+        "я больше не живу в Москве, съехал",
+        ["пользователь | место жительства | москва"],
+        "HOME",
+        {
+            "triplets": [
+                {"subject": "пользователь", "relation": "бывшее место жительства", "object": "москва", "ttl": "1y"},
+            ],
+            "delete": [
+                {"subject": "пользователь", "relation": "место жительства", "object": "москва"},
+            ],
+        },
+    ),
+    # --- Смена работы (обновление + история компании) ---
+    (
+        "уволился из Яндекса, теперь работаю в Сбере старшим аналитиком",
+        [
+            "пользователь | работает в | яндекс",
+            "пользователь | должность | аналитик данных",
+        ],
+        "WORK",
+        {
+            "triplets": [
+                {"subject": "пользователь", "relation": "работает в", "object": "сбер", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "должность", "object": "старший аналитик", "ttl": "1y"},
+                {"subject": "пользователь", "relation": "прежнее место работы", "object": "яндекс", "ttl": "1y"},
+            ],
+            "delete": [
+                {"subject": "пользователь", "relation": "работает в", "object": "яндекс"},
+                {"subject": "пользователь", "relation": "должность", "object": "аналитик данных"},
+            ],
+        },
+    ),
+    # --- Бросил курить (удаление + факт о прошлой привычке) ---
+    (
+        "бросил курить месяц назад",
+        [
+            "пользователь | курит | да",
+            "пользователь | количество сигарет | пачка в день",
+        ],
+        "HABITS",
+        {
+            "triplets": [
+                {"subject": "пользователь", "relation": "бросил курить", "object": "да", "ttl": "inf"},
+            ],
+            "delete": [
+                {"subject": "пользователь", "relation": "курит", "object": "да"},
+                {"subject": "пользователь", "relation": "количество сигарет", "object": "пачка в день"},
+            ],
+        },
+    ),
+    # --- Новый факт, ничего не нужно удалять ---
+    (
+        "купил велосипед для поездок по городу",
+        ["пользователь | место жительства | екатеринбург"],
+        "TECH",
+        {
+            "triplets": [
+                {"subject": "пользователь", "relation": "есть велосипед", "object": "велосипед пользователя", "ttl": "1y"},
+                {"subject": "велосипед пользователя", "relation": "тип", "object": "городской", "ttl": "1y"},
+            ],
+            "delete": [],
+        },
+    ),
+    # --- Нет новых фактов и нечего удалять ---
+    (
+        "всё ок, спасибо",
+        ["пользователь | работает в | сбер"],
+        "WORK",
+        {"triplets": [], "delete": []},
+    ),
+]
+
+
+def _ctx_assistant_json(data: dict, use_ttl: bool) -> str:
+    """Сериализация ответа для context few-shot."""
+    triplets = data.get("triplets", [])
+    delete = data.get("delete", [])
+    if not use_ttl:
+        triplets = [{k: v for k, v in t.items() if k != "ttl"} for t in triplets]
+    return json.dumps({"triplets": triplets, "delete": delete}, ensure_ascii=False)
+
+
+def triplet_context_few_shot_messages(
+    user_turn_fn,
+    slot_name: str | None = None,
+    use_ttl: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Few-shot примеры для context-aware режима экстракции (slot_context_enabled=True).
+    Модель видит текущие факты и должна выдать {"triplets":[...], "delete":[...]}.
+
+    Фильтрует примеры по slot_name если указан, иначе берёт первые 3 общих.
+    """
+    out: List[Dict[str, Any]] = []
+    selected = []
+
+    if slot_name:
+        for msg, facts, fs_slot, data in _CONTEXT_FEWSHOTS:
+            if fs_slot == slot_name:
+                selected.append((msg, facts, data))
+        # Если примеров для слота нет — берём первые 2 общих (переезд + нет фактов)
+        if not selected:
+            selected = [
+                (_CONTEXT_FEWSHOTS[0][0], _CONTEXT_FEWSHOTS[0][1], _CONTEXT_FEWSHOTS[0][3]),
+                (_CONTEXT_FEWSHOTS[4][0], _CONTEXT_FEWSHOTS[4][1], _CONTEXT_FEWSHOTS[4][3]),
+                (_CONTEXT_FEWSHOTS[5][0], _CONTEXT_FEWSHOTS[5][1], _CONTEXT_FEWSHOTS[5][3]),
+            ]
+    else:
+        # Single-pass без слота: берём разнообразный набор
+        selected = [
+            (_CONTEXT_FEWSHOTS[0][0], _CONTEXT_FEWSHOTS[0][1], _CONTEXT_FEWSHOTS[0][3]),
+            (_CONTEXT_FEWSHOTS[2][0], _CONTEXT_FEWSHOTS[2][1], _CONTEXT_FEWSHOTS[2][3]),
+            (_CONTEXT_FEWSHOTS[5][0], _CONTEXT_FEWSHOTS[5][1], _CONTEXT_FEWSHOTS[5][3]),
+        ]
+
+    for msg, facts, data in selected:
+        out.append({"role": "user", "content": user_turn_fn(msg)})
+        out.append({"role": "assistant", "content": _ctx_assistant_json(data, use_ttl)})
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Conflict Resolution few-shots
 # Формат запроса: slot, existing_triplets (list with record_id), new_triplets (indexed list)
 # Формат ответа: {"deactivate":[record_ids], "skip_new":[new_indices]}

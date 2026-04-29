@@ -27,7 +27,11 @@
     "ttl_mode": "mode2",
     "ttl_semantic_dedup_enabled": true,
     "ttl_semantic_dedup_threshold": 0.9,
-    "ttl_slot_overrides": {}
+    "ttl_slot_overrides": {},
+    "slot_context_enabled": false,
+    "slot_context_max_facts": 10,
+    "triplet_deletion_mode": "none",
+    "deletion_use_pymorphy": false
   },
   "pipeline_jsonl": {
     "dataset_path": null,

@@ -7,6 +7,7 @@
 - Память строится из сообщений пользователя.
 - Из важных сообщений извлекаются триплеты `subject-relation-object`.
 - Триплеты пишутся в состояние DST и синхронно зеркалятся в граф RAGU.
+- **Поддерживается удаление фактов** тремя независимыми методами (см. ниже).
 - При ответе формируется memory context одной из стратегий и передается в final LLM.
 - Дополнительно передаются последние пары `user/assistant`.
 
@@ -64,11 +65,24 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--llm-mode` (`openrouter|api|stub|local`)
 - `--no-final-llm`
 
+## Режимы удаления фактов
+
+Управляются двумя флагами `--slot-context-enabled` и `--triplet-deletion-mode`.
+
+| Вариант | Флаги | Описание |
+|---|---|---|
+| A (inline) | `--slot-context-enabled --triplet-deletion-mode llm_inline` | Один LLM-вызов: модель видит текущие факты и выдаёт `delete`-сигналы вместе с новыми триплетами |
+| B (separate) | `--triplet-deletion-mode llm_separate` | Отдельный LLM-вызов для детекции удалений, extraction без контекста |
+| C (heuristic) | `--triplet-deletion-mode heuristic` | Rule-based паттерны отрицания без LLM, опционально `--deletion-use-pymorphy` |
+
+Подробно — в `CONFIG.md`.
+
 ## Ключевые ограничения
 
 - Проект зафиксирован как RAGU-only.
 - `llm_mode=local` для final LLM пока не реализован.
-- TTL/временная инвалидизация фактов не реализованы.
+- `llm_inline` режим автоматически включает контекст слота, даже если `slot_context_enabled=false`.
+- Heuristic-детектор покрывает явные паттерны отрицания; косвенные семантические удаления — через LLM-режимы.
 
 ## Подробная техдокументация
 

@@ -101,3 +101,31 @@ class PipelineConfig:
     # deactivate the old record and insert the new one (refreshed TTL).
     ttl_semantic_dedup_enabled: bool = True
     ttl_semantic_dedup_threshold: float = 0.9
+
+    # -------------------------------------------------------------------
+    # Slot context & deletion modes
+    # -------------------------------------------------------------------
+    # slot_context_enabled:
+    #   When True — передавать текущие активные факты слота в промпт
+    #   экстракции триплетов. Позволяет модели создавать исторические записи
+    #   ("бывшее место жительства") и явно сигнализировать удаление.
+    slot_context_enabled: bool = False
+
+    # slot_context_max_facts:
+    #   Максимальное кол-во фактов слота, передаваемых в контекст.
+    #   Ограничивает раздувание промпта для маленьких моделей.
+    slot_context_max_facts: int = 10
+
+    # triplet_deletion_mode:
+    #   "none"         — удаление не выполняется (текущее поведение).
+    #   "heuristic"    — Вариант C: rule-based паттерны отрицания без LLM.
+    #   "llm_inline"   — Вариант A: сигналы удаления в том же вызове что и
+    #                    экстракция. Требует slot_context_enabled=True.
+    #   "llm_separate" — Вариант B: отдельный LLM-вызов для детекции удалений.
+    #                    Сам вызов всегда получает контекст текущих фактов.
+    triplet_deletion_mode: str = "none"
+
+    # deletion_use_pymorphy:
+    #   Использовать pymorphy2 для лемматизации при сравнении слов
+    #   в режиме "heuristic". Улучшает попадание ("Москве" → "москва").
+    deletion_use_pymorphy: bool = False
