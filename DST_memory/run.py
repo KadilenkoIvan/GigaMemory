@@ -408,6 +408,68 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
     print(f"Saved: {args.output_path}")
 
 
+def _derive_ragu_storage_from_output(args: argparse.Namespace) -> str:
+    """
+    Derive a run-specific ragu_storage path from --output-path.
+
+    Example: --output-path results/test1.json → <run.py dir>/ragu_storage_test1
+
+    Falls back to <run.py dir>/ragu_storage when output_path is not set.
+    Does nothing if --ragu-storage-path was explicitly provided.
+    """
+    explicit = getattr(args, "ragu_storage_path", "") or ""
+    if explicit:
+        return explicit
+    output_path = getattr(args, "output_path", "") or ""
+    base = Path(__file__).resolve().parent
+    if output_path:
+        stem = Path(output_path).stem   # e.g. "test1" from "results/test1.json"
+        return str(base / f"ragu_storage_{stem}")
+    return str(base / "ragu_storage")
+
+
+def _build_graph_visualization(args: argparse.Namespace) -> None:
+    """
+    Auto-build an HTML knowledge graph visualization after a pipeline test run.
+
+    Calls:  python RAGU/scripts/visualize_knowledge_graph.py
+                --graph-path <ragu_storage>/knowledge_graph.gml
+                --output <output_stem>_graph.html
+    """
+    import subprocess
+
+    storage_path = Path(getattr(args, "ragu_storage_path", "") or
+                        Path(__file__).resolve().parent / "ragu_storage")
+    graph_path = storage_path / "knowledge_graph.gml"
+
+    if not graph_path.exists():
+        logger.warning("Graph visualization: knowledge_graph.gml not found at %s — skipping", graph_path)
+        return
+
+    output_path = Path(args.output_path)
+    html_output = output_path.with_name(output_path.stem + "_graph.html")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    viz_script = repo_root / "RAGU" / "scripts" / "visualize_knowledge_graph.py"
+    if not viz_script.exists():
+        logger.warning("Graph visualization: script not found at %s — skipping", viz_script)
+        return
+
+    cmd = [sys.executable, str(viz_script),
+           "--graph-path", str(graph_path),
+           "--output", str(html_output)]
+    logger.info("Building graph visualization: %s", " ".join(cmd))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            print(f"Saved graph: {html_output}")
+        else:
+            logger.warning("Visualization script failed (code %d):\n%s",
+                           result.returncode, result.stderr[:1000])
+    except Exception as exc:
+        logger.warning("Could not build graph visualization: %s", exc)
+
+
 def _wipe_ragu_storage(args: argparse.Namespace) -> None:
     """Delete all files in ragu_storage before a fresh pipeline test run."""
     storage_path = getattr(args, "ragu_storage_path", "") or None
@@ -423,6 +485,9 @@ def _wipe_ragu_storage(args: argparse.Namespace) -> None:
 def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
     if not args.dataset_path or not args.output_path:
         raise SystemExit("pipeline test requires --dataset-path and --output-path")
+    # Derive run-specific ragu_storage path before wiping/building
+    args.ragu_storage_path = _derive_ragu_storage_from_output(args)
+    logger.info("pipeline test: ragu_storage → %s", args.ragu_storage_path)
     _wipe_ragu_storage(args)
     pipeline = build_pipeline(args)
     rows = read_jsonl(args.dataset_path)
@@ -493,6 +558,7 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
         json.dump(results_logs, f, ensure_ascii=False, indent=2)
     print(f"Saved: {args.output_path}")
     print(f"Saved logs: {logs_output_path}")
+    _build_graph_visualization(args)
 
 
 def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
