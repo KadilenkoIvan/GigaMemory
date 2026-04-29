@@ -61,7 +61,7 @@ class DSTManager:
         slot_selector: SlotSelectClient,
         *,
         conflict_resolver: Optional[TripletConflictClient] = None,
-        single_pass_fallback: bool = True,  # legacy: sets both flags below if True
+        single_pass_fallback: bool = False,  # legacy; kept for back-compat only
         slot_fallback_on_no_slots: bool = True,
         triplet_fallback_on_empty: bool = True,
         ragu_processor: Optional[Any] = None,

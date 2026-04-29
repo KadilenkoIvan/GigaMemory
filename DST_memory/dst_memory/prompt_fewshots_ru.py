@@ -899,23 +899,27 @@ _CONTEXT_FEWSHOTS: List[Tuple[str, List[str], str, dict]] = [
 ]
 
 
-def _ctx_assistant_json(data: dict, use_ttl: bool) -> str:
+def _ctx_assistant_json(data: dict, use_ttl: bool, enable_deletion: bool = True) -> str:
     """Сериализация ответа для context few-shot."""
     triplets = data.get("triplets", [])
-    delete = data.get("delete", [])
     if not use_ttl:
         triplets = [{k: v for k, v in t.items() if k != "ttl"} for t in triplets]
-    return json.dumps({"triplets": triplets, "delete": delete}, ensure_ascii=False)
+    if enable_deletion:
+        delete = data.get("delete", [])
+        return json.dumps({"triplets": triplets, "delete": delete}, ensure_ascii=False)
+    return json.dumps({"triplets": triplets}, ensure_ascii=False)
 
 
 def triplet_context_few_shot_messages(
     user_turn_fn,
     slot_name: str | None = None,
     use_ttl: bool = True,
+    enable_deletion: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Few-shot примеры для context-aware режима экстракции (slot_context_enabled=True).
-    Модель видит текущие факты и должна выдать {"triplets":[...], "delete":[...]}.
+    enable_deletion=True  → модель выдаёт {"triplets":[...], "delete":[...]}.
+    enable_deletion=False → модель выдаёт только {"triplets":[...]}, без delete.
 
     Фильтрует примеры по slot_name если указан, иначе берёт первые 3 общих.
     """
@@ -943,7 +947,7 @@ def triplet_context_few_shot_messages(
 
     for msg, facts, data in selected:
         out.append({"role": "user", "content": user_turn_fn(msg)})
-        out.append({"role": "assistant", "content": _ctx_assistant_json(data, use_ttl)})
+        out.append({"role": "assistant", "content": _ctx_assistant_json(data, use_ttl, enable_deletion)})
     return out
 
 

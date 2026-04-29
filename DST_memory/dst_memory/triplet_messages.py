@@ -43,7 +43,7 @@ def build_triplet_messages(
     ru_slot = CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else None
 
     use_context = existing_triplets is not None
-    use_deletion = enable_deletion or use_context
+    use_deletion = enable_deletion  # controlled explicitly; independent from use_context
 
     slot_header = ""
     if slot_name and ru_slot:
@@ -238,16 +238,18 @@ def build_triplet_messages(
     def user_turn_with_context(msg: str) -> str:
         facts_str = "\n".join(existing_triplets) if existing_triplets else "(нет фактов)"
         slot_part = f"Слот: {ru_slot}\n" if ru_slot else ""
+        action = "Извлеки новые/изменённые факты и укажи факты для удаления." if use_deletion else "Извлеки только новые факты, не дублируй существующие."
         return (
             f"{slot_part}"
             f"Текущие факты:\n{facts_str}\n\n"
             f"Сообщение пользователя:\n{msg}\n\n"
-            "Извлеки новые/изменённые факты и укажи факты для удаления."
+            f"{action}"
         )
 
     if use_context:
         few_shot = triplet_context_few_shot_messages(
-            user_turn_with_context, slot_name=slot_name, use_ttl=use_ttl
+            user_turn_with_context, slot_name=slot_name, use_ttl=use_ttl,
+            enable_deletion=use_deletion,
         )
         user_turn = user_turn_with_context
     elif include_slot:
