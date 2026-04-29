@@ -33,7 +33,9 @@
     "triplet_deletion_mode": "none",
     "deletion_use_pymorphy": false,
     "conflict_allow_multi_relation_same_object": true,
-    "slot_model_enable_thinking": false
+    "slot_model_enable_thinking": false,
+    "slot_fallback_on_no_slots": true,
+    "triplet_fallback_on_empty": true
   },
   "pipeline_jsonl": {
     "dataset_path": null,

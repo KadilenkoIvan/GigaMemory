@@ -61,7 +61,9 @@ class DSTManager:
         slot_selector: SlotSelectClient,
         *,
         conflict_resolver: Optional[TripletConflictClient] = None,
-        single_pass_fallback: bool = True,
+        single_pass_fallback: bool = True,  # legacy: sets both flags below if True
+        slot_fallback_on_no_slots: bool = True,
+        triplet_fallback_on_empty: bool = True,
         ragu_processor: Optional[Any] = None,
         ttl_mode: str = "mode2",
         ttl_slot_overrides: Optional[Dict[str, str]] = None,
@@ -78,7 +80,9 @@ class DSTManager:
         self.triplet_extractor = triplet_extractor
         self.slot_selector = slot_selector
         self.conflict_resolver = conflict_resolver
-        self.single_pass_fallback = single_pass_fallback
+        # Legacy single_pass_fallback sets both granular flags when True
+        self.slot_fallback_on_no_slots = slot_fallback_on_no_slots if not single_pass_fallback else (slot_fallback_on_no_slots or single_pass_fallback)
+        self.triplet_fallback_on_empty = triplet_fallback_on_empty if not single_pass_fallback else (triplet_fallback_on_empty or single_pass_fallback)
         self.ragu_processor = ragu_processor
         self.ttl_mode = ttl_mode
         self.semantic_dedup_enabled = semantic_dedup_enabled
@@ -290,6 +294,7 @@ class DSTManager:
 
         created: List[MemoryFact] = []
         selected_slots = self.slot_selector.select_slots(user_text)
+        no_slots_selected = len(selected_slots) == 0
         triplets: List[ExtractedTriplet] = []
         inline_deletions_by_slot: Dict[str, List[DeletionSignal]] = defaultdict(list)
 
@@ -309,9 +314,32 @@ class DSTManager:
                 slot_triplets = self.triplet_extractor.extract_for_slot(user_text, slot)
             triplets.extend(slot_triplets)
 
-        if not triplets and self.single_pass_fallback:
-            # single_pass fallback всегда без контекста (слот не известен)
-            triplets = self.triplet_extractor.extract(user_text)
+        if no_slots_selected:
+            # Slot selector returned nothing
+            if self.slot_fallback_on_no_slots:
+                logger.info(
+                    "Slot selector returned no slots dialogue_id=%s step=%d → single-pass fallback",
+                    dialogue_id, state.step,
+                )
+                triplets = self.triplet_extractor.extract(user_text)
+            else:
+                logger.info(
+                    "Slot selector returned no slots dialogue_id=%s step=%d → skipping (fallback disabled)",
+                    dialogue_id, state.step,
+                )
+        elif not triplets:
+            # Slots were selected but all per-slot extractions returned empty
+            if self.triplet_fallback_on_empty:
+                logger.info(
+                    "All per-slot extractions returned empty dialogue_id=%s step=%d → single-pass fallback",
+                    dialogue_id, state.step,
+                )
+                triplets = self.triplet_extractor.extract(user_text)
+            else:
+                logger.info(
+                    "All per-slot extractions returned empty dialogue_id=%s step=%d → skipping (fallback disabled)",
+                    dialogue_id, state.step,
+                )
 
         if not triplets and not any(inline_deletions_by_slot.values()):
             # Check if any deletion mode might still produce deletions

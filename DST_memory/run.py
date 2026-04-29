@@ -74,6 +74,8 @@ def build_pipeline(args: argparse.Namespace):
         deletion_use_pymorphy=getattr(args, "deletion_use_pymorphy", False),
         conflict_allow_multi_relation_same_object=getattr(args, "conflict_allow_multi_relation_same_object", True),
         slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
+        slot_fallback_on_no_slots=getattr(args, "slot_fallback_on_no_slots", True),
+        triplet_fallback_on_empty=getattr(args, "triplet_fallback_on_empty", True),
     )
 
     logger.info(
@@ -240,6 +242,20 @@ def create_parser(
         default=bool(s.get("slot_model_enable_thinking", False)),
         help="Enable thinking/reasoning mode for the slot model (Qwen3/3.5). Default: disabled.",
     )
+    parser.add_argument(
+        "--no-slot-fallback-on-no-slots",
+        dest="slot_fallback_on_no_slots",
+        action="store_false",
+        default=bool(s.get("slot_fallback_on_no_slots", True)),
+        help="Disable single-pass fallback when slot selector returns no slots.",
+    )
+    parser.add_argument(
+        "--no-triplet-fallback-on-empty",
+        dest="triplet_fallback_on_empty",
+        action="store_false",
+        default=bool(s.get("triplet_fallback_on_empty", True)),
+        help="Disable single-pass fallback when all per-slot triplet extractions return empty.",
+    )
 
     sub = parser.add_subparsers(required=True)
     m = sub.add_parser("module", help="Run single module")
@@ -320,7 +336,8 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
     dst = DSTManager(
         triplet_extractor=triplet_extractor,
         slot_selector=slot_selector,
-        single_pass_fallback=True,
+        slot_fallback_on_no_slots=True,
+        triplet_fallback_on_empty=True,
         ttl_mode=getattr(args, "ttl_mode", "mode2"),
     )
     result, slots = dst.upsert_from_message(args.dialogue_id, args.text)
