@@ -62,7 +62,10 @@ class DSTMemoryPipeline:
         )
         slot_serving = None
         if not config.slot_use_stub:
-            slot_serving = LocalHFServing(config.slot_model_path)
+            slot_serving = LocalHFServing(
+                config.slot_model_path,
+                enable_thinking=config.slot_model_enable_thinking,
+            )
         triplet_extractor = TripletExtractionClient(
             use_stub=config.slot_use_stub,
             serving=slot_serving,

@@ -32,7 +32,8 @@
     "slot_context_max_facts": 10,
     "triplet_deletion_mode": "none",
     "deletion_use_pymorphy": false,
-    "conflict_allow_multi_relation_same_object": true
+    "conflict_allow_multi_relation_same_object": true,
+    "slot_model_enable_thinking": false
   },
   "pipeline_jsonl": {
     "dataset_path": null,

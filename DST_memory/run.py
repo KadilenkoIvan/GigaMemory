@@ -72,6 +72,8 @@ def build_pipeline(args: argparse.Namespace):
         slot_context_max_facts=int(getattr(args, "slot_context_max_facts", 10)),
         triplet_deletion_mode=getattr(args, "triplet_deletion_mode", "none"),
         deletion_use_pymorphy=getattr(args, "deletion_use_pymorphy", False),
+        conflict_allow_multi_relation_same_object=getattr(args, "conflict_allow_multi_relation_same_object", True),
+        slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
     )
 
     logger.info(
@@ -230,6 +232,13 @@ def create_parser(
         const=True,
         default=bool(s.get("deletion_use_pymorphy", False)),
         help="Use pymorphy2 lemmatization in heuristic deletion mode",
+    )
+    parser.add_argument(
+        "--slot-model-enable-thinking",
+        dest="slot_model_enable_thinking",
+        action="store_true",
+        default=bool(s.get("slot_model_enable_thinking", False)),
+        help="Enable thinking/reasoning mode for the slot model (Qwen3/3.5). Default: disabled.",
     )
 
     sub = parser.add_subparsers(required=True)

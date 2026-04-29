@@ -142,3 +142,15 @@ class PipelineConfig:
     #   → both survive without LLM intervention.
     #   Set to False to always run the LLM check for any same-subject pair.
     conflict_allow_multi_relation_same_object: bool = True
+
+    # -------------------------------------------------------------------
+    # Slot model thinking mode
+    # -------------------------------------------------------------------
+    # slot_model_enable_thinking:
+    #   Enable or disable the thinking/reasoning phase for models that support it
+    #   (Qwen3, Qwen3.5 and similar hybrid-thinking models).
+    #   False (default) — thinking disabled; produces clean, compact JSON output.
+    #   True — thinking enabled; model outputs a reasoning chain before the answer.
+    #   When False: passes enable_thinking=False to apply_chat_template AND prepends
+    #   '/no_think' to the system prompt as a fallback for older tokenizer versions.
+    slot_model_enable_thinking: bool = False
