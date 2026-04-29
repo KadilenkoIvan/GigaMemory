@@ -65,6 +65,10 @@ class FactRecord:
         """Reset the TTL timer (called on semantic dedup match)."""
         self.created_at_datetime = now_iso()
 
+    def as_line(self) -> str:
+        """Compact triplet string used for slot context passed to LLM."""
+        return f"{self.subject} | {self.relation} | {self.object}"
+
 
 @dataclass
 class MemoryFact:
