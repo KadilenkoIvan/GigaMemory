@@ -57,6 +57,47 @@ flowchart TD
 
 ## 3. Модульная структура
 
+```
+dst_memory/
+├── __init__.py          — экспорт PipelineConfig, Message, MemoryFact
+├── core/                — ядро пайплайна
+│   ├── pipeline.py      — DSTMemoryPipeline (write/answer/clear)
+│   ├── dst_manager.py   — DSTManager: слоты, TTL, конфликты, дедуп, RAGU-sync
+│   ├── models.py        — Message, FactRecord, MemoryFact, DialogueMemoryState
+│   ├── config.py        — PipelineConfig, SLOT_DEFAULT_TTL
+│   └── graph_backend.py — GraphEdge (dataclass)
+├── prompts/             — все сборщики промптов и few-shot банк
+│   ├── prompt_fewshots_ru.py   — центральный банк few-shot примеров
+│   ├── slot_select_messages.py — промпт выбора слотов
+│   ├── triplet_messages.py     — промпт извлечения триплетов
+│   ├── conflict_messages.py    — промпт разрешения конфликтов
+│   ├── memory_gate_messages.py — промпт memory gate
+│   ├── deletion_messages.py    — промпт детекции удалений
+│   └── slot_update_messages.py — промпт обновления слотов (для slot_eval)
+├── slots/               — слоты и онтология
+│   ├── ontology.py             — SlotOntology, DEFAULT_USER_SLOTS, метки RU
+│   ├── slot_name_normalize.py  — нормализация имён слотов
+│   ├── slot_model_path.py      — разрешение путей к модели слотов
+│   ├── slot_select_client.py   — SlotSelectClient (выбор слота из онтологии)
+│   └── slot_update_client.py   — SlotUpdateClient (add/update/delete записей)
+├── triplets/            — извлечение и управление триплетами
+│   ├── triplet_client.py       — TripletExtractionClient
+│   ├── conflict_client.py      — TripletConflictClient (rule + LLM)
+│   ├── deletion_client.py      — TripletDeletionClient (llm_separate режим)
+│   └── negation_detector.py    — NegationDeletionDetector (heuristic режим)
+├── storage/             — RAGU backend
+│   └── ragu_graph_processor.py — RaguGraphProcessor, build_ragu_processor
+├── clients/             — LLM-клиенты и serving
+│   ├── serving.py              — LocalHFServing (HF CausalLM)
+│   ├── classifier.py           — ImportanceClassifier
+│   ├── memory_gate_client.py   — MemoryGateClient
+│   └── llm_client.py           — FinalLLMClient
+└── utils/               — вспомогательные утилиты
+    ├── io_utils.py             — read_jsonl, iter_user_messages, iter_dialogue_messages
+    ├── dotenv_loader.py        — загрузка .env
+    └── run_config_loader.py    — загрузка run_config.json
+```
+
 ### 3.1 Entry-point
 
 - `run.py`
@@ -68,7 +109,7 @@ flowchart TD
 
 ### 3.2 Core pipeline
 
-- `dst_memory/pipeline.py`
+- `dst_memory/core/pipeline.py`
   - запись в память (`write_to_memory`);
   - формирование memory context (`_memory_context_for_question`);
   - генерация ответа (`answer`);
@@ -77,7 +118,7 @@ flowchart TD
 
 ### 3.3 DST state manager
 
-- `dst_memory/dst_manager.py`
+- `dst_memory/core/dst_manager.py`
   - хранит `DialogueMemoryState`;
   - записывает факты в слоты;
   - **семантическая дедупликация** (pre-pass, threshold 0.9): при обнаружении семантически близкого факта в том же слоте старый деактивируется, новый вставляется;
@@ -88,9 +129,9 @@ flowchart TD
 
 ### 3.4 Модели и форматы
 
-- `dst_memory/models.py`
+- `dst_memory/core/models.py`
   - `Message`
-  - `FactRecord` — теперь включает `ttl: str` и `created_at_datetime: str` (ISO); метод `is_expired()` для ленивой проверки
+  - `FactRecord` — включает `ttl: str` и `created_at_datetime: str` (ISO); метод `is_expired()` для ленивой проверки
   - `MemoryFact`
   - `DialogueMemoryState`:
     - `step`
@@ -100,16 +141,16 @@ flowchart TD
 
 ### 3.5 LLM-компоненты
 
-- `dst_memory/classifier.py` — importance classifier.
-- `dst_memory/slot_select_client.py` — выбор слотов.
-- `dst_memory/triplet_client.py` — извлечение триплетов.
-- `dst_memory/conflict_client.py` — LLM-конфликт-резолвер.
-- `dst_memory/memory_gate_client.py` — выбор релевантных слотов для ответа.
-- `dst_memory/llm_client.py` — финальная генерация ответа.
+- `dst_memory/clients/classifier.py` — importance classifier.
+- `dst_memory/slots/slot_select_client.py` — выбор слотов.
+- `dst_memory/triplets/triplet_client.py` — извлечение триплетов.
+- `dst_memory/triplets/conflict_client.py` — LLM-конфликт-резолвер.
+- `dst_memory/clients/memory_gate_client.py` — выбор релевантных слотов для ответа.
+- `dst_memory/clients/llm_client.py` — финальная генерация ответа.
 
 ### 3.6 RAGU интеграция
 
-- `dst_memory/ragu_graph_processor.py`
+- `dst_memory/storage/ragu_graph_processor.py`
   - адаптер `SentenceTransformerEmbedder`;
   - мост sync/async;
   - upsert/delete triplets;
@@ -391,8 +432,8 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 ## 14. Что смотреть при отладке
 
 - `run.py` — CLI и routing команд.
-- `dst_memory/pipeline.py` — memory strategy и answer flow.
-- `dst_memory/dst_manager.py` — запись фактов и конфликт-логика.
-- `dst_memory/ragu_graph_processor.py` — синхронизация и поиск.
-- `dst_memory/llm_client.py` — финальный prompt и вызов API.
+- `dst_memory/core/pipeline.py` — memory strategy и answer flow.
+- `dst_memory/core/dst_manager.py` — запись фактов и конфликт-логика.
+- `dst_memory/storage/ragu_graph_processor.py` — синхронизация и поиск.
+- `dst_memory/clients/llm_client.py` — финальный prompt и вызов API.
 - `run_config.json` — фактический runtime профиль.

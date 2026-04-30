@@ -3,8 +3,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from .serving import GenerationConfig, LocalHFServing
-from .slot_update_messages import build_update_messages
+from ..clients.serving import GenerationConfig, LocalHFServing
+from ..prompts.slot_update_messages import build_update_messages
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,12 @@ class SlotUpdateClient:
         if ops is not None:
             return ops
 
-        # Attempt to "fix" JSON once, then retry parse.
         fixed = self._attempt_fix_json(raw)
         if fixed:
             ops = self._parse_operations(fixed)
             if ops is not None:
                 return ops
 
-        # Final fallback: add a single record with the full message (as requested).
         logger.info("SlotUpdate fallback to add(full message) slot=%s", slot_name)
         return [SlotOperation(op="add", value=user_message.strip())] if user_message.strip() else []
 
@@ -115,4 +113,3 @@ class SlotUpdateClient:
             elif op == "nothing":
                 out.append(SlotOperation(op="nothing"))
         return out
-

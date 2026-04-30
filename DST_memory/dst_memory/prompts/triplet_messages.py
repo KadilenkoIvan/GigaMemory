@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from .ontology import CANONICAL_TO_RU_LABEL, DEFAULT_USER_SLOTS, RU_SLOT_LABELS_ORDERED
+from ..slots.ontology import CANONICAL_TO_RU_LABEL, DEFAULT_USER_SLOTS, RU_SLOT_LABELS_ORDERED
 from .prompt_fewshots_ru import (
     triplet_context_few_shot_messages,
     triplet_per_slot_few_shot_messages,

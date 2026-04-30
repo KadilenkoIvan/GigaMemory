@@ -2,16 +2,16 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
-from .classifier import ImportanceClassifier
+from ..clients.classifier import ImportanceClassifier
 from .config import PipelineConfig
-from .conflict_client import TripletConflictClient
+from ..triplets.conflict_client import TripletConflictClient
 from .dst_manager import DSTManager
-from .llm_client import FinalLLMClient
-from .memory_gate_client import MemoryGateClient
+from ..clients.llm_client import FinalLLMClient
+from ..clients.memory_gate_client import MemoryGateClient
 from .models import Message
-from .serving import LocalHFServing
-from .slot_select_client import SlotSelectClient
-from .triplet_client import TripletExtractionClient
+from ..clients.serving import LocalHFServing
+from ..slots.slot_select_client import SlotSelectClient
+from ..triplets.triplet_client import TripletExtractionClient
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +91,14 @@ class DSTMemoryPipeline:
         deletion_client = None
 
         if config.triplet_deletion_mode == "heuristic":
-            from .negation_detector import NegationDeletionDetector
+            from ..triplets.negation_detector import NegationDeletionDetector
             negation_detector = NegationDeletionDetector(
                 use_pymorphy=config.deletion_use_pymorphy
             )
             logger.info("NegationDeletionDetector enabled pymorphy=%s", config.deletion_use_pymorphy)
 
         elif config.triplet_deletion_mode == "llm_separate":
-            from .deletion_client import TripletDeletionClient
+            from ..triplets.deletion_client import TripletDeletionClient
             deletion_client = TripletDeletionClient(
                 use_stub=config.slot_use_stub,
                 serving=slot_serving,

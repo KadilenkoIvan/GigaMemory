@@ -7,9 +7,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from .memory_gate_messages import build_memory_gate_messages
+from ..prompts.memory_gate_messages import build_memory_gate_messages
 from .serving import GenerationConfig, LocalHFServing
-from .slot_name_normalize import normalize_slot_label, resolve_slot_key_to_existing
+from ..slots.slot_name_normalize import normalize_slot_label, resolve_slot_key_to_existing
 
 logger = logging.getLogger(__name__)
 

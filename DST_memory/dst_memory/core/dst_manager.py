@@ -2,12 +2,12 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
-from .conflict_client import TripletConflictClient
+from ..triplets.conflict_client import TripletConflictClient
 from .config import SLOT_DEFAULT_TTL
 from .graph_backend import GraphEdge
 from .models import DialogueMemoryState, FactRecord, MemoryFact, is_expired, now_iso
-from .slot_select_client import SlotSelectClient
-from .triplet_client import DeletionSignal, ExtractedTriplet, TripletExtractionClient
+from ..slots.slot_select_client import SlotSelectClient
+from ..triplets.triplet_client import DeletionSignal, ExtractedTriplet, TripletExtractionClient
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ class DSTManager:
     def _sync_expirations_to_ragu(self, dialogue_id: str, expired_by_slot: Dict[str, List[int]]) -> None:
         if self.ragu_processor is None:
             return
-        from .ragu_graph_processor import GraphTripletDelete
+        from ..storage.ragu_graph_processor import GraphTripletDelete
         all_deletes = []
         for slot, rids in expired_by_slot.items():
             for rid in rids:
@@ -218,7 +218,7 @@ class DSTManager:
                     )
 
         if deactivated and self.ragu_processor is not None:
-            from .ragu_graph_processor import GraphTripletDelete
+            from ..storage.ragu_graph_processor import GraphTripletDelete
             self.ragu_processor.delete_triplet_deltas([
                 GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
                 for rid in deactivated
@@ -373,7 +373,7 @@ class DSTManager:
             # Expire slot before processing (lazy expiry)
             expired_in_slot = self._expire_slot(state, slot)
             if expired_in_slot and self.ragu_processor is not None:
-                from .ragu_graph_processor import GraphTripletDelete
+                from ..storage.ragu_graph_processor import GraphTripletDelete
                 self.ragu_processor.delete_triplet_deltas([
                     GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
                     for rid in expired_in_slot
@@ -459,7 +459,7 @@ class DSTManager:
                             rec.updated_at_step = state.step
 
                 if semantic_dedup_deactivate and self.ragu_processor is not None:
-                    from .ragu_graph_processor import GraphTripletDelete
+                    from ..storage.ragu_graph_processor import GraphTripletDelete
                     self.ragu_processor.delete_triplet_deltas([
                         GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
                         for rid in semantic_dedup_deactivate
@@ -527,7 +527,7 @@ class DSTManager:
                         )
 
             if self.ragu_processor is not None and deactivated_record_ids:
-                from .ragu_graph_processor import GraphTripletDelete
+                from ..storage.ragu_graph_processor import GraphTripletDelete
                 self.ragu_processor.delete_triplet_deltas([
                     GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
                     for rid in deactivated_record_ids
@@ -566,7 +566,7 @@ class DSTManager:
                 state.slots[slot].append(rec)
 
                 if self.ragu_processor is not None:
-                    from .ragu_graph_processor import GraphTripletDelta
+                    from ..storage.ragu_graph_processor import GraphTripletDelta
                     new_deltas.append(GraphTripletDelta(
                         record_id=rid,
                         dialogue_id=dialogue_id,
@@ -630,7 +630,7 @@ class DSTManager:
             return False
 
         if self.ragu_processor is not None:
-            from .ragu_graph_processor import GraphTripletDelete
+            from ..storage.ragu_graph_processor import GraphTripletDelete
             self.ragu_processor.delete_triplet_deltas([
                 GraphTripletDelete(record_id=record_id, dialogue_id=dialogue_id, slot=found_slot)
             ])

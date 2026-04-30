@@ -7,9 +7,9 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from dst_memory.dotenv_loader import load_dst_memory_dotenv
-from dst_memory.io_utils import iter_dialogue_messages, iter_user_messages, read_jsonl
-from dst_memory.run_config_loader import (
+from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
+from dst_memory.utils.io_utils import iter_dialogue_messages, iter_user_messages, read_jsonl
+from dst_memory.utils.run_config_loader import (
     default_config_path,
     load_run_config,
     shared_section,
@@ -37,9 +37,9 @@ def _pre_parse_config_path(argv: list[str]) -> str | None:
 
 def build_pipeline(args: argparse.Namespace):
     from dst_memory import PipelineConfig
-    from dst_memory.pipeline import DSTMemoryPipeline
+    from dst_memory.core.pipeline import DSTMemoryPipeline
     _ensure_local_ragu_import()
-    from dst_memory.ragu_graph_processor import build_ragu_processor
+    from dst_memory.storage.ragu_graph_processor import build_ragu_processor
 
     cfg = PipelineConfig(
         importance_model_path=args.importance_model_path,
@@ -306,16 +306,16 @@ def create_parser(
 
 
 def cmd_module_classifier(args: argparse.Namespace) -> None:
-    from dst_memory.classifier import ImportanceClassifier
+    from dst_memory.clients.classifier import ImportanceClassifier
     model = ImportanceClassifier(model_path=args.importance_model_path, threshold=args.importance_threshold)
     print(json.dumps(model.predict(args.text), ensure_ascii=False, indent=2))
 
 
 def cmd_module_dst(args: argparse.Namespace) -> None:
-    from dst_memory.dst_manager import DSTManager
-    from dst_memory.serving import LocalHFServing
-    from dst_memory.slot_select_client import SlotSelectClient
-    from dst_memory.triplet_client import TripletExtractionClient
+    from dst_memory.core.dst_manager import DSTManager
+    from dst_memory.clients.serving import LocalHFServing
+    from dst_memory.slots.slot_select_client import SlotSelectClient
+    from dst_memory.triplets.triplet_client import TripletExtractionClient
 
     slot_serving = None
     if not args.slot_use_stub:
@@ -345,7 +345,7 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
 
 
 def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
-    from dst_memory.llm_client import FinalLLMClient
+    from dst_memory.clients.llm_client import FinalLLMClient
     client = FinalLLMClient(
         mode="openrouter",
         api_url=args.llm_api_url,
@@ -360,9 +360,9 @@ def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
 
 
 def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
-    from dst_memory.ontology import DEFAULT_USER_SLOTS
-    from dst_memory.serving import LocalHFServing
-    from dst_memory.triplet_client import TripletExtractionClient
+    from dst_memory.slots.ontology import DEFAULT_USER_SLOTS
+    from dst_memory.clients.serving import LocalHFServing
+    from dst_memory.triplets.triplet_client import TripletExtractionClient
 
     with open(args.json_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -393,9 +393,9 @@ def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
 
 
 def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
-    from dst_memory.ontology import DEFAULT_USER_SLOTS
-    from dst_memory.serving import LocalHFServing
-    from dst_memory.triplet_client import TripletExtractionClient
+    from dst_memory.slots.ontology import DEFAULT_USER_SLOTS
+    from dst_memory.clients.serving import LocalHFServing
+    from dst_memory.triplets.triplet_client import TripletExtractionClient
 
     with open(args.json_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -588,7 +588,7 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
 
 
 def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
-    from dst_memory.models import Message
+    from dst_memory.core.models import Message
 
     pipeline = build_pipeline(args)
     did = args.dialogue_id
@@ -622,7 +622,7 @@ def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
 
 
 def cmd_pipeline_inference_single_turn(args: argparse.Namespace) -> None:
-    from dst_memory.models import Message
+    from dst_memory.core.models import Message
 
     msg = args.message.strip()
     if not msg:

@@ -6,10 +6,10 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from .models import VALID_TTL_VALUES
-from .ontology import DEFAULT_USER_SLOTS, SlotOntology
-from .serving import GenerationConfig, LocalHFServing
-from .triplet_messages import build_triplet_messages
+from ..core.models import VALID_TTL_VALUES
+from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
+from ..clients.serving import GenerationConfig, LocalHFServing
+from ..prompts.triplet_messages import build_triplet_messages
 
 logger = logging.getLogger(__name__)
 

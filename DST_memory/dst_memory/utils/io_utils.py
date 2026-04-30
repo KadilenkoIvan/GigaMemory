@@ -1,7 +1,7 @@
 import json
 from typing import Dict, Iterable, List
 
-from .models import Message
+from ..core.models import Message
 
 
 def read_jsonl(path: str) -> List[Dict]:

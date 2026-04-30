@@ -2,10 +2,8 @@
 Автономная копия логики slot-update из DST_memory (SlotUpdateClient).
 
 Подключение к основному коду только:
-  - dst_memory.serving (LocalHFServing, GenerationConfig)
-  - dst_memory.slot_update_messages.build_update_messages
-
-При изменении SlotUpdateClient в DST_memory — при необходимости синхронизируйте этот файл вручную.
+  - dst_memory.clients.serving (LocalHFServing, GenerationConfig)
+  - dst_memory.prompts.slot_update_messages.build_update_messages
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from dst_memory.serving import LocalHFServing
+    from dst_memory.clients.serving import LocalHFServing
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +62,7 @@ class PipelineSlotUpdate:
                 else []
             )
 
-        from dst_memory.slot_update_messages import build_update_messages
+        from dst_memory.prompts.slot_update_messages import build_update_messages
 
         messages = build_update_messages(slot_name, existing_records, user_message)
 

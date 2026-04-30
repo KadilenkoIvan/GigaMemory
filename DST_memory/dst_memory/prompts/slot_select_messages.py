@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from .ontology import RU_SLOT_LABELS_ORDERED
+from ..slots.ontology import RU_SLOT_LABELS_ORDERED
 from .prompt_fewshots_ru import slot_select_few_shot_messages
 
 

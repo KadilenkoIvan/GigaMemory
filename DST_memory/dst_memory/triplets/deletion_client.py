@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from .deletion_messages import build_deletion_messages, parse_deletion_response
-from .serving import GenerationConfig, LocalHFServing
+from ..prompts.deletion_messages import build_deletion_messages, parse_deletion_response
+from ..clients.serving import GenerationConfig, LocalHFServing
 
 logger = logging.getLogger(__name__)
 

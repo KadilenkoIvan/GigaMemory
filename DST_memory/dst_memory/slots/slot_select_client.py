@@ -5,8 +5,8 @@ import logging
 from typing import Any, List, Optional
 
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology, filter_resolve_slots
-from .serving import GenerationConfig, LocalHFServing
-from .slot_select_messages import build_slot_select_messages
+from ..clients.serving import GenerationConfig, LocalHFServing
+from ..prompts.slot_select_messages import build_slot_select_messages
 
 logger = logging.getLogger(__name__)
 
@@ -72,4 +72,3 @@ class SlotSelectClient:
             return None
         names = [str(x) for x in arr if isinstance(x, str)]
         return filter_resolve_slots(names, ontology=self.ontology)
-

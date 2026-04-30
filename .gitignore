@@ -219,3 +219,18 @@ torch-2.8.0-cp313-cp313-win_amd64.whl
 **/models/
 !RAGU/ragu/models/
 *.zip
+
+# DST_memory pipeline outputs and test artifacts
+DST_memory/*_output*.json
+DST_memory/*_logs.json
+DST_memory/smoke_*.json
+DST_memory/triplet_test_*.json
+DST_memory/output*.json
+DST_memory/test_output*.json
+
+# slot_eval reports
+slot_eval/slot_eval_report*.json
+slot_eval/judge_*.json
+
+# RAGU graph storage (runtime-generated, run-specific)
+DST_memory/ragu_storage_*/

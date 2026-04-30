@@ -13,9 +13,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .conflict_messages import build_conflict_messages, parse_conflict_response
-from .graph_backend import GraphEdge
-from .serving import GenerationConfig, LocalHFServing
+from ..prompts.conflict_messages import build_conflict_messages, parse_conflict_response
+from ..core.graph_backend import GraphEdge
+from ..clients.serving import GenerationConfig, LocalHFServing
 from .triplet_client import ExtractedTriplet
 
 logger = logging.getLogger(__name__)

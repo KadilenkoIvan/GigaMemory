@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from .ontology import CANONICAL_TO_RU_LABEL
+from ..slots.ontology import CANONICAL_TO_RU_LABEL
 
 
 # ---------------------------------------------------------------------------
