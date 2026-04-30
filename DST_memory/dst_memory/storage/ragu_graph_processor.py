@@ -55,7 +55,7 @@ class SentenceTransformerEmbedder(Embedder):
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         self._model = SentenceTransformer(model_name)
-        probe = self._model.encode([""], normalize_embeddings=True)
+        probe = self._model.encode([""], normalize_embeddings=True, show_progress_bar=False)
         self._dim: int = int(probe.shape[1])
 
     @property
@@ -66,7 +66,7 @@ class SentenceTransformerEmbedder(Embedder):
         loop = asyncio.get_event_loop()
         vector = await loop.run_in_executor(
             None,
-            lambda: self._model.encode([text], normalize_embeddings=True)[0].tolist(),
+            lambda: self._model.encode([text], normalize_embeddings=True, show_progress_bar=False)[0].tolist(),
         )
         return vector
 
@@ -81,13 +81,13 @@ class SentenceTransformerEmbedder(Embedder):
         loop = asyncio.get_event_loop()
         vectors = await loop.run_in_executor(
             None,
-            lambda: self._model.encode(texts, normalize_embeddings=True).tolist(),
+            lambda: self._model.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist(),
         )
         return vectors
 
     def encode_sync(self, text: str) -> List[float]:
         """Synchronous encode for use outside async context."""
-        return self._model.encode([text], normalize_embeddings=True)[0].tolist()
+        return self._model.encode([text], normalize_embeddings=True, show_progress_bar=False)[0].tolist()
 
 
 # ---------------------------------------------------------------------------
