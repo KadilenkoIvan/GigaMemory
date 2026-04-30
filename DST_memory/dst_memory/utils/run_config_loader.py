@@ -24,7 +24,8 @@ def _expand_env(value: Any) -> Any:
 
 
 def default_config_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "run_config.json"
+    # utils/ -> dst_memory/ -> DST_memory/
+    return Path(__file__).resolve().parent.parent.parent / "run_config.json"
 
 
 def load_run_config(path: str | Path | None) -> dict[str, Any]:
