@@ -14,7 +14,7 @@ def build_slot_select_messages(
     max_slots: int = 5,
 ) -> List[Dict[str, Any]]:
     _ = ontology_slots
-    slots_json = json.dumps([s.lower() for s in RU_SLOT_LABELS_ORDERED], ensure_ascii=False)
+    slots_json = json.dumps([s.upper() for s in RU_SLOT_LABELS_ORDERED], ensure_ascii=False)
 
     system = (
         "Ты классификатор слотов долговременной памяти пользователя.\n"
