@@ -727,7 +727,7 @@ class DSTManager:
         Triggers lazy TTL expiry before building the payload.
         Each slot dict includes 'slot_label' (Russian name) alongside 'slot' (canonical key).
         """
-        from .ontology import CANONICAL_TO_RU_LABEL
+        from ..slots.ontology import CANONICAL_TO_RU_LABEL
         state = self.get_state(dialogue_id)
         # Lazy expiry on read
         expired = self._expire_all(state)

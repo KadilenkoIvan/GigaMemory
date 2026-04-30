@@ -25,7 +25,7 @@ def build_slot_select_messages(
         "2. Несколько слотов разрешено.\n"
         "3. Если нет фактов о пользователе, его окружении, имуществе или относящихся к нему вещах — пустой список.\n"
         "4. При косвенном, не прямом упоминании факта о пользователе, его окружении, имуществе или относящихся к нему вещах, выбирай слоты, которые могут быть связаны с этим фактом.\n"
-        "5. Имена слотов в ответе — русские метки из списка ниже, строго в нижнем регистре (как в списке).\n\n"
+        "5. Имена слотов в ответе — русские метки из списка ниже, строго в верхнем регистре (как в списке).\n\n"
         f"Допустимые слоты (русские метки): {slots_json}\n"
         f"Максимум слотов в ответе: {max_slots}\n\n"
         'Схема ответа: {"slot_assignments":["slot1","slot2", ...]}'
@@ -34,7 +34,7 @@ def build_slot_select_messages(
     def user_turn(msg: str) -> str:
         return f"Сообщение пользователя:\n{msg}"
 
-    few_shot = slot_select_few_shot_messages(user_turn, lowercase_slots=True)
+    few_shot = slot_select_few_shot_messages(user_turn, lowercase_slots=False)
 
     return (
         [{"role": "system", "content": system}]

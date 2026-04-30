@@ -19,7 +19,7 @@ import re
 from typing import TYPE_CHECKING, List, Optional, Set
 
 if TYPE_CHECKING:
-    from .models import FactRecord
+    from ..core.models import FactRecord
 
 logger = logging.getLogger(__name__)
 
