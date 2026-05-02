@@ -315,6 +315,7 @@ class DSTMemoryPipeline:
             "retrieved": retrieved,
             "memory_slots": self.dst.slots_with_messages(dialogue_id),
             "expired_facts": self.dst.expired_facts(dialogue_id),
+            "deleted_facts_with_reasons": self.dst.deleted_facts_with_reasons(dialogue_id),
         }
 
     def answer(self, dialogue_id: str, question: str) -> str:

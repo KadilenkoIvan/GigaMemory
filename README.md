@@ -92,6 +92,53 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `llm_inline` режим автоматически включает контекст слота, даже если `slot_context_enabled=false`.
 - Heuristic-детектор покрывает явные паттерны отрицания; косвенные семантические удаления — через LLM-режимы.
 
+## Валидация
+
+### LongMemEval Benchmark
+
+Для тестирования качества системы памяти используется датасет **LongMemEval** (`xiaowu0162/longmemeval-cleaned`).
+
+```bash
+cd validation/full_pipeline
+
+# Quick smoke test (no LLM)
+python validate_longmemeval.py \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results \
+    --start-index 0 \
+    --num-items 5 \
+    --no-final-llm \
+    --judge-mode none
+
+# Full validation with OpenRouter judge
+python validate_longmemeval.py \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results \
+    --start-index 0 \
+    --num-items 50 \
+    --judge-mode openrouter \
+    --judge-model "openai/gpt-oss-120b:free"
+```
+
+**Поддерживаемые параметры:**
+- `--start-index N` — начать с N-го примера (из релевантных)
+- `--num-items K` — обработать K примеров
+- `--judge-mode {openrouter,local,none}` — режим оценки ответов
+- `--save-memory-state` — сохранять состояние памяти после каждого примера
+
+**Структура вывода:**
+```
+output-dir/
+├── validation_results.json     # Итоговые метрики и результаты
+├── validation.log              # Полный лог выполнения
+├── result_*.json               # Отдельные результаты по каждому примеру
+└── chunk_*/                    # Сохранённое состояние памяти
+    ├── dst_state.json         # DST-состояние + удалённые факты
+    └── ragu_storage/          # RAGU хранилище графа
+```
+
+Подробная документация: см. `validation/full_pipeline/README.md` и `validation/full_pipeline/CONFIG.md`.
+
 ## Подробная техдокументация
 
 См. `PIPELINE.md` — полный разбор всех этапов, связей между модулями, форматов данных и поведения в разных сценариях.

@@ -570,6 +570,7 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
             ),
             "memory_context_for_final_llm": verbose_answer.get("memory_context_for_final_llm"),
             "expired_facts": verbose_answer.get("expired_facts", []),
+            "deleted_facts_with_reasons": verbose_answer.get("deleted_facts_with_reasons", []),
         }
         results_logs.append(log_entry)
 
