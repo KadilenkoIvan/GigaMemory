@@ -1,0 +1,47 @@
+{
+  "shared": {
+    "importance_model_path": "message_important_learning/best_model-full_tune",
+    "importance_threshold": 0.25,
+    "retrieval_top_k": 5,
+    "graph_top_k_records": 20,
+    "recent_history_pairs": 5,
+    "disable_memory_gate": false,
+    "memory_gate_use_stub": false,
+    "memory_strategy": "full_graph_json",
+    "llm_mode": "openrouter",
+    "llm_api_url": "https://openrouter.ai/api/v1",
+    "llm_api_key": "",
+    "llm_model": "openai/gpt-oss-120b:free",
+    "llm_temperature": 0.0,
+    "llm_max_tokens": 1024,
+    "openrouter_http_referer": "",
+    "openrouter_x_title": "GigaMemory DST_memory",
+    "no_final_llm": false,
+    "log_level": "INFO",
+    "slot_use_stub": false,
+    "slot_model_path": "DST_memory/models/Meno-Lite-0.1",
+    "slot_max_slots_per_message": 5,
+    "use_ragu": true,
+    "ragu_embedder_model": "deepvk/USER-bge-m3",
+    "ragu_storage_path": "",
+    "ttl_mode": "mode2",
+    "ttl_semantic_dedup_enabled": true,
+    "ttl_semantic_dedup_threshold": 0.9,
+    "ttl_slot_overrides": {},
+    "slot_context_enabled": false,
+    "slot_context_max_facts": 10,
+    "triplet_deletion_mode": "none",
+    "deletion_use_pymorphy": false,
+    "conflict_allow_multi_relation_same_object": true,
+    "slot_model_enable_thinking": false,
+    "slot_fallback_on_no_slots": true,
+    "triplet_fallback_on_empty": true
+  },
+  "pipeline_jsonl": {
+    "dataset_path": null,
+    "output_path": null
+  },
+  "pipeline_interactive": {
+    "dialogue_id": "interactive"
+  }
+}

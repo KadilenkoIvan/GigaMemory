@@ -33,7 +33,7 @@ def run_dataset(
     limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     ensure_dst_memory_on_path()
-    from dst_memory.serving import LocalHFServing
+    from dst_memory.clients.serving import LocalHFServing
 
     examples = load_examples(dataset_path)
     if limit is not None:
