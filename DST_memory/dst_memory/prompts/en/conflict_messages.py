@@ -1,21 +1,12 @@
 """
-Prompt for triplet-level conflict resolution.
-
-Logic:
-  Rule layer (no LLM): exact (subject, relation) match → auto-deactivate old record.
-  LLM layer: same subject, different relation, potential semantic conflict → ask LLM.
-
-LLM input:  slot name, existing active triplets (with record_id), new incoming triplets (indexed).
-LLM output: {"deactivate": [record_ids_to_deactivate], "skip_new": [new_indices_to_drop]}
-
-Default: add all new triplets, keep all existing. LLM specifies only exceptions.
+English UI for triplet-level conflict resolution.
 """
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
 
-from .prompt_fewshots_ru import CONFLICT_RESOLUTION_FEWSHOT
+from .prompt_fewshots import CONFLICT_RESOLUTION_FEWSHOT
 
 
 def build_conflict_messages(
@@ -23,12 +14,6 @@ def build_conflict_messages(
     existing_triplets: List[Dict[str, Any]],
     new_triplets: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    Build LLM messages for conflict resolution.
-
-    existing_triplets: list of dicts with keys record_id, subject, relation, object.
-    new_triplets: list of dicts with keys idx, subject, relation, object.
-    """
     system = (
         "YOU ARE A MEMORY CONFLICT RESOLVER FOR A USER KNOWLEDGE GRAPH.\n"
         "You receive EXISTING active triplets (with record_id) and NEW incoming triplets (with idx).\n"
@@ -66,23 +51,3 @@ def build_conflict_messages(
     final = {"role": "user", "content": user_turn(existing_json, new_json)}
 
     return [{"role": "system", "content": system}] + few_shot + [final]
-
-
-def parse_conflict_response(text: str) -> Dict[str, List[int]]:
-    """Parse model response → {deactivate: [...], skip_new: [...]}."""
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    data = json.loads(text)
-
-    def _to_int(x: Any) -> int:
-        """Accept plain int, str-int, or {"idx": N} / {"record_id": N} style objects."""
-        if isinstance(x, dict):
-            return int(x.get("idx") or x.get("record_id") or x.get("id") or 0)
-        return int(x)
-
-    return {
-        "deactivate": [_to_int(x) for x in data.get("deactivate", [])],
-        "skip_new": [_to_int(x) for x in data.get("skip_new", [])],
-    }

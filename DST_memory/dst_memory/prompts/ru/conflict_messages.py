@@ -1,0 +1,53 @@
+"""
+Промпт для разрешения конфликтов на уровне триплетов (русский UI).
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Dict, List
+
+from .prompt_fewshots import CONFLICT_RESOLUTION_FEWSHOT
+
+
+def build_conflict_messages(
+    slot_name: str,
+    existing_triplets: List[Dict[str, Any]],
+    new_triplets: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    system = (
+        "ТЫ — РЕЗОЛВЕР КОНФЛИКТОВ ПАМЯТИ ДЛЯ ГРАФА ЗНАНИЙ ПОЛЬЗОВАТЕЛЯ.\n"
+        "Тебе даны СУЩЕСТВУЮЩИЕ активные триплеты (с record_id) и НОВЫЕ входящие триплеты (с idx).\n"
+        "Задача: обнаружить противоречия, устаревшие факты и точные дубликаты.\n\n"
+        "ВЫДАВАЙ ТОЛЬКО ВАЛИДНЫЙ JSON. БЕЗ MARKDOWN. БЕЗ ПОЯСНЕНИЙ.\n\n"
+        "СХЕМА: {\"deactivate\": [<record_id>, ...], \"skip_new\": [<idx>, ...]}\n\n"
+        "ПРАВИЛА:\n"
+        "ДЕАКТИВИРУЙ существующую запись, если новый триплет её заменяет "
+        "(тот же субъект, семантически эквивалентная или противоречащая связь — старое значение неверно или устарело).\n"
+        "ПРОПУСТИ новый триплет (добавь его idx в skip_new), если это точный дубликат существующей записи "
+        "и не добавляет информации.\n"
+        "Если конфликта и дубликата нет — верни {\"deactivate\":[], \"skip_new\":[]}.\n"
+        "НЕ деактивируй факты, которые остаются истинными вместе с новыми.\n"
+        "НЕ пропускай новые триплеты с действительно новой информацией.\n"
+        "ВАЖНО: если у существующего и нового триплета ОДИН субъект и ОДИН объект, но РАЗНЫЕ связи, "
+        "это ДОПОЛНЯЮЩАЯ информация об одной сущности "
+        "(например «есть партнёр» и «живёт вместе с» для одного и того же партнёра) — "
+        "сохрани ОБА, верни {\"deactivate\":[], \"skip_new\":[]}.\n\n"
+        f"СЛОТ: {slot_name}\n"
+    )
+
+    def user_turn(existing: str, new: str) -> str:
+        return (
+            f"Существующие триплеты: {existing}\n"
+            f"Новые триплеты: {new}"
+        )
+
+    few_shot: List[Dict[str, Any]] = []
+    for existing_json, new_json, answer in CONFLICT_RESOLUTION_FEWSHOT:
+        few_shot.append({"role": "user", "content": user_turn(existing_json, new_json)})
+        few_shot.append({"role": "assistant", "content": answer})
+
+    existing_json = json.dumps(existing_triplets, ensure_ascii=False)
+    new_json = json.dumps(new_triplets, ensure_ascii=False)
+    final = {"role": "user", "content": user_turn(existing_json, new_json)}
+
+    return [{"role": "system", "content": system}] + few_shot + [final]

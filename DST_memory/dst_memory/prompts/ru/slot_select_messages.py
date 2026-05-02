@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-from ..slots.ontology import RU_SLOT_LABELS_ORDERED
-from .prompt_fewshots_ru import slot_select_few_shot_messages
+from ...slots.ontology import DEFAULT_USER_SLOTS, RU_SLOT_LABELS_ORDERED
+from .prompt_fewshots import slot_select_few_shot_messages
 
 
 def build_slot_select_messages(
@@ -13,8 +13,9 @@ def build_slot_select_messages(
     ontology_slots: List[str] | None = None,
     max_slots: int = 5,
 ) -> List[Dict[str, Any]]:
-    _ = ontology_slots
-    slots_json = json.dumps([s.upper() for s in RU_SLOT_LABELS_ORDERED], ensure_ascii=False)
+    names = ontology_slots or DEFAULT_USER_SLOTS.slot_names
+    _ = names  # онтология совпадает с RU_SLOT_LABELS_ORDERED по порядку
+    slots_json = json.dumps(RU_SLOT_LABELS_ORDERED, ensure_ascii=False)
 
     system = (
         "Ты классификатор слотов долговременной памяти пользователя.\n"

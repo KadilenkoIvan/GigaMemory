@@ -66,14 +66,10 @@ dst_memory/
 │   ├── models.py        — Message, FactRecord, MemoryFact, DialogueMemoryState
 │   ├── config.py        — PipelineConfig, SLOT_DEFAULT_TTL
 │   └── graph_backend.py — GraphEdge (dataclass)
-├── prompts/             — все сборщики промптов и few-shot банк
-│   ├── prompt_fewshots_ru.py   — центральный банк few-shot примеров
-│   ├── slot_select_messages.py — промпт выбора слотов
-│   ├── triplet_messages.py     — промпт извлечения триплетов
-│   ├── conflict_messages.py    — промпт разрешения конфликтов
-│   ├── memory_gate_messages.py — промпт memory gate
-│   ├── deletion_messages.py    — промпт детекции удалений
-│   └── slot_update_messages.py — промпт обновления слотов (для slot_eval)
+├── prompts/             — сборщики промптов и few-shot банки по языку UI
+│   ├── loader.py , parsers.py — выбор `ru`/`en`, общие JSON-парсеры ответов LLM
+│   ├── ru/              — русскоязычные тексты (system/user, few-shots)
+│   └── en/              — English UI (тот же формат JSON; триплеты в графе — русские леммы)
 ├── slots/               — слоты и онтология
 │   ├── ontology.py             — SlotOntology, DEFAULT_USER_SLOTS, метки RU
 │   ├── slot_name_normalize.py  — нормализация имён слотов

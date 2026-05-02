@@ -16,7 +16,7 @@
 - `run.py` — единая CLI-точка запуска.
 - `dst_memory/` — вся логика пайплайна (разбита по подпакетам):
   - `core/` — pipeline, dst_manager, models, config, graph_backend
-  - `prompts/` — все сборщики промптов и few-shot банк
+  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в `run_config.json` / `--prompt-language`
   - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
   - `triplets/` — extraction, conflict, deletion, negation_detector
   - `storage/` — RAGU backend (ragu_graph_processor)
@@ -71,6 +71,7 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--ragu-storage-path`
 - `--llm-mode` (`openrouter|api|stub|local`)
 - `--no-final-llm`
+- `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict (в `run_config.json`: `prompt_language`)
 
 ## Режимы удаления фактов
 

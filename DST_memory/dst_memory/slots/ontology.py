@@ -91,6 +91,7 @@ RU_SLOT_TO_CANONICAL: dict[str, str] = {
     "СПОРТ": "SPORTS",
     "ЕДА": "FOOD",
     "ДОМ": "HOME",
+    "МЕСТОПОЛОЖЕНИЕ": "LOCATION",
     "ЛОКАЦИЯ": "LOCATION",
     "ПУТЕШЕСТВИЯ": "TRAVEL",
     "ПИТОМЦЫ": "PETS",

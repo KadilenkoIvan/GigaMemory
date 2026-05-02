@@ -43,7 +43,7 @@ class DSTMemoryPipeline:
         logger.info(
             "Initializing pipeline threshold=%.3f top_k=%d llm_mode=%s gate=%s "
             "memory_gate_stub=%s memory_strategy=%s ragu=%s ttl_mode=%s semantic_dedup=%s "
-            "slot_context=%s deletion_mode=%s",
+            "slot_context=%s deletion_mode=%s prompt_language=%s",
             config.importance_threshold,
             config.retrieval_top_k,
             config.llm_mode,
@@ -55,6 +55,7 @@ class DSTMemoryPipeline:
             config.ttl_semantic_dedup_enabled,
             config.slot_context_enabled,
             config.triplet_deletion_mode,
+            getattr(config, "prompt_language", "ru"),
         )
         self.classifier = ImportanceClassifier(
             model_path=config.importance_model_path,
@@ -72,18 +73,21 @@ class DSTMemoryPipeline:
             max_triplets=max(6, config.slot_max_slots_per_message * 3),
             max_retries=1,
             ttl_mode=config.ttl_mode,
+            prompt_language=config.prompt_language,
         )
         slot_selector = SlotSelectClient(
             use_stub=config.slot_use_stub,
             serving=slot_serving,
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
+            prompt_language=config.prompt_language,
         )
         conflict_resolver = TripletConflictClient(
             use_stub=config.slot_use_stub,
             serving=slot_serving,
             max_retries=1,
             allow_multi_relation_same_object=config.conflict_allow_multi_relation_same_object,
+            prompt_language=config.prompt_language,
         )
 
         # --- Deletion components ---
@@ -103,6 +107,7 @@ class DSTMemoryPipeline:
                 use_stub=config.slot_use_stub,
                 serving=slot_serving,
                 max_retries=1,
+                prompt_language=config.prompt_language,
             )
             logger.info("TripletDeletionClient (llm_separate) enabled")
 
@@ -128,6 +133,7 @@ class DSTMemoryPipeline:
             use_stub=gate_stub,
             serving=slot_serving,
             max_retries=1,
+            prompt_language=config.prompt_language,
         )
         self.final_llm = FinalLLMClient(
             mode=config.llm_mode,

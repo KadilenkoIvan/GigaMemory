@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.slot_update_messages import build_update_messages
+from ..prompts.loader import load_prompt_modules
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,16 @@ class SlotOperation:
 
 
 class SlotUpdateClient:
-    def __init__(self, serving: Optional[LocalHFServing] = None, max_retries: int = 1):
+    def __init__(
+        self,
+        serving: Optional[LocalHFServing] = None,
+        max_retries: int = 1,
+        prompt_language: str = "ru",
+    ):
         self.serving = serving
         self.max_retries = max_retries
+        self.prompt_language = prompt_language
+        self._prompt_modules = None
 
     def plan_operations(
         self,
@@ -35,7 +42,11 @@ class SlotUpdateClient:
                 else []
             )
 
-        messages = build_update_messages(slot_name, existing_records, user_message)
+        if self._prompt_modules is None:
+            self._prompt_modules = load_prompt_modules(self.prompt_language)
+        messages = self._prompt_modules.slot_update_messages.build_update_messages(
+            slot_name, existing_records, user_message
+        )
 
         raw = self._generate_with_retries(messages)
         ops = self._parse_operations(raw)
@@ -65,13 +76,23 @@ class SlotUpdateClient:
         return last
 
     def _attempt_fix_json(self, bad_text: str) -> str:
-        prompt = (
-            "Исправь следующий ответ так, чтобы он был ВАЛИДНЫМ JSON строго формата:\n"
-            '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2}, {"op":"nothing"} ] }\n'
-            "Никакого текста кроме JSON.\n\n"
-            f"Ответ для исправления:\n```text\n{bad_text}\n```"
-        )
-        messages = [{"role": "system", "content": "Ты исправляешь JSON."}, {"role": "user", "content": prompt}]
+        if self.prompt_language == "en":
+            prompt = (
+                "Fix the following so it is VALID JSON exactly in this shape:\n"
+                '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2}, {"op":"nothing"} ] }\n'
+                "No text outside JSON.\n\n"
+                f"Broken output:\n```text\n{bad_text}\n```"
+            )
+            sys_msg = "You fix JSON."
+        else:
+            prompt = (
+                "Исправь следующий ответ так, чтобы он был ВАЛИДНЫМ JSON строго формата:\n"
+                '{ "operations": [ {"op":"add","value":"..."}, {"op":"update","id":1,"value":"..."}, {"op":"delete","id":2}, {"op":"nothing"} ] }\n'
+                "Никакого текста кроме JSON.\n\n"
+                f"Ответ для исправления:\n```text\n{bad_text}\n```"
+            )
+            sys_msg = "Ты исправляешь JSON."
+        messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
         fixed = self.serving.generate_chat(
             messages,
             generation_config=GenerationConfig(max_new_tokens=250, do_sample=False),

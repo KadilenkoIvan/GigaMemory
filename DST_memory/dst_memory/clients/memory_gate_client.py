@@ -7,8 +7,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from ..prompts.memory_gate_messages import build_memory_gate_messages
+from ..prompts.loader import load_prompt_modules
 from .serving import GenerationConfig, LocalHFServing
+from ..slots.ontology import DEFAULT_USER_SLOTS
 from ..slots.slot_name_normalize import normalize_slot_label, resolve_slot_key_to_existing
 
 logger = logging.getLogger(__name__)
@@ -44,10 +45,13 @@ class MemoryGateClient:
         use_stub: bool,
         serving: Optional[LocalHFServing] = None,
         max_retries: int = 1,
+        prompt_language: str = "ru",
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
+        self.prompt_language = prompt_language
+        self._prompt_modules = None
         if self.use_stub:
             logger.info("Memory gate client in STUB mode (эвристика по маркерам)")
         elif self.serving is None:
@@ -73,7 +77,9 @@ class MemoryGateClient:
                 user_message, existing_slot_names, for_vector_context=for_vector_context
             )
 
-        messages = build_memory_gate_messages(
+        if self._prompt_modules is None:
+            self._prompt_modules = load_prompt_modules(self.prompt_language)
+        messages = self._prompt_modules.memory_gate_messages.build_memory_gate_messages(
             user_message,
             existing_slot_names,
             for_vector_context=for_vector_context,
@@ -214,12 +220,17 @@ class MemoryGateClient:
     def _match_slot_name(s: str, canonical: List[str]) -> Optional[str]:
         if not s:
             return None
+        allowed = set(canonical)
         for ex in canonical:
             if ex == s or ex.lower() == s.lower():
                 return ex
+        # RU few-shots / model output: «СЕМЬЯ», «РАБОТА» → canonical FAMILY, WORK
+        resolved = DEFAULT_USER_SLOTS.resolve(s)
+        if resolved and resolved in allowed:
+            return resolved
         normalized = normalize_slot_label(s)
         if normalized:
-            resolved = resolve_slot_key_to_existing(canonical, normalized)
-            if resolved in canonical:
-                return resolved
+            r2 = resolve_slot_key_to_existing(canonical, normalized)
+            if r2 in allowed:
+                return r2
         return None

@@ -3,7 +3,7 @@
 
 Подключение к основному коду только:
   - dst_memory.clients.serving (LocalHFServing, GenerationConfig)
-  - dst_memory.prompts.slot_update_messages.build_update_messages
+  - dst_memory.prompts.loader.load_prompt_modules(...).slot_update_messages.build_update_messages
 """
 
 from __future__ import annotations
@@ -62,9 +62,11 @@ class PipelineSlotUpdate:
                 else []
             )
 
-        from dst_memory.prompts.slot_update_messages import build_update_messages
+        from dst_memory.prompts.loader import load_prompt_modules
 
-        messages = build_update_messages(slot_name, existing_records, user_message)
+        messages = load_prompt_modules("ru").slot_update_messages.build_update_messages(
+            slot_name, existing_records, user_message
+        )
 
         model_response = self._generate_with_retries(messages)
         self.last_trace.primary_raw = model_response

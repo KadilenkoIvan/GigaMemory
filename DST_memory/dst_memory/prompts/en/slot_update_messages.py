@@ -1,14 +1,13 @@
 """
-Prompts for slot content update (add/update/delete by record_id).
-Principle: one record per entity/topic. All facts about "жена" → one record.
-All facts about "рыбалка" → one record. New info about same entity → update, not add.
+Slot content update (add/update/delete by record_id) — English UI.
+Principle: one record per entity/topic.
 """
 from __future__ import annotations
 
 import json
 from typing import Any
 
-from .prompt_fewshots_ru import SLOT_UPDATE_EXTRA_FEWSHOT
+from .prompt_fewshots import SLOT_UPDATE_EXTRA_FEWSHOT
 
 
 def build_update_messages(
@@ -18,53 +17,49 @@ def build_update_messages(
 ) -> list[dict[str, Any]]:
 
     system = (
-        "Вы — модуль управления содержимым слота памяти пользователя. "
-        "Слот — это категория (например: транспорт, спорт, семья). "
-        "Внутри слота хранятся записи — каждая запись описывает одну сущность или тему. "
-        "На основе нового сообщения обновите записи слота. "
-        "Возвращайте только JSON."
+        "You manage records inside a user-memory slot. "
+        "A slot is a category (e.g. transport, sport, family). "
+        "Each record describes one entity or topic. "
+        "Update records from the new message. "
+        "Return JSON only."
     )
 
     def user_turn(s: str, records: list[dict[str, Any]]) -> str:
         records_json = json.dumps(records, ensure_ascii=False)
         return (
-            f"Слот: {slot_name}\n"
-            f"Текущие записи: {records_json}\n\n"
-            f"Сообщение:\n{s}\n\n"
-            "Формат ответа — строго JSON, никакого текста до или после:\n"
-            '{"operations":[<операция>, <операция>, ...]}\n\n'
-            "Каждая операция — один из четырёх вариантов:\n"
-            '{"op":"add","value":"..."}               — добавить новую запись\n'
-            '{"op":"update","id":<id>,"value":"..."}  — обновить существующую запись по id\n'
-            '{"op":"delete","id":<id>}                — удалить устаревшую запись по id\n'
-            '{"op":"nothing"}                         — ничего не менять\n\n'
-            "Можно вернуть несколько операций:\n"
+            f"Slot: {slot_name}\n"
+            f"Current records: {records_json}\n\n"
+            f"Message:\n{s}\n\n"
+            "Response format — JSON only, no text before or after:\n"
+            '{"operations":[<op>, <op>, ...]}\n\n'
+            "Each operation is one of:\n"
+            '{"op":"add","value":"..."}               — add a new record\n'
+            '{"op":"update","id":<id>,"value":"..."}  — update record by id\n'
+            '{"op":"delete","id":<id>}                — delete obsolete record\n'
+            '{"op":"nothing"}                         — no change\n\n'
+            "Multiple operations allowed:\n"
             '{"operations":[{"op":"update","id":1,"value":"..."},{"op":"add","value":"..."}]}\n\n'
-            "Правила:\n"
-            "— nothing возвращай только одну, без других операций рядом.\n"
-            "— Если несколько сущностей изменились — верни операцию для каждой.\n\n"
-            "Структура значения записи:\n"
-            "— Формат: «метка: факт1, факт2, ...» — метка обозначает сущность или тему.\n"
-            "  Примеры: «жена: Людмила, любит Чехова», «рыбалка: раз в неделю, зимой тоже».\n\n"
-            "— ОДИН СУБЪЕКТ = ОДНА ЗАПИСЬ. Все факты об одной сущности хранятся вместе.\n"
-            "  В слоте «семья»: «жена: Людмила, любит Чехова» — одна запись, не две.\n"
-            "  В слоте «хобби»: «рыбалка: с детства, раз в неделю» — одна запись.\n"
-            "  Новый факт о той же сущности → update существующей записи, не add новой.\n\n"
-            "— РАЗНЫЕ СУБЪЕКТЫ = РАЗНЫЕ ЗАПИСИ. Жена и сын — разные люди, разные записи.\n"
-            "  «жена: Людмила» и «сын: Ромка» — два отдельных add.\n\n"
-            "— Не сохраняй эмоции, оценки и лирику. Только проверяемые факты.\n"
-            "  Плохо: «любовь как в первый день»  Хорошо: «семейное положение: женат 20 лет»\n\n"
-            "— Запись должна быть понятна без исходного сообщения.\n"
-            "  Плохо: «Тверь»  Хорошо: «маршруты: Тверь с семьёй, Кострома с семьёй»\n\n"
-            "— Проверяй дубли: если сущность уже есть в записях — update, не add.\n"
+            "Rules:\n"
+            "— Return nothing alone, without other ops.\n"
+            "— If several entities changed — one operation per entity.\n\n"
+            "Record value structure:\n"
+            "— Format: «label: fact1, fact2, ...» — label is entity or topic.\n"
+            "  Examples: «жена: Людмила, любит Чехова», «рыбалка: раз в неделю, зимой тоже».\n\n"
+            "— ONE SUBJECT = ONE RECORD. Facts about the same entity stay together.\n"
+            "  In «family»: «жена: Людмила, любит Чехова» — one record.\n"
+            "  New fact about same entity → update, not add.\n\n"
+            "— DIFFERENT SUBJECTS = DIFFERENT RECORDS.\n"
+            "  «жена: Людмила» and «сын: Ромка» — two separate adds.\n\n"
+            "— No emotions or lyricism. Verifiable facts only.\n"
+            "— Record must be understandable without the original message.\n"
+            "— If entity already exists — update, not add.\n"
         )
 
     few_shot = [
-        # Новый слот — первое сообщение содержит несколько сущностей → несколько add
         {
             "role": "user",
             "content": user_turn(
-                "женат уже 20 лет, есть сын Ромка и дочь Аня",
+                "Married 20 years, have son Romka and daughter Anya",
                 [],
             ),
         },
@@ -76,11 +71,10 @@ def build_update_messages(
                        '{"op":"add","value":"дочь: Аня"}'
                        ']}',
         },
-        # Новый факт об уже известной сущности → update, не add
         {
             "role": "user",
             "content": user_turn(
-                "дочка переехала в Казань и вышла замуж",
+                "Daughter moved to Kazan and got married",
                 [
                     {"id": 1, "value": "семейное положение: женат 20 лет"},
                     {"id": 2, "value": "дочь: Аня"},
@@ -91,11 +85,10 @@ def build_update_messages(
             "role": "assistant",
             "content": '{"operations":[{"op":"update","id":2,"value":"дочь: Аня, живёт в Казани, замужем"}]}',
         },
-        # Два факта о разных сущностях → два update
         {
             "role": "user",
             "content": user_turn(
-                "сын теперь в институте, а жена стала преподавать в школе",
+                "Son is in university now, wife teaches at a school",
                 [
                     {"id": 1, "value": "жена: Людмила"},
                     {"id": 2, "value": "сын: Ромка"},
@@ -109,11 +102,10 @@ def build_update_messages(
                        '{"op":"update","id":2,"value":"сын: Ромка, учится в институте"}'
                        ']}',
         },
-        # Нейтральное сообщение → nothing
         {
             "role": "user",
             "content": user_turn(
-                "хорошо, спасибо",
+                "Okay, thanks",
                 [],
             ),
         },
@@ -121,11 +113,10 @@ def build_update_messages(
             "role": "assistant",
             "content": '{"operations":[{"op":"nothing"}]}',
         },
-        # Хобби: новый факт об уже известном хобби → update (не создавать 'литература' отдельно)
         {
             "role": "user",
             "content": user_turn(
-                "а вот Чехова совсем не понимаю",
+                "I really don't get Chekhov though",
                 [
                     {"id": 1, "value": "рыбалка: с детства, раз в неделю, даже зимой"},
                     {"id": 2, "value": "чтение: любит читать, любимый автор — Достоевский"},
@@ -136,11 +127,10 @@ def build_update_messages(
             "role": "assistant",
             "content": '{"operations":[{"op":"update","id":2,"value":"чтение: любит читать, любимый автор — Достоевский, не любит Чехова"}]}',
         },
-        # Хобби: несколько концертов → один record, update а не add
         {
             "role": "user",
             "content": user_turn(
-                "сходил на Любэ — полное разочарование, Расторгуев уже не тот",
+                "Went to Lyube — total disappointment, Rastorguev is not what he was",
                 [
                     {"id": 1, "value": "рыбалка: с детства, раз в неделю, даже зимой"},
                     {"id": 2, "value": "чтение: любит читать, любимый автор — Достоевский"},
@@ -152,11 +142,10 @@ def build_update_messages(
             "role": "assistant",
             "content": '{"operations":[{"op":"update","id":3,"value":"концерты: Аукцыон с сыном; органный с женой — не понравился; Любэ — не понравился"}]}',
         },
-        # Путешествия: маршруты — одна запись, update при новой поездке
         {
             "role": "user",
             "content": user_turn(
-                "только вернулись из Костромы, в следующий раз думаем в Казань",
+                "Just got back from Kostroma, next time thinking Kazan",
                 [
                     {"id": 1, "value": "маршруты: Тверь с семьёй"},
                     {"id": 2, "value": "предпочтения: путешествия по России"},
@@ -171,11 +160,10 @@ def build_update_messages(
                        '{"op":"update","id":3,"value":"планы: Казань с семьёй"}'
                        ']}',
         },
-        # update + add одновременно
         {
             "role": "user",
             "content": user_turn(
-                "сменил машину на ford focus, и ещё взял самокат для коротких поездок",
+                "Switched car to Ford Focus, also got a scooter for short trips",
                 [
                     {"id": 1, "value": "машина: kia rio"},
                     {"id": 2, "value": "велосипед: городской"},
@@ -189,11 +177,10 @@ def build_update_messages(
                        '{"op":"add","value":"самокат: для коротких поездок"}'
                        ']}',
         },
-        # delete + add — старое устарело
         {
             "role": "user",
             "content": user_turn(
-                "бросил бегать, теперь хожу в бассейн",
+                "Stopped running, now I swim at the pool",
                 [{"id": 1, "value": "спорт: бег по утрам"}],
             ),
         },
@@ -204,11 +191,10 @@ def build_update_messages(
                        '{"op":"add","value":"спорт: плавание в бассейне"}'
                        ']}',
         },
-        # nothing — сообщение не относится к слоту
         {
             "role": "user",
             "content": user_turn(
-                "окей, понял",
+                "Okay, understood",
                 [
                     {"id": 1, "value": "машина: ford focus"},
                     {"id": 2, "value": "велосипед: городской"},
@@ -227,9 +213,3 @@ def build_update_messages(
 
     final_user = {"role": "user", "content": user_turn(user_message, existing_records)}
     return [{"role": "system", "content": system}] + few_shot + [final_user]
-
-
-def parse_update_response(response_text: str) -> list[dict[str, Any]]:
-    """Парсит ответ модели, возвращает список операций."""
-    data = json.loads(response_text.strip())
-    return data.get("operations", [])

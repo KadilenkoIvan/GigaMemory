@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology, filter_resolve_slots
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.slot_select_messages import build_slot_select_messages
+from ..prompts.loader import load_prompt_modules
 
 logger = logging.getLogger(__name__)
 
@@ -20,17 +20,22 @@ class SlotSelectClient:
         ontology: SlotOntology = DEFAULT_USER_SLOTS,
         max_slots: int = 5,
         max_retries: int = 1,
+        prompt_language: str = "ru",
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.ontology = ontology
         self.max_slots = max_slots
         self.max_retries = max_retries
+        self.prompt_language = prompt_language
+        self._prompt_modules = None
 
     def select_slots(self, user_message: str) -> List[str]:
         if self.use_stub:
             return []
-        messages = build_slot_select_messages(
+        if self._prompt_modules is None:
+            self._prompt_modules = load_prompt_modules(self.prompt_language)
+        messages = self._prompt_modules.slot_select_messages.build_slot_select_messages(
             user_message,
             ontology_slots=self.ontology.slot_names,
             max_slots=self.max_slots,

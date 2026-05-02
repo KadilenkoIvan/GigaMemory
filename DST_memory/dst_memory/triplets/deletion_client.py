@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from ..prompts.deletion_messages import build_deletion_messages, parse_deletion_response
+from ..prompts.loader import load_prompt_modules
+from ..prompts.parsers import parse_deletion_response
 from ..clients.serving import GenerationConfig, LocalHFServing
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,13 @@ class TripletDeletionClient:
         use_stub: bool,
         serving: Optional[LocalHFServing] = None,
         max_retries: int = 1,
+        prompt_language: str = "ru",
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
+        self.prompt_language = prompt_language
+        self._prompt_modules = None
 
         if not use_stub and serving is None:
             raise ValueError("TripletDeletionClient requires serving when use_stub is False")
@@ -72,7 +76,11 @@ class TripletDeletionClient:
             return []
 
         assert self.serving is not None
-        messages = build_deletion_messages(user_message, slot_name, existing_triplets)
+        if self._prompt_modules is None:
+            self._prompt_modules = load_prompt_modules(self.prompt_language)
+        messages = self._prompt_modules.deletion_messages.build_deletion_messages(
+            user_message, slot_name, existing_triplets
+        )
         cfg = GenerationConfig(max_new_tokens=256, temperature=0.0, do_sample=False)
 
         for attempt in range(self.max_retries + 1):

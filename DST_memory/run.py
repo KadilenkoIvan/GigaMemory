@@ -76,6 +76,7 @@ def build_pipeline(args: argparse.Namespace):
         slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
         slot_fallback_on_no_slots=getattr(args, "slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=getattr(args, "triplet_fallback_on_empty", True),
+        prompt_language=getattr(args, "prompt_language", "ru"),
     )
 
     logger.info(
@@ -154,6 +155,14 @@ def create_parser(
     parser.add_argument("--slot-use-stub", action="store_const", const=True, default=bool(s.get("slot_use_stub", False)))
     parser.add_argument("--slot-model-path", type=str, default=str(s.get("slot_model_path", "Qwen/Qwen3-0.6B")))
     parser.add_argument("--slot-max-slots-per-message", type=int, default=int(s.get("slot_max_slots_per_message", 5)))
+    parser.add_argument(
+        "--prompt-language",
+        dest="prompt_language",
+        type=str,
+        default=str(s.get("prompt_language", "ru")),
+        choices=["ru", "en"],
+        help="UI language for slot/triplet/gate/deletion/conflict prompts (ru or en)",
+    )
     parser.add_argument("--ragu-embedder-model", type=str, default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")))
     parser.add_argument("--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", "")))
     parser.add_argument(
