@@ -45,6 +45,7 @@ import os
 import shutil
 import sys
 import time
+import urllib.error
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -725,15 +726,21 @@ class MemoryStatePersistence:
             json.dump(state_dict, f, ensure_ascii=False, indent=2)
         saved_paths["dst_state"] = state_path
 
-        # Save RAGU storage
+        # Save RAGU storage (path from Settings / config — not kg.storage_path)
         if pipeline.ragu_processor is not None:
-            ragu_storage_src = Path(pipeline.ragu_processor.kg.storage_path)
-            if ragu_storage_src.exists():
+            ragu_storage_src = resolve_ragu_storage_directory(pipeline)
+            if ragu_storage_src is not None and ragu_storage_src.exists():
                 ragu_storage_dst = chunk_dir / "ragu_storage"
                 if ragu_storage_dst.exists():
                     shutil.rmtree(ragu_storage_dst)
                 shutil.copytree(ragu_storage_src, ragu_storage_dst)
                 saved_paths["ragu_storage"] = ragu_storage_dst
+            else:
+                logger.warning(
+                    "RAGU storage directory not found or empty — skipping copy into %s "
+                    "(set giga_memory.ragu_storage_path or rely on RAGU Settings.storage_folder)",
+                    chunk_dir,
+                )
 
         logger.info("Saved chunk state to %s", chunk_dir)
         return saved_paths
@@ -864,6 +871,97 @@ def _atomic_write_validation_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(str(tmp), str(path))
 
 
+def resolve_ragu_storage_directory(pipeline: Any) -> Optional[Path]:
+    """
+    Resolve the on-disk RAGU storage folder for the running pipeline.
+
+    RAGU's ``KnowledgeGraph`` does not expose ``storage_path``; persistence uses
+    ``Settings.storage_folder`` (set in ``build_ragu_processor``) and/or
+    ``PipelineConfig.ragu_storage_path``.
+    """
+    if pipeline is None or getattr(pipeline, "ragu_processor", None) is None:
+        return None
+    kg = pipeline.ragu_processor.kg
+
+    legacy = getattr(kg, "storage_path", None)
+    if legacy:
+        p = Path(str(legacy))
+        if p.exists():
+            return p
+
+    cfg = getattr(pipeline, "config", None)
+    if cfg is not None:
+        rp = (getattr(cfg, "ragu_storage_path", None) or "").strip()
+        if rp:
+            p = Path(rp)
+            if p.exists():
+                return p
+
+    try:
+        from ragu.common.global_parameters import Settings as RaguSettings
+
+        RaguSettings.init_storage_folder()
+        sf = getattr(RaguSettings, "storage_folder", None)
+        if sf:
+            p = Path(str(sf))
+            if p.exists():
+                return p
+    except Exception as exc:
+        logger.debug("resolve_ragu_storage_directory: RAGU Settings fallback failed: %s", exc)
+
+    return None
+
+
+def maybe_build_ragu_graph_html(output_dir: Path, pipeline: Any, stem: str = "validation_knowledge_graph") -> None:
+    """
+    Build HTML graph visualization (same flow as ``DST_memory/run.py`` pipeline test).
+
+    Writes ``{output_dir}/{stem}.html`` when ``knowledge_graph.gml`` exists under RAGU storage.
+    """
+    storage = resolve_ragu_storage_directory(pipeline)
+    if storage is None:
+        logger.warning("Graph HTML: could not resolve RAGU storage directory — skipping")
+        return
+    graph_path = storage / "knowledge_graph.gml"
+    if not graph_path.exists():
+        logger.warning(
+            "Graph HTML: knowledge_graph.gml not found at %s — skipping visualization",
+            graph_path,
+        )
+        return
+
+    repo_root = Path(__file__).resolve().parents[2]
+    viz_script = repo_root / "RAGU" / "scripts" / "visualize_knowledge_graph.py"
+    if not viz_script.exists():
+        logger.warning("Graph HTML: script not found at %s — skipping", viz_script)
+        return
+
+    html_out = Path(output_dir) / f"{stem}.html"
+    cmd = [
+        sys.executable,
+        str(viz_script),
+        "--graph-path",
+        str(graph_path),
+        "--output",
+        str(html_out),
+    ]
+    logger.info("Graph HTML: running %s", " ".join(cmd))
+    try:
+        import subprocess
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            logger.info("Graph HTML saved: %s", html_out)
+        else:
+            logger.warning(
+                "Graph HTML: visualization failed (code %d): %s",
+                result.returncode,
+                (result.stderr or "")[:1000],
+            )
+    except Exception as exc:
+        logger.warning("Graph HTML: could not run visualization: %s", exc)
+
+
 @dataclass
 class AccumulatedDialogue:
     """Accumulated dialogue data ready for final LLM."""
@@ -883,6 +981,7 @@ class AccumulatedAnswer:
     question_id: str
     question: str
     reference_answer: str
+    question_type: str
     predicted_answer: str
     memory_context: Dict[str, Any]
 
@@ -942,6 +1041,7 @@ class BatchProcessor:
         validation_mode: str = "full",
         input_state_dir: Optional[Path] = None,
         input_answers_path: Optional[Path] = None,
+        save_giga_memory_logs: bool = True,
     ):
         self.pipeline = pipeline
         self.judge_client = judge_client
@@ -955,6 +1055,7 @@ class BatchProcessor:
         self.validation_mode = validation_mode
         self.input_state_dir = input_state_dir
         self.input_answers_path = input_answers_path
+        self.save_giga_memory_logs = save_giga_memory_logs
 
         # Accumulators
         self.dialogue_buffer: List[AccumulatedDialogue] = []
@@ -962,6 +1063,9 @@ class BatchProcessor:
 
         # Results storage
         self.results: List[Dict[str, Any]] = []
+
+        # Verbose GigaMemory logs (same role as DST_memory pipeline test *_logs.json)
+        self.dialogue_logs: List[Dict[str, Any]] = []
 
         # Mode-specific storage
         self.memory_only_states: List[MemoryOnlyState] = []  # For memory_only mode
@@ -1022,6 +1126,22 @@ class BatchProcessor:
 
         # Get memory state (without calling final LLM)
         answer_details = self.pipeline.answer_without_final_llm(dialogue_id, question)
+
+        if self.save_giga_memory_logs:
+            self.dialogue_logs.append({
+                "dialogue_id": dialogue_id,
+                "global_index": global_index,
+                "question_id": item.get("question_id", ""),
+                "question": question,
+                "question_type": question_type,
+                "reference_answer": reference_answer,
+                "write_logs": write_logs,
+                "answer_without_final_llm": answer_details,
+                "final_llm_prompt": answer_details.get("final_llm_prompt"),
+                "memory_context_for_final_llm": answer_details.get("memory_context_for_final_llm"),
+                "expired_facts": answer_details.get("expired_facts", []),
+                "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
+            })
 
         # Save memory state
         chunk_id = f"{global_index:04d}"
@@ -1168,6 +1288,7 @@ class BatchProcessor:
                 question_id=acc.question_id,
                 question=acc.question,
                 reference_answer=acc.reference_answer,
+                question_type=acc.question_type,
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
             )
@@ -1293,6 +1414,7 @@ class BatchProcessor:
                     question_id=question_id,
                     question=question,
                     reference_answer=reference_answer,
+                    question_type=question_type,
                     predicted_answer=predicted_answer,
                     memory_context=memory_context,
                 )
@@ -1551,6 +1673,7 @@ class BatchProcessor:
                     question_id=ans_data["question_id"],
                     question=ans_data["question"],
                     reference_answer=ans_data["reference_answer"],
+                    question_type=ans_data.get("question_type", ""),
                     predicted_answer=ans_data["predicted_answer"],
                     memory_context=memory_context,
                 )
@@ -1582,6 +1705,24 @@ class BatchProcessor:
         }
         _atomic_write_validation_json(self._results_json_path, payload)
 
+    def _write_giga_memory_dialogue_logs(self) -> None:
+        """Write verbose per-dialogue logs (DST_memory pipeline test *_logs.json style)."""
+        if not self.save_giga_memory_logs or not self.dialogue_logs:
+            return
+        path = self.persistence.output_dir / "giga_memory_validation_logs.json"
+        _atomic_write_validation_json(
+            path,
+            {
+                "metadata": self._validation_metadata,
+                "note": (
+                    "Verbose per-dialogue logs: write_logs + answer_without_final_llm "
+                    "(same information as DST_memory pipeline test *_logs.json)."
+                ),
+                "dialogues": self.dialogue_logs,
+            },
+        )
+        logger.info("Saved GigaMemory validation logs: %s", path)
+
     def finalize(self) -> Tuple[List[Dict], Dict]:
         """Finalize processing - flush any remaining items."""
         logger.info("[Batch] Finalizing - flushing remaining buffers...")
@@ -1590,6 +1731,7 @@ class BatchProcessor:
         if self.validation_mode == "memory_only":
             # Write final memory states
             self._write_memory_only_states()
+            self._write_giga_memory_dialogue_logs()
             logger.info("[MemoryOnly] Saved %d memory states", len(self.memory_only_states))
             return self.results, self.stats
 
@@ -1629,6 +1771,7 @@ class BatchProcessor:
                 )
 
         self._write_results_json_snapshot()
+        self._write_giga_memory_dialogue_logs()
         return self.results, self.stats
 
 
@@ -1731,6 +1874,7 @@ def run_validation(args: argparse.Namespace) -> None:
         validation_mode=args.validation_mode,
         input_state_dir=Path(args.input_state_dir) if args.input_state_dir else None,
         input_answers_path=Path(args.input_answers_path) if args.input_answers_path else None,
+        save_giga_memory_logs=bool(getattr(args, "save_intermediate", True)),
     )
 
     # Process each item (only for modes that need dataset processing)
@@ -1759,6 +1903,14 @@ def run_validation(args: argparse.Namespace) -> None:
     # Finalize - flush remaining buffers
     timing.end_total()
     all_results, stats = batch_processor.finalize()
+
+    # Optional: HTML knowledge graph (requires knowledge_graph.gml under RAGU storage)
+    if (
+        pipeline is not None
+        and getattr(args, "save_intermediate", True)
+        and args.validation_mode in ("full", "memory_only")
+    ):
+        maybe_build_ragu_graph_html(Path(args.output_dir), pipeline)
 
     # Mode-specific summary
     logger.info("=" * 70)

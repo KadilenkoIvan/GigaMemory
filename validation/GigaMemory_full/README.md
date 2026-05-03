@@ -420,6 +420,8 @@ python validate_longmemeval.py \
 ```
 output-dir/
 ├── validation.log              # Полный лог выполнения
+├── giga_memory_validation_logs.json  # Подробные логи GigaMemory (аналог DST_memory pipeline test *_logs.json): write_logs + answer_without_final_llm
+├── validation_knowledge_graph.html   # HTML визуализация графа RAGU (если есть knowledge_graph.gml и save_intermediate=true)
 ├── validation_results.json     # Метрики и результаты (перезаписывается после каждой пары ответ+оценка; формат тот же)
 │   {
 │     "metadata": {
@@ -465,7 +467,7 @@ output-dir/
 │   }
 ├── chunk_0000/                 # Состояние после каждого диалога
 │   ├── dst_state.json         # Полное DST состояние
-│   └── ragu_storage/          # RAGU хранилище
+│   └── ragu_storage/          # Копия папки RAGU storage (тот же путь, что Settings.storage_folder / ragu_storage_path)
 ├── chunk_0001/
 └── ...
 ```
