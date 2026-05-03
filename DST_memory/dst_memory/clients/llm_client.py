@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import os
@@ -7,7 +8,45 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from ..prompts.loader import normalize_prompt_language
+
 logger = logging.getLogger(__name__)
+
+# Bilingual prefix for judge / baseline evaluator API calls (validation scripts import this).
+# Final LLM uses language-specific policy from `prompts.<ru|en>.final_llm_messages`.
+CHAT_API_OUTPUT_POLICY = (
+    "IMPORTANT — follow strictly:\n"
+    "- Do not use tools, function calls, plugins, browsing, code execution, or any external APIs. "
+    "Reply with a single plain-text assistant message only (no tool calls).\n"
+    "- Keep any chain-of-thought extremely brief: "
+    "the budget for the output tokens is small — you should have enough tokens for an answer, not just for reasoning.\n\n"
+)
+
+
+def _normalize_assistant_message_text(message: Any) -> str:
+    """Turn OpenAI-style assistant `message` dict into a single string (handles null/list/reasoning)."""
+    if not isinstance(message, dict):
+        return ""
+    raw = message.get("content")
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        parts: List[str] = []
+        for p in raw:
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") == "text" and isinstance(p.get("text"), str):
+                parts.append(p["text"])
+            elif isinstance(p.get("text"), str):
+                parts.append(p["text"])
+        return "".join(parts).strip()
+    if raw is not None:
+        return str(raw).strip()
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        v = message.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
 
 
 class FinalLLMClient:
@@ -21,6 +60,7 @@ class FinalLLMClient:
         max_tokens: int = 1024,
         http_referer: str = "",
         x_title: str = "",
+        prompt_language: str = "ru",
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -32,14 +72,19 @@ class FinalLLMClient:
         self.max_tokens = max_tokens
         self.http_referer = http_referer or ""
         self.x_title = x_title or ""
+        self._prompt_lang = normalize_prompt_language(prompt_language)
+        self._final_llm_prompts = importlib.import_module(
+            f"dst_memory.prompts.{self._prompt_lang}.final_llm_messages"
+        )
         # Last sent messages (system + user) — populated on every generate() call.
         # Used for logging to *_logs.json.
         self._last_prompt_messages: List[Dict[str, str]] = []
         logger.info(
-            "FinalLLMClient initialized mode=%s model=%s temperature=%s",
+            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s",
             self.mode,
             self.model or "(none)",
             temperature,
+            self._prompt_lang,
         )
 
     def build_messages(
@@ -52,54 +97,8 @@ class FinalLLMClient:
         import datetime
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        system = (
-            "Ты — персональный ассистент с долговременной памятью о пользователе.\n"
-            "Отвечай по-русски, кратко и по делу.\n\n"
-
-            "## Что такое память\n"
-            "Долговременная память реализована в виде графа знаний (knowledge graph). "
-            "Каждый факт — это направленное ребро графа в форме триплета:\n"
-            "  субъект  →[связь]→  объект\n"
-            "Например: «пользователь —[работает в]→ Яндекс».\n"
-            "Факты накапливаются последовательно по ходу диалога: каждый новый "
-            "разговор добавляет, уточняет или заменяет узлы и рёбра графа. "
-            "Объекты одного факта могут быть субъектами другого, образуя цепочки: "
-            "«пользователь —[есть жена]→ Мария —[работает в]→ Сбер». "
-            "Это позволяет отвечать на составные вопросы, проходя по цепи связей.\n\n"
-
-            "## Структура памяти\n"
-            "Граф разделён на тематические подграфы — слоты. "
-            "Каждый слот хранит факты об одной области жизни пользователя и "
-            "является независимым срезом графа.\n"
-            "Таблица слотов (ключ → тема):\n"
-            "  IDENTITY=Личность, FAMILY=Семья, FRIENDS=Друзья, ROMANCE=Романтика,\n"
-            "  WORK=Работа, EDUCATION=Образование, FINANCE=Финансы,\n"
-            "  HEALTH=Здоровье, MENTAL_HEALTH=Психическое состояние,\n"
-            "  HABITS=Привычки, PREFERENCES=Предпочтения, HOBBIES=Хобби, SPORTS=Спорт,\n"
-            "  FOOD=Еда, HOME=Дом/Жильё, LOCATION=Местоположение, TRAVEL=Путешествия,\n"
-            "  PETS=Питомцы, TECH=Техника, VEHICLES=Транспорт,\n"
-            "  SCHEDULE=Расписание, GOALS=Цели/Планы, EVENTS=События.\n\n"
-
-            "## Как читать блок памяти\n"
-            "Поле \"slots\" — список подграфов-слотов. Каждый слот:\n"
-            "  - \"slot\" и \"slot_label\": канонический ключ слота на английском (напр. FAMILY).\n"
-            "  - \"messages\": список рёбер графа этого слота. Каждое ребро:\n"
-            "      • subject, relation, object — узлы и тип связи;\n"
-            "      • created_at_datetime — момент когда факт был добавлен в граф;\n"
-            "      • ttl — время жизни факта (\"inf\" = бессрочно).\n\n"
-
-            "## Правила применения памяти\n"
-            "  1. Опирайся на факты из графа если они релевантны вопросу.\n"
-            "  2. Прослеживай связи между фактами разных слотов — ответ может "
-            "требовать объединения данных из нескольких подграфов.\n"
-            "  3. При нескольких слотах с разными данными — структурируй ответ по тематикам.\n"
-            "  4. При противоречии двух фактов — более свежий "
-            "(created_at_datetime позднее) имеет приоритет.\n"
-            "  5. Если память пуста или нерелевантна — отвечай из общих знаний, "
-            "  6. При ответе - не упоминай слоты, память и как она работает, "
-            "не выдумывай факты о пользователе.\n\n"
-            f"Текущее время: {now_str}."
-        )
+        pm = self._final_llm_prompts
+        system = pm.chat_api_output_policy() + pm.final_llm_system_prompt(now_str)
 
         mem_block = json.dumps(memory_context or {}, ensure_ascii=False, indent=2)
         pairs_block = (
@@ -107,15 +106,7 @@ class FinalLLMClient:
             if recent_pairs
             else "[]"
         )
-        user = (
-            f"Текущая дата и время: {now_str}\n\n"
-            "Контекст памяти (JSON):\n"
-            f"{mem_block}\n\n"
-            "Последние пары user/assistant (JSON):\n"
-            f"{pairs_block}\n\n"
-            "Текущий запрос пользователя:\n"
-            f"{question}"
-        )
+        user = pm.final_llm_user_prompt(now_str, mem_block, pairs_block, question)
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -181,6 +172,7 @@ class FinalLLMClient:
             "temperature": float(self.temperature),
             "max_tokens": int(self.max_tokens),
             "messages": messages,
+            "tool_choice": "none",
         }
 
         headers = {
@@ -214,17 +206,13 @@ class FinalLLMClient:
                 if not choices:
                     raise RuntimeError("Final LLM response has no choices")
                 message = choices[0].get("message") or {}
-                content = message.get("content")
-                if content is None:
-                    raise RuntimeError("Final LLM response has empty content")
-                if isinstance(content, list):
-                    parts = []
-                    for p in content:
-                        if isinstance(p, dict) and p.get("type") == "text":
-                            parts.append(p.get("text") or "")
-                    content = "".join(parts).strip()
-                text = str(content).strip()
+                text = _normalize_assistant_message_text(message)
                 if not text:
+                    logger.warning(
+                        "Final LLM returned blank assistant text (model=%s); message keys=%s",
+                        self.model or "(none)",
+                        list(message.keys()),
+                    )
                     raise RuntimeError("Final LLM returned blank text")
                 return text
 

@@ -53,6 +53,7 @@ if str(ragu_path) not in sys.path:
 
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
 from dst_memory.utils.run_config_loader import load_run_config, shared_section
+from dst_memory.clients.llm_client import CHAT_API_OUTPUT_POLICY, _normalize_assistant_message_text
 import random
 
 
@@ -412,7 +413,7 @@ class JudgeClient:
         """Get system prompt with 0-1 scoring criteria."""
         type_desc = QUESTION_TYPES.get(question_type, "General question answering")
 
-        return f"""You are an expert evaluator assessing answer quality.
+        return CHAT_API_OUTPUT_POLICY + f"""You are an expert evaluator assessing answer quality.
 
 Question Type: {question_type}
 Type Description: {type_desc}
@@ -435,7 +436,7 @@ Special Rules:
 Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}"""
 
     def _get_system_prompt_memory_hit(self) -> str:
-        return (
+        return CHAT_API_OUTPUT_POLICY + (
             "You are an expert evaluator assessing memory retrieval quality.\n"
             "Your task is to examine the memory context provided to an LLM and determine\n"
             "if a specific fact (needed to answer a question) is present in that context.\n\n"
@@ -532,6 +533,7 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
+            "tool_choice": "none",
         }
 
         headers = {
@@ -547,7 +549,13 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
 
         try:
             data = json.loads(raw)
-            content = data["choices"][0]["message"]["content"]
+            choices = data.get("choices") or []
+            if not choices:
+                return self._error_result(mode, "Judge response has no choices")
+            msg = choices[0].get("message") or {}
+            content = _normalize_assistant_message_text(msg)
+            if not content:
+                return self._error_result(mode, "Empty judge assistant content")
             return self._parse_judge_response(content, mode)
         except Exception as e:
             logger.error("Failed to parse judge response: %s", e)
@@ -751,7 +759,7 @@ def extract_user_messages_from_sessions(sessions: List[List[Dict]]) -> List[str]
     for session in sessions:
         for turn in session:
             if turn.get("role", "").lower() == "user":
-                content = turn.get("content", "").strip()
+                content = (turn.get("content") or "").strip()
                 if content:
                     user_messages.append(content)
     return user_messages

@@ -29,6 +29,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import urllib.error
 import urllib.request
 
+_repo_root_baseline = Path(__file__).resolve().parents[2]
+_dst_memory_for_policy = _repo_root_baseline / "DST_memory"
+if str(_dst_memory_for_policy) not in sys.path:
+    sys.path.insert(0, str(_dst_memory_for_policy))
+from dst_memory.clients.llm_client import CHAT_API_OUTPUT_POLICY  # noqa: E402
+
 # Setup logging
 def setup_logging(level: str, log_file: Optional[str] = None) -> None:
     numeric_level = getattr(logging, level.upper(), logging.INFO)
@@ -42,6 +48,37 @@ def setup_logging(level: str, log_file: Optional[str] = None) -> None:
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_openai_assistant_text(message: Any) -> str:
+    """
+    Build a single string from an OpenAI-style assistant message.
+
+    Handles null content (some reasoning / tool models), list-shaped content,
+    and optional reasoning-only fields returned by some providers.
+    """
+    if not isinstance(message, dict):
+        return ""
+    raw = message.get("content")
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, list):
+        parts: List[str] = []
+        for p in raw:
+            if not isinstance(p, dict):
+                continue
+            if p.get("type") == "text" and isinstance(p.get("text"), str):
+                parts.append(p["text"])
+            elif isinstance(p.get("text"), str):
+                parts.append(p["text"])
+        return "".join(parts).strip()
+    if raw is not None:
+        return str(raw).strip()
+    for key in ("reasoning", "reasoning_content", "thinking"):
+        v = message.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
 
 
 # ============================================================================
@@ -260,7 +297,7 @@ def extract_context_full(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
     for session in sessions:
         for turn in session:
             role = turn.get("role", "").lower()
-            content = turn.get("content", "").strip()
+            content = (turn.get("content") or "").strip()
             if content and role in ("user", "assistant"):
                 context.append({"role": role, "content": content})
     return context
@@ -272,7 +309,7 @@ def extract_context_recent_10_plus_user(sessions: List[List[Dict]]) -> List[Dict
     for session_idx, session in enumerate(sessions):
         for turn_idx, turn in enumerate(session):
             role = turn.get("role", "").lower()
-            content = turn.get("content", "").strip()
+            content = (turn.get("content") or "").strip()
             if content and role in ("user", "assistant"):
                 all_turns.append({
                     "role": role,
@@ -346,7 +383,8 @@ class FinalLLMClient:
             context_text += f"{role_label}: {turn['content']}\n\n"
 
         system = (
-            "You are a helpful assistant answering questions based on conversation history.\n"
+            CHAT_API_OUTPUT_POLICY
+            + "You are a helpful assistant answering questions based on conversation history.\n"
             "Use ONLY the information from the conversation to answer.\n"
             "Answer concisely and accurately."
         )
@@ -370,6 +408,7 @@ class FinalLLMClient:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "messages": messages,
+            "tool_choice": "none",
         }
 
         headers = {
@@ -387,7 +426,17 @@ class FinalLLMClient:
 
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"].strip()
+            choices = data.get("choices") or []
+            if not choices:
+                return ""
+            text = _normalize_openai_assistant_text(choices[0].get("message") or {})
+            if not text:
+                logger.warning(
+                    "Final LLM returned empty assistant text (model=%s); raw message keys=%s",
+                    self.model,
+                    list((choices[0].get("message") or {}).keys()),
+                )
+            return text
 
     def generate(self, question: str, context: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
         """Generate answer. Returns (answer, error)."""
@@ -431,7 +480,7 @@ class FinalLLMClient:
                 outputs = self._model.generate(**inputs, max_new_tokens=self.max_tokens, temperature=self.temperature)
 
             response = self._tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-            return response.strip(), None
+            return (response or "").strip(), None
 
         except Exception as e:
             return "", str(e)
@@ -465,7 +514,7 @@ class JudgeClient:
         """Get system prompt with scoring criteria."""
         type_desc = QUESTION_TYPES.get(question_type, "General question answering")
 
-        return f"""You are an expert evaluator assessing answer quality.
+        return CHAT_API_OUTPUT_POLICY + f"""You are an expert evaluator assessing answer quality.
 
 Question Type: {question_type}
 Type Description: {type_desc}
@@ -496,6 +545,7 @@ Respond ONLY with JSON:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "messages": messages,
+            "tool_choice": "none",
         }
 
         headers = {
@@ -513,7 +563,12 @@ Respond ONLY with JSON:
 
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"]
+            choices = data.get("choices") or []
+            if not choices:
+                raise RuntimeError("Judge response has no choices")
+            content = _normalize_openai_assistant_text(choices[0].get("message") or {})
+            if not content:
+                raise RuntimeError("Judge returned empty assistant content")
 
             # Parse JSON
             json_str = content

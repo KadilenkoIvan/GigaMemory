@@ -338,6 +338,8 @@ TTL хранится в поле `description` ребра в виде аннот
 - `memory_context` (структурный JSON/records)
 - `recent_pairs`
 
+Язык system/user текстов финальной LLM совпадает с `prompt_language` (`ru` \| `en`): шаблоны в `dst_memory/prompts/ru/final_llm_messages.py` и `dst_memory/prompts/en/final_llm_messages.py` (префикс политики API без инструментов — одноязычный внутри выбранной локали). Константа `CHAT_API_OUTPUT_POLICY` в `llm_client.py` остаётся двуязычной только для **judge**-вызовов в скриптах валидации.
+
 В `openrouter/api` режиме отправляется OpenAI-compatible `chat/completions`.
 
 ### Поддерживаемые режимы final LLM

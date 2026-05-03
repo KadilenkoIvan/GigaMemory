@@ -172,7 +172,7 @@ class PipelineConfig:
     #   '/no_think' to the system prompt as a fallback for older tokenizer versions.
     slot_model_enable_thinking: bool = False
 
-    # Prompt UI language for slot/triplet/gate/deletion/conflict LLM calls ("ru" | "en").
+    # Prompt UI language for slot/triplet/gate/deletion/conflict/final LLM ("ru" | "en").
     prompt_language: str = "ru"
 
     # -------------------------------------------------------------------

@@ -161,7 +161,7 @@ def create_parser(
         type=str,
         default=str(s.get("prompt_language", "ru")),
         choices=["ru", "en"],
-        help="UI language for slot/triplet/gate/deletion/conflict prompts (ru or en)",
+        help="UI language for slot/triplet/gate/deletion/conflict and final LLM prompts (ru or en)",
     )
     parser.add_argument("--ragu-embedder-model", type=str, default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")))
     parser.add_argument("--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", "")))
@@ -364,6 +364,7 @@ def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
         max_tokens=min(int(args.llm_max_tokens), 256),
         http_referer=args.openrouter_http_referer,
         x_title=args.openrouter_x_title,
+        prompt_language=getattr(args, "prompt_language", "ru"),
     )
     print(client.generate(question=args.prompt, memory_context={}, recent_pairs=[]))
 

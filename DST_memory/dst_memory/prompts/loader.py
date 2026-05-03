@@ -1,4 +1,7 @@
-"""Resolve prompt language → `dst_memory.prompts.<ru|en>` subpackages."""
+"""Resolve prompt language → `dst_memory.prompts.<ru|en>` subpackages.
+
+Final LLM templates live in `prompts.<ru|en>.final_llm_messages` (loaded by `FinalLLMClient`).
+"""
 
 from __future__ import annotations
 

@@ -150,6 +150,7 @@ class DSTMemoryPipeline:
             max_tokens=config.llm_max_tokens,
             http_referer=config.openrouter_http_referer,
             x_title=config.openrouter_x_title,
+            prompt_language=config.prompt_language,
         )
 
     def write_to_memory(self, dialogue_id: str, message: Message) -> Dict:

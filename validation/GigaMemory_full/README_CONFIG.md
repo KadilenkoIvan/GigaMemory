@@ -45,6 +45,8 @@
 }
 ```
 
+Поле `giga_memory.prompt_language` задаёт язык промптов для slot/triplet/gate/deletion/conflict и для **финальной LLM** (system/user); шаблоны: `DST_memory/dst_memory/prompts/<ru|en>/final_llm_messages.py`.
+
 ## Использование
 
 ### Базовый запуск (с дефолтным конфигом)

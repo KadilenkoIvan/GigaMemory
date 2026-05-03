@@ -33,7 +33,7 @@
 | `slot_use_stub` | bool | включить slot-triplet stub режим |
 | `slot_model_path` | str | путь/id локальной slot LLM |
 | `slot_max_slots_per_message` | int | лимит слотов на сообщение |
-| `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict: `ru` или `en` (хранилище фактов и русские метки слотов не меняются) |
+| `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
 | `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
 | `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
 | `ragu_storage_path` | str | путь к RAGU storage |
