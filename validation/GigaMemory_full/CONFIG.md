@@ -1,8 +1,33 @@
-# LongMemEval Validation Configuration v2
+# LongMemEval Validation Configuration v3
 
-Документация для расширенной версии валидации (`validate_longmemeval_v2.py`) с batch processing, Memory Hit Rate и полной CLI конфигурацией.
+Документация для версии валидации (`validate_longmemeval.py`) с batch processing, Memory Hit Rate, полной CLI конфигурацией и **множественными режимами валидации**.
 
-## Новые возможности v2
+## Новые возможности v3
+
+### Validation Modes - Режимы валидации
+
+Новая система позволяет разделить процесс валидации на независимые этапы.
+
+```bash
+# Выбор режима валидации
+--validation-mode full            # Полный пайплайн (default)
+--validation-mode memory_only     # Только обработка памяти
+--validation-mode final_llm_only  # Только финальная LLM (требует --input-state-dir)
+--validation-mode judge_only      # Только судья (требует --input-answers-path)
+```
+
+**Параметры режимов:**
+
+| Параметр | Режимы | Описание |
+|----------|--------|----------|
+| `--validation-mode` | Все | Основной режим работы |
+| `--input-state-dir` | `final_llm_only`, `judge_only` | Путь к директории с `memory_only_states.json` и `chunk_*/` |
+| `--input-answers-path` | `judge_only` | Путь к файлу `intermediate_answers.json` |
+| `--memory-only-output-suffix` | `memory_only` | Суффикс для выходных директорий |
+
+**Примечания:**
+- `--input-state-dir` для `final_llm_only`: загружает состояния памяти для генерации ответов
+- `--input-state-dir` для `judge_only`: альтернативный источник памяти для Memory Hit Rate (опционально, но рекомендуется если пути в `intermediate_answers.json` устарели)
 
 ### 1. Batch Processing Parameters
 
@@ -15,14 +40,15 @@
 ```
 
 **Как работает:**
-1. Фаза 1: Последовательная обработка диалогов через memory pipeline
-2. Фаза 2: Когда батч полон — последовательный вызов финальной LLM для всех накопленных
-3. Фаза 3: Когда батч ответов полон — последовательная оценка судьей
+1. **full/memory_only** Фаза 1: Последовательная обработка диалогов через memory pipeline
+2. **full/final_llm_only** Фаза 2: Когда батч полон — последовательный вызов финальной LLM для всех накопленных
+3. **full/judge_only** Фаза 3: Когда батч ответов полон — последовательная оценка судьей
 
-**Рекомендации:**
-- `final_llm_batch_size` должен быть <= `num_items`
-- `judge_batch_size` должен быть >= `final_llm_batch_size`
-- Оптимально: `judge_batch_size = 2 * final_llm_batch_size`
+**Рекомендации по режимам:**
+- `memory_only`: batch параметры не используются (нет финальной LLM и судьи)
+- `final_llm_only`: `final_llm_batch_size` определяет загрузку/выгрузку моделей
+- `judge_only`: `judge_batch_size` должен быть >= количеству ответов для эффективности
+- `full`: `final_llm_batch_size` <= `num_items`, `judge_batch_size` >= `final_llm_batch_size`
 
 ### 2. Memory Hit Rate Metric
 
@@ -267,6 +293,74 @@ python validate_longmemeval_v2.py \
     --gm-llm-mode stub \
     --gm-memory-gate-use-stub true
 ```
+
+### Пример 6: Пошаговая валидация с разными режимами
+
+```bash
+# Шаг 1: Обработка памяти (memory_only)
+python validate_longmemeval.py \
+    --validation-mode memory_only \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results_step1_memory \
+    --num-items-per-type 20 \
+    --config ./config_memory_only.json
+
+# Шаг 2: Генерация ответов (final_llm_only)
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_step1_memory \
+    --output-dir ./results_step2_llm \
+    --final-llm-batch-size 10 \
+    --gm-llm-model "openai/gpt-4o-mini" \
+    --config ./config_final_llm.json
+
+# Шаг 3: Оценка с Memory Hit Rate (judge_only)
+# С указанием input-state-dir для гарантированного доступа к памяти
+python validate_longmemeval.py \
+    --validation-mode judge_only \
+    --input-answers-path ./results_step2_llm/intermediate_answers.json \
+    --input-state-dir ./results_step1_memory \
+    --output-dir ./results_step3_judge \
+    --judge-batch-size 20 \
+    --calculate-memory-hit-rate \
+    --judge-model "openai/gpt-4o" \
+    --config ./config_judge.json
+```
+
+**Важно:** Для `judge_only` с `--calculate-memory-hit-rate` рекомендуется указывать `--input-state-dir` чтобы гарантировать доступ к состояниям памяти, особенно если файлы были перемещены.
+
+## Конфигурационные файлы режимов
+
+Предоставляются готовые конфигурационные файлы для каждого режима:
+
+| Файл | Режим | Назначение |
+|------|-------|-----------|
+| `config_full.json` | `full` | Полный пайплайн (по умолчанию) |
+| `config_memory_only.json` | `memory_only` | Только обработка памяти |
+| `config_final_llm.json` | `final_llm_only` | Только финальная LLM |
+| `config_judge.json` | `judge_only` | Только судья |
+
+### Структура validation_mode в конфиге
+
+```json
+{
+  "validation_mode": {
+    "mode": "full",
+    "input_state_dir": "",
+    "input_answers_path": "",
+    "memory_only_output_suffix": "_memory_only"
+  }
+}
+```
+
+**Описание полей:**
+
+| Поле | Тип | Режимы | Описание |
+|------|-----|--------|----------|
+| `mode` | string | Все | `full`, `memory_only`, `final_llm_only`, `judge_only` |
+| `input_state_dir` | string | `final_llm_only` | Путь к директории с результатами `memory_only` |
+| `input_answers_path` | string | `judge_only` | Путь к файлу `intermediate_answers.json` |
+| `memory_only_output_suffix` | string | `memory_only` | Суффикс для именования выходных директорий |
 
 ## Environment Variables
 

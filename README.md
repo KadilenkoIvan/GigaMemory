@@ -102,47 +102,91 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 
 ```
 validation/
-├── GigaMemory_full/        # Полное тестирование GigaMemory
-│   ├── validate_longmemeval.py
-│   ├── run_config.json
-│   └── README.md
+├── GigaMemory_full/        # Полное тестирование GigaMemory (v3)
+│   ├── validate_longmemeval.py      # Основной скрипт с 4 режимами
+│   ├── run_config.json              # Базовый конфиг
+│   ├── config_full.json             # Полный пайплайн
+│   ├── config_memory_only.json      # Только память
+│   ├── config_final_llm.json        # Только финальная LLM
+│   ├── config_judge.json            # Только судья
+│   ├── README.md
+│   └── CONFIG.md
 └── baseline/               # Baseline тестирование
     ├── validate_baseline.py
     ├── run_config.json
     └── README.md
 ```
 
+### Режимы валидации (v3)
+
+Скрипт `validate_longmemeval.py` поддерживает 4 режима работы:
+
+| Режим | Описание | Команда |
+|-------|----------|---------|
+| `full` | Полный пайплайн: память → финальная LLM → судья | `python validate_longmemeval.py --validation-mode full` |
+| `memory_only` | Только обработка памяти и сохранение состояний | `python validate_longmemeval.py --validation-mode memory_only` |
+| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory` |
+| `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `python validate_longmemeval.py --validation-mode judge_only --input-answers-path ./results/answers.json` |
+
 ### 1. GigaMemory Full Validation
+
+#### Полный пайплайн (режим `full`)
 
 Полное тестирование с structured memory, batch processing и Memory Hit Rate.
 
 ```bash
 cd validation/GigaMemory_full
 
-# Используем конфиг файл (run_config.json)
-python validate_longmemeval.py
+# Используем конфиг файл (config_full.json)
+python validate_longmemeval.py --config ./config_full.json
 
 # Или с кастомным конфигом
 python validate_longmemeval.py --config ./my_config.json
 
 # Batch processing: накапливаем 5 диалогов перед вызовом финальной LLM
 python validate_longmemeval.py \
-    --val-shared-start-index 0 \
-    --val-shared-num-items 20 \
+    --validation-mode full \
+    --val-shared-num-items-per-type 20 \
     --val-batch-final-llm-batch-size 5 \
     --val-batch-judge-batch-size 10
 
 # С подсчётом Memory Hit Rate (дополнительная метрика)
 python validate_longmemeval.py \
-    --val-batch-calculate-memory-hit-rate true \
-    --val-judge-mode openrouter
-
-# С полной конфигурацией GigaMemory через CLI
-python validate_longmemeval.py \
-    --gm-memory-strategy topk_graph_records \
-    --gm-graph-top-k-records 50 \
-    --gm-prompt-language en
+    --validation-mode full \
+    --calculate-memory-hit-rate \
+    --judge-mode openrouter
 ```
+
+#### Пошаговая валидация (3 этапа)
+
+Разделение процесса для экономии ресурсов и тестирования разных конфигураций:
+
+```bash
+# Шаг 1: Обработка памяти (один раз)
+python validate_longmemeval.py \
+    --validation-mode memory_only \
+    --config ./config_memory_only.json
+
+# Шаг 2: Генерация ответов (можно запускать с разными LLM)
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory_only \
+    --gm-llm-model "openai/gpt-4o-mini" \
+    --config ./config_final_llm.json
+
+# Шаг 3: Оценка (можно менять judge модель)
+python validate_longmemeval.py \
+    --validation-mode judge_only \
+    --input-answers-path ./results_final_llm/intermediate_answers.json \
+    --calculate-memory-hit-rate \
+    --config ./config_judge.json
+```
+
+**Преимущества разделения:**
+- Обработка памяти выполняется один раз (самый быстрый этап)
+- Можно тестировать разные финальные LLM на одних и тех же состояниях памяти
+- GPU оптимизация: выгрузка моделей памяти перед загрузкой большой LLM
+- Гибкость в выборе моделей для каждого этапа
 
 **Метрики:**
 - Accuracy (correct / total)

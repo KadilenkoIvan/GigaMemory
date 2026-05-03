@@ -1,7 +1,8 @@
 """
-LongMemEval validation script for GigaMemory DST pipeline - Version 2.
+LongMemEval validation script for GigaMemory DST pipeline - Version 3.
 
 Advanced features:
+- Multiple validation modes: full, memory_only, final_llm_only, judge_only
 - Batch processing for final LLM (accumulate N dialogues before answering)
 - Batch processing for judge (accumulate M answers before judging)
 - Memory Hit Rate metric (separate LLM call to check if fact was in context)
@@ -9,28 +10,35 @@ Advanced features:
 - Full configuration via JSON config file (mirrors DST_memory structure)
 
 Usage:
-    # Using default config file (run_config.json in same directory)
-    python validate_longmemeval_v2.py
+    # Full pipeline (default): memory -> final LLM -> judge
+    python validate_longmemeval.py
+
+    # Memory only: process dialogues and save memory state
+    python validate_longmemeval.py --validation-mode memory_only
+
+    # Final LLM only: load saved memory state and generate answers
+    python validate_longmemeval.py --validation-mode final_llm_only \
+        --input-state-dir ./results_memory_only
+
+    # Judge only: evaluate saved answers
+    python validate_longmemeval.py --validation-mode judge_only \
+        --input-answers-path ./results_final_llm/intermediate_answers.json
 
     # Using custom config
-    python validate_longmemeval_v2.py --config ./my_config.json
+    python validate_longmemeval.py --config ./my_config.json
 
-    # Override specific parameters via CLI
-    python validate_longmemeval_v2.py \
-        --config ./run_config.json \
-        --val-shared-start-index 20 \
-        --val-shared-num-items 50
-
-Config file structure mirrors DST_memory/run_config.json:
+Config file structure mirrors DST_memory/run_config.json with additional validation parameters:
     {
       "shared": { ... validation dataset/output params ... },
       "batch_processing": { ... batch sizes ... },
       "judge": { ... judge configuration ... },
-      "giga_memory": { ... GigaMemory pipeline config ... }
+      "giga_memory": { ... GigaMemory pipeline config ... },
+      "validation_mode": { ... mode-specific settings ... }
     }
 """
 
 import argparse
+import copy
 import json
 import logging
 import os
@@ -212,6 +220,12 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "unload_between_items": False,
         },
         "giga_memory": {},  # Will be merged with DST_memory defaults
+        "validation_mode": {
+            "mode": "full",  # full, memory_only, final_llm_only, judge_only
+            "input_state_dir": "",  # For final_llm_only: directory with saved memory states
+            "input_answers_path": "",  # For judge_only: path to intermediate_answers.json
+            "memory_only_output_suffix": "_memory_only",  # Suffix for memory_only output dirs
+        },
     }
 
     if not Path(config_path).exists():
@@ -244,6 +258,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     batch = config.get("batch_processing", {})
     judge = config.get("judge", {})
     gm = config.get("giga_memory", {})
+    val_mode = config.get("validation_mode", {})
 
     class Args:
         pass
@@ -274,6 +289,12 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_max_tokens = judge.get("max_tokens", 1024)
     args.judge_local_model_path = judge.get("local_model_path", "")
     args.unload_judge_between_items = judge.get("unload_between_items", False)
+
+    # Validation mode params
+    args.validation_mode = val_mode.get("mode", "full")
+    args.input_state_dir = val_mode.get("input_state_dir", "")
+    args.input_answers_path = val_mode.get("input_answers_path", "")
+    args.memory_only_output_suffix = val_mode.get("memory_only_output_suffix", "_memory_only")
 
     # GigaMemory config (for building CLI overrides)
     args.config = "DST_memory/run_config.json"  # Base GigaMemory config
@@ -835,6 +856,14 @@ def build_pipeline_from_config(config_path: str, cli_overrides: Optional[Dict] =
 # Batch Processing Classes
 # ============================================================================
 
+def _atomic_write_validation_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(str(tmp), str(path))
+
+
 @dataclass
 class AccumulatedDialogue:
     """Accumulated dialogue data ready for final LLM."""
@@ -858,9 +887,38 @@ class AccumulatedAnswer:
     memory_context: Dict[str, Any]
 
 
+@dataclass
+class MemoryOnlyState:
+    """State saved in memory_only mode for later processing."""
+    global_index: int
+    dialogue_id: str
+    question_id: str
+    question: str
+    reference_answer: str
+    question_type: str
+    memory_state_path: str  # Path to chunk_XXXX directory
+    dst_state: Dict[str, Any]  # Serialized DST state
+    ragu_storage_path: Optional[str]  # Path to RAGU storage
+    pipeline_state: Dict[str, Any]  # Full pipeline state including memory_context
+
+
+@dataclass
+class IntermediateAnswer:
+    """Intermediate answer saved for judge_only mode."""
+    global_index: int
+    question_id: str
+    question: str
+    reference_answer: str
+    question_type: str
+    predicted_answer: str
+    memory_context: Dict[str, Any]
+    memory_state_path: str  # Path for Memory Hit Rate calculation
+
+
 class BatchProcessor:
     """
     Handles batch processing for final LLM and judge.
+    Supports multiple validation modes: full, memory_only, final_llm_only, judge_only
 
     Flow:
     1. Process dialogues through memory pipeline (write_to_memory for all sessions)
@@ -872,12 +930,18 @@ class BatchProcessor:
 
     def __init__(
         self,
-        pipeline: "DSTMemoryPipeline",
+        pipeline: Optional["DSTMemoryPipeline"],
         judge_client: Optional[JudgeClient],
         final_llm_batch_size: int,
         judge_batch_size: int,
         calculate_memory_hit_rate: bool,
         persistence: MemoryStatePersistence,
+        results_json_path: Optional[Path] = None,
+        validation_metadata: Optional[Dict[str, Any]] = None,
+        timing: Optional[Any] = None,
+        validation_mode: str = "full",
+        input_state_dir: Optional[Path] = None,
+        input_answers_path: Optional[Path] = None,
     ):
         self.pipeline = pipeline
         self.judge_client = judge_client
@@ -885,6 +949,12 @@ class BatchProcessor:
         self.judge_batch_size = judge_batch_size
         self.calculate_memory_hit_rate = calculate_memory_hit_rate
         self.persistence = persistence
+        self._results_json_path = results_json_path
+        self._validation_metadata = validation_metadata
+        self._timing = timing
+        self.validation_mode = validation_mode
+        self.input_state_dir = input_state_dir
+        self.input_answers_path = input_answers_path
 
         # Accumulators
         self.dialogue_buffer: List[AccumulatedDialogue] = []
@@ -892,6 +962,10 @@ class BatchProcessor:
 
         # Results storage
         self.results: List[Dict[str, Any]] = []
+
+        # Mode-specific storage
+        self.memory_only_states: List[MemoryOnlyState] = []  # For memory_only mode
+        self.intermediate_answers: List[IntermediateAnswer] = []  # For final_llm_only output
 
         # Statistics
         self.stats = {
@@ -912,12 +986,18 @@ class BatchProcessor:
     ) -> Optional[Dict[str, Any]]:
         """
         Process a single item through memory pipeline.
-        Does NOT call final LLM immediately - accumulates for batch processing.
+        Behavior depends on validation_mode:
+        - full/memory_only: processes through memory pipeline
+        - final_llm_only/judge_only: loads from saved state (no processing)
 
         Returns:
             Result dict if this was the last item and batch was flushed,
             None otherwise (result will be added later in batch)
         """
+        # Skip processing in modes that load from saved state
+        if self.validation_mode in ("final_llm_only", "judge_only"):
+            return None
+
         dialogue_id = f"longmemeval_{global_index}_{item.get('question_id', 'unknown')}"
         question = item.get("question", "")
         reference_answer = item.get("answer", "")
@@ -944,41 +1024,100 @@ class BatchProcessor:
         answer_details = self.pipeline.answer_without_final_llm(dialogue_id, question)
 
         # Save memory state
-        self.persistence.save_chunk_state(f"{global_index:04d}", self.pipeline, dialogue_id)
+        chunk_id = f"{global_index:04d}"
+        saved_paths = self.persistence.save_chunk_state(chunk_id, self.pipeline, dialogue_id)
 
-        # Create accumulated dialogue
-        acc_dialogue = AccumulatedDialogue(
-            global_index=global_index,
-            dialogue_id=dialogue_id,
-            question_id=item.get("question_id", ""),
-            question=question,
-            reference_answer=reference_answer,
-            question_type=question_type,
-            pipeline_state={
-                "write_logs": write_logs,
-                "memory_slots": answer_details.get("memory_slots", []),
-                "expired_facts": answer_details.get("expired_facts", []),
-                "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
-                "use_memory": answer_details.get("use_memory", False),
-                "memory_context": answer_details.get("memory_context_for_final_llm", {}),
-                "final_llm_prompt": answer_details.get("final_llm_prompt", []),
-            },
-        )
+        # For memory_only mode: save state for later stages
+        if self.validation_mode == "memory_only":
+            state = self.pipeline.dst.get_state(dialogue_id)
+            memory_state = MemoryOnlyState(
+                global_index=global_index,
+                dialogue_id=dialogue_id,
+                question_id=item.get("question_id", ""),
+                question=question,
+                reference_answer=reference_answer,
+                question_type=question_type,
+                memory_state_path=str(saved_paths.get("dst_state", "")),
+                dst_state=state.to_dict() if hasattr(state, "to_dict") else {},
+                ragu_storage_path=str(saved_paths.get("ragu_storage", "")) if saved_paths.get("ragu_storage") else None,
+                pipeline_state={
+                    "write_logs": write_logs,
+                    "memory_slots": answer_details.get("memory_slots", []),
+                    "expired_facts": answer_details.get("expired_facts", []),
+                    "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
+                    "use_memory": answer_details.get("use_memory", False),
+                    "memory_context": answer_details.get("memory_context_for_final_llm", {}),
+                    "final_llm_prompt": answer_details.get("final_llm_prompt", []),
+                },
+            )
+            self.memory_only_states.append(memory_state)
+            self._write_memory_only_states()
 
-        self.dialogue_buffer.append(acc_dialogue)
+        # Create accumulated dialogue (only for full mode)
+        if self.validation_mode == "full":
+            acc_dialogue = AccumulatedDialogue(
+                global_index=global_index,
+                dialogue_id=dialogue_id,
+                question_id=item.get("question_id", ""),
+                question=question,
+                reference_answer=reference_answer,
+                question_type=question_type,
+                pipeline_state={
+                    "write_logs": write_logs,
+                    "memory_slots": answer_details.get("memory_slots", []),
+                    "expired_facts": answer_details.get("expired_facts", []),
+                    "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
+                    "use_memory": answer_details.get("use_memory", False),
+                    "memory_context": answer_details.get("memory_context_for_final_llm", {}),
+                    "final_llm_prompt": answer_details.get("final_llm_prompt", []),
+                },
+            )
+            self.dialogue_buffer.append(acc_dialogue)
+
+            # Check if we should flush final LLM batch
+            if len(self.dialogue_buffer) >= self.final_llm_batch_size:
+                self._flush_final_llm_batch()
 
         # Clear memory for next dialogue
         self.pipeline.clear_memory(dialogue_id)
 
-        # Check if we should flush final LLM batch
-        if len(self.dialogue_buffer) >= self.final_llm_batch_size:
-            self._flush_final_llm_batch()
-
         return None  # Result will be added by batch processing
+
+    def _write_memory_only_states(self) -> None:
+        """Write memory_only states to disk for later processing."""
+        output_path = self.persistence.output_dir / "memory_only_states.json"
+        states_data = []
+        for state in self.memory_only_states:
+            states_data.append({
+                "global_index": state.global_index,
+                "dialogue_id": state.dialogue_id,
+                "question_id": state.question_id,
+                "question": state.question,
+                "reference_answer": state.reference_answer,
+                "question_type": state.question_type,
+                "memory_state_path": state.memory_state_path,
+                "ragu_storage_path": state.ragu_storage_path,
+                "pipeline_state": state.pipeline_state,
+            })
+        _atomic_write_validation_json(output_path, {
+            "metadata": self._validation_metadata,
+            "states": states_data,
+        })
 
     def _flush_final_llm_batch(self):
         """Process accumulated dialogues through final LLM."""
-        if not self.dialogue_buffer:
+        if not self.dialogue_buffer and self.validation_mode != "final_llm_only":
+            return
+
+        # Handle final_llm_only mode - load from saved state
+        if self.validation_mode == "final_llm_only":
+            self._process_final_llm_only()
+            return
+
+        # Skip in memory_only mode
+        if self.validation_mode == "memory_only":
+            logger.info("[Batch] Skipping final LLM (memory_only mode)")
+            self.dialogue_buffer.clear()
             return
 
         logger.info(
@@ -1035,6 +1174,21 @@ class BatchProcessor:
 
             self.answer_buffer.append(acc_answer)
 
+            # Save intermediate answer for possible later judge processing
+            self.intermediate_answers.append(IntermediateAnswer(
+                global_index=acc.global_index,
+                question_id=acc.question_id,
+                question=acc.question,
+                reference_answer=acc.reference_answer,
+                question_type=acc.question_type,
+                predicted_answer=predicted_answer,
+                memory_context=acc.pipeline_state["memory_context"],
+                memory_state_path="",  # Not available in full mode
+            ))
+
+        # Write intermediate answers
+        self._write_intermediate_answers()
+
         # Clear dialogue buffer
         self.dialogue_buffer.clear()
 
@@ -1050,8 +1204,143 @@ class BatchProcessor:
         if len(self.answer_buffer) >= self.judge_batch_size:
             self._flush_judge_batch()
 
+    def _process_final_llm_only(self):
+        """Process final LLM using saved memory states (final_llm_only mode)."""
+        if not self.input_state_dir:
+            raise ValueError("input_state_dir required for final_llm_only mode")
+
+        input_dir = Path(self.input_state_dir)
+        states_path = input_dir / "memory_only_states.json"
+
+        if not states_path.exists():
+            raise FileNotFoundError(f"Memory states file not found: {states_path}")
+
+        logger.info("[FinalLLMOnly] Loading memory states from %s", states_path)
+
+        with open(states_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        states = data.get("states", [])
+        logger.info("[FinalLLMOnly] Loaded %d memory states", len(states))
+
+        # Group states into batches
+        state_batches = [
+            states[i:i + self.final_llm_batch_size]
+            for i in range(0, len(states), self.final_llm_batch_size)
+        ]
+
+        for batch_idx, batch in enumerate(state_batches):
+            logger.info("[FinalLLMOnly] Processing batch %d/%d", batch_idx + 1, len(state_batches))
+
+            # Unload models if configured and using local final LLM
+            if (
+                self.pipeline.config.llm_mode == "local"
+                and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
+            ):
+                logger.info("[FinalLLMOnly] Unloading models before final LLM processing...")
+                self.pipeline.unload_local_models()
+
+            for state_data in batch:
+                global_index = state_data["global_index"]
+                question = state_data["question"]
+                reference_answer = state_data["reference_answer"]
+                question_type = state_data["question_type"]
+                question_id = state_data["question_id"]
+                pipeline_state = state_data["pipeline_state"]
+                memory_state_path = state_data.get("memory_state_path", "")
+
+                # Get memory context from saved state
+                memory_context = pipeline_state.get("memory_context", {})
+                recent_pairs = []
+
+                predicted_answer = "[no_final_llm]"
+
+                if self.pipeline.config.llm_mode != "stub":
+                    try:
+                        predicted_answer = self.pipeline.final_llm.generate(
+                            question=question,
+                            memory_context=memory_context,
+                            recent_pairs=recent_pairs,
+                        )
+                        logger.info(
+                            "[FinalLLMOnly] Final LLM answer for item %d: %s...",
+                            global_index, predicted_answer[:100]
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "[FinalLLMOnly] Final LLM failed for item %d: %s",
+                            global_index, e
+                        )
+                        predicted_answer = f"[error: {e}]"
+                        self.stats["errors_final_llm"] += 1
+
+                # Create intermediate answer
+                intermediate = IntermediateAnswer(
+                    global_index=global_index,
+                    question_id=question_id,
+                    question=question,
+                    reference_answer=reference_answer,
+                    question_type=question_type,
+                    predicted_answer=predicted_answer,
+                    memory_context=memory_context,
+                    memory_state_path=memory_state_path,
+                )
+                self.intermediate_answers.append(intermediate)
+
+                # Also add to answer buffer for judge
+                acc_answer = AccumulatedAnswer(
+                    global_index=global_index,
+                    question_id=question_id,
+                    question=question,
+                    reference_answer=reference_answer,
+                    predicted_answer=predicted_answer,
+                    memory_context=memory_context,
+                )
+                self.answer_buffer.append(acc_answer)
+
+            # Write intermediate answers after each batch
+            self._write_intermediate_answers()
+
+            # Reload models if they were unloaded
+            if (
+                self.pipeline.config.llm_mode == "local"
+                and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
+            ):
+                logger.info("[FinalLLMOnly] Reloading models after final LLM processing...")
+                self.pipeline.reload_local_models()
+
+            # Check if we should flush judge batch
+            if len(self.answer_buffer) >= self.judge_batch_size:
+                self._flush_judge_batch()
+
+    def _write_intermediate_answers(self) -> None:
+        """Write intermediate answers to disk for later judge processing."""
+        output_path = self.persistence.output_dir / "intermediate_answers.json"
+        answers_data = []
+        for ans in self.intermediate_answers:
+            answers_data.append({
+                "global_index": ans.global_index,
+                "question_id": ans.question_id,
+                "question": ans.question,
+                "reference_answer": ans.reference_answer,
+                "question_type": ans.question_type,
+                "predicted_answer": ans.predicted_answer,
+                "memory_context": ans.memory_context,
+                "memory_state_path": ans.memory_state_path,
+            })
+        _atomic_write_validation_json(output_path, {
+            "metadata": self._validation_metadata,
+            "answers": answers_data,
+        })
+
     def _flush_judge_batch(self):
         """Process accumulated answers through judge."""
+        # Handle judge_only mode
+        if self.validation_mode == "judge_only":
+            self._process_judge_only()
+            return
+
+        # Skip if no answers or no judge client
         if not self.answer_buffer or not self.judge_client:
             self.answer_buffer.clear()
             return
@@ -1062,67 +1351,267 @@ class BatchProcessor:
         )
 
         for acc in self.answer_buffer:
-            # Evaluate answer correctness (0-1 score)
-            score, reasoning, judge_error = self.judge_client.evaluate_answer(
-                question=acc.question,
-                predicted_answer=acc.predicted_answer,
-                reference_answer=acc.reference_answer,
-                question_type=acc.question_type,
-            )
-
-            # Evaluate memory hit rate if requested
-            memory_hit_result = None
-            if self.calculate_memory_hit_rate:
-                memory_hit_result = self.judge_client.evaluate_memory_hit(
-                    question=acc.question,
-                    reference_answer=acc.reference_answer,
-                    memory_context=acc.memory_context,
-                )
-
-            # Build result
-            result = {
-                "global_index": acc.global_index,
-                "question_id": acc.question_id,
-                "question": acc.question,
-                "reference_answer": acc.reference_answer,
-                "predicted_answer": acc.predicted_answer,
-                "question_type": acc.question_type,
-                "score": score,
-                "reasoning": reasoning,
-                "judge_error": judge_error,
-                "memory_hit_evaluation": memory_hit_result,
-                "memory_hit": memory_hit_result.get("fact_present", False) if memory_hit_result else None,
-            }
-
-            self.results.append(result)
-
-            # Update stats
-            self.stats["total"] += 1
-            self.stats["total_score"] += score
-            if judge_error:
-                self.stats["errors_judge"] += 1
-
-            # Per-type stats
-            qt = acc.question_type
-            if qt in self.stats["by_type"]:
-                self.stats["by_type"][qt]["count"] += 1
-                self.stats["by_type"][qt]["total_score"] += score
-                if judge_error:
-                    self.stats["by_type"][qt]["errors"] += 1
-
-            if memory_hit_result:
-                if memory_hit_result.get("fact_present", False):
-                    self.stats["memory_hit"] += 1
-                else:
-                    self.stats["memory_miss"] += 1
+            self._evaluate_single_answer(acc)
 
         # Clear answer buffer
         self.answer_buffer.clear()
+
+    def _evaluate_single_answer(self, acc: AccumulatedAnswer, memory_state_path: str = ""):
+        """Evaluate a single answer with judge."""
+        # Evaluate answer correctness (0-1 score)
+        score, reasoning, judge_error = self.judge_client.evaluate_answer(
+            question=acc.question,
+            predicted_answer=acc.predicted_answer,
+            reference_answer=acc.reference_answer,
+            question_type=acc.question_type,
+        )
+
+        # Evaluate memory hit rate if requested
+        memory_hit_result = None
+        if self.calculate_memory_hit_rate:
+            # For judge_only mode, we need to load memory context from saved state
+            memory_context = acc.memory_context
+            if memory_state_path and not memory_context:
+                # Try to load memory context from saved state
+                memory_context = self._load_memory_context_from_state(memory_state_path)
+
+            memory_hit_result = self.judge_client.evaluate_memory_hit(
+                question=acc.question,
+                reference_answer=acc.reference_answer,
+                memory_context=memory_context,
+            )
+
+        # Build result
+        result = {
+            "global_index": acc.global_index,
+            "question_id": acc.question_id,
+            "question": acc.question,
+            "reference_answer": acc.reference_answer,
+            "predicted_answer": acc.predicted_answer,
+            "question_type": acc.question_type,
+            "score": score,
+            "reasoning": reasoning,
+            "judge_error": judge_error,
+            "memory_hit_evaluation": memory_hit_result,
+            "memory_hit": memory_hit_result.get("fact_present", False) if memory_hit_result else None,
+        }
+
+        self.results.append(result)
+
+        # Update stats
+        self.stats["total"] += 1
+        self.stats["total_score"] += score
+        if judge_error:
+            self.stats["errors_judge"] += 1
+
+        # Per-type stats
+        qt = acc.question_type
+        if qt in self.stats["by_type"]:
+            self.stats["by_type"][qt]["count"] += 1
+            self.stats["by_type"][qt]["total_score"] += score
+            if judge_error:
+                self.stats["by_type"][qt]["errors"] += 1
+
+        if memory_hit_result:
+            if memory_hit_result.get("fact_present", False):
+                self.stats["memory_hit"] += 1
+            else:
+                self.stats["memory_miss"] += 1
+
+        self._write_results_json_snapshot()
+
+    def _load_memory_context_from_state(self, memory_state_path: str) -> Dict[str, Any]:
+        """Load memory context from saved DST state file."""
+        try:
+            state_file = Path(memory_state_path)
+            if not state_file.exists():
+                # Try with parent directory
+                state_file = Path(memory_state_path) / "dst_state.json"
+            if not state_file.exists():
+                return {}
+
+            with open(state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+
+            # Reconstruct memory context from slots
+            slots = state.get("slots", {})
+            memory_context = {"slots": []}
+            for slot_name, records in slots.items():
+                slot_data = {
+                    "slot": slot_name,
+                    "messages": [
+                        {
+                            "record_id": r.get("record_id"),
+                            "value": r.get("value"),
+                            "source_text": r.get("source_text"),
+                            "subject": r.get("subject"),
+                            "relation": r.get("relation"),
+                            "object": r.get("object"),
+                            "is_active": r.get("is_active", True),
+                        }
+                        for r in records if r.get("is_active", True)
+                    ]
+                }
+                if slot_data["messages"]:
+                    memory_context["slots"].append(slot_data)
+
+            return memory_context
+        except Exception as e:
+            logger.warning("Failed to load memory context from state: %s", e)
+            return {}
+
+    def _load_memory_states_map(self, state_dir: Path) -> Dict[int, Dict[str, Any]]:
+        """Load memory states map from state directory for judge_only mode.
+        
+        Returns:
+            Dict mapping global_index to memory context
+        """
+        states_map = {}
+        states_file = Path(state_dir) / "memory_only_states.json"
+        
+        if not states_file.exists():
+            logger.warning("[JudgeOnly] memory_only_states.json not found in %s", state_dir)
+            return states_map
+        
+        try:
+            with open(states_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            for state in data.get("states", []):
+                global_index = state.get("global_index")
+                if global_index is not None:
+                    # Use pipeline_state memory_context if available
+                    pipeline_state = state.get("pipeline_state", {})
+                    memory_context = pipeline_state.get("memory_context", {})
+                    
+                    # Or try to load from dst_state if memory_context is empty
+                    if not memory_context:
+                        memory_state_path = state.get("memory_state_path", "")
+                        if memory_state_path:
+                            memory_context = self._load_memory_context_from_state(memory_state_path)
+                    
+                    states_map[global_index] = {
+                        "memory_context": memory_context,
+                        "memory_state_path": state.get("memory_state_path", ""),
+                    }
+        except Exception as e:
+            logger.warning("[JudgeOnly] Failed to load memory states map: %s", e)
+        
+        return states_map
+
+    def _process_judge_only(self):
+        """Process judge evaluation using saved answers (judge_only mode)."""
+        if not self.input_answers_path:
+            raise ValueError("input_answers_path required for judge_only mode")
+
+        input_path = Path(self.input_answers_path)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Intermediate answers file not found: {input_path}")
+
+        logger.info("[JudgeOnly] Loading intermediate answers from %s", input_path)
+
+        with open(input_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        answers = data.get("answers", [])
+        logger.info("[JudgeOnly] Loaded %d answers to evaluate", len(answers))
+
+        # Load memory states from input_state_dir if provided (for Memory Hit Rate)
+        memory_states_map = {}
+        if self.input_state_dir and self.calculate_memory_hit_rate:
+            logger.info("[JudgeOnly] Loading memory states from %s", self.input_state_dir)
+            memory_states_map = self._load_memory_states_map(self.input_state_dir)
+            logger.info("[JudgeOnly] Loaded %d memory states", len(memory_states_map))
+
+        # Group answers into batches
+        answer_batches = [
+            answers[i:i + self.judge_batch_size]
+            for i in range(0, len(answers), self.judge_batch_size)
+        ]
+
+        for batch_idx, batch in enumerate(answer_batches):
+            logger.info("[JudgeOnly] Evaluating batch %d/%d", batch_idx + 1, len(answer_batches))
+
+            for ans_data in batch:
+                global_index = ans_data["global_index"]
+                
+                # Get memory context - prefer memory_states_map if available
+                memory_context = ans_data.get("memory_context", {})
+                memory_state_path = ans_data.get("memory_state_path", "")
+                
+                # If input_state_dir provided, use memory from there
+                if global_index in memory_states_map:
+                    map_data = memory_states_map[global_index]
+                    memory_context = map_data.get("memory_context", memory_context)
+                    memory_state_path = map_data.get("memory_state_path", memory_state_path)
+                    logger.debug("[JudgeOnly] Using memory from input_state_dir for item %d", global_index)
+                
+                acc = AccumulatedAnswer(
+                    global_index=global_index,
+                    question_id=ans_data["question_id"],
+                    question=ans_data["question"],
+                    reference_answer=ans_data["reference_answer"],
+                    predicted_answer=ans_data["predicted_answer"],
+                    memory_context=memory_context,
+                )
+                self._evaluate_single_answer(acc, memory_state_path)
+
+        # Clear any remaining buffer
+        self.answer_buffer.clear()
+
+    def _write_results_json_snapshot(self) -> None:
+        if (
+            self._results_json_path is None
+            or self._validation_metadata is None
+            or self._timing is None
+        ):
+            return
+        stats_export = copy.deepcopy(self.stats)
+        for st in stats_export.get("by_type", {}).values():
+            if isinstance(st, dict) and st.get("count", 0) > 0:
+                st["average_score"] = st["total_score"] / st["count"]
+        timing_stats = self._timing.get_stats()
+        if timing_stats.get("total_time", 0) == 0 and self._timing.total_start is not None:
+            timing_stats = dict(timing_stats)
+            timing_stats["total_time"] = time.time() - self._timing.total_start
+        payload = {
+            "metadata": self._validation_metadata,
+            "statistics": stats_export,
+            "timing": timing_stats,
+            "results": list(self.results),
+        }
+        _atomic_write_validation_json(self._results_json_path, payload)
 
     def finalize(self) -> Tuple[List[Dict], Dict]:
         """Finalize processing - flush any remaining items."""
         logger.info("[Batch] Finalizing - flushing remaining buffers...")
 
+        # Handle mode-specific finalization
+        if self.validation_mode == "memory_only":
+            # Write final memory states
+            self._write_memory_only_states()
+            logger.info("[MemoryOnly] Saved %d memory states", len(self.memory_only_states))
+            return self.results, self.stats
+
+        if self.validation_mode == "final_llm_only":
+            # Process any remaining states if not already processed
+            if not self.intermediate_answers:
+                self._process_final_llm_only()
+            self._write_intermediate_answers()
+            logger.info("[FinalLLMOnly] Generated %d answers", len(self.intermediate_answers))
+            # If judge is configured, flush remaining answers
+            if self.answer_buffer:
+                self._flush_judge_batch()
+            return self.results, self.stats
+
+        if self.validation_mode == "judge_only":
+            # Process all answers if not already processed
+            if not self.results:
+                self._process_judge_only()
+            logger.info("[JudgeOnly] Evaluated %d answers", len(self.results))
+            return self.results, self.stats
+
+        # Full mode: flush any remaining dialogues and answers
         # Flush any remaining dialogues
         if self.dialogue_buffer:
             self._flush_final_llm_batch()
@@ -1139,6 +1628,7 @@ class BatchProcessor:
                     self.stats["by_type"][qt]["total_score"] / count
                 )
 
+        self._write_results_json_snapshot()
         return self.results, self.stats
 
 
@@ -1157,7 +1647,8 @@ def run_validation(args: argparse.Namespace) -> None:
     timing.start_total()
 
     logger.info("=" * 70)
-    logger.info("LongMemEval Validation v2 - Starting")
+    logger.info("LongMemEval Validation v3 - Starting")
+    logger.info("Validation mode: %s", args.validation_mode)
     logger.info("=" * 70)
     logger.info("Configuration:")
     logger.info("  Dataset: %s", args.dataset_path)
@@ -1170,21 +1661,46 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("  Judge mode: %s", args.judge_mode)
     logger.info("  GigaMemory config: %s", args.config)
 
-    # Load dataset with balanced sampling
-    dataset = load_dataset_balanced(
-        args.dataset_path,
-        args.question_types,
-        args.num_items_per_type,
-    )
+    # Mode-specific validation
+    if args.validation_mode == "final_llm_only" and not args.input_state_dir:
+        logger.error("--input-state-dir is required for final_llm_only mode")
+        sys.exit(1)
+    if args.validation_mode == "judge_only" and not args.input_answers_path:
+        logger.error("--input-answers-path is required for judge_only mode")
+        sys.exit(1)
 
-    logger.info("Total items to process: %d", len(dataset))
+    # Load dataset with balanced sampling (for modes that need it)
+    dataset = []
+    if args.validation_mode in ("full", "memory_only"):
+        dataset = load_dataset_balanced(
+            args.dataset_path,
+            args.question_types,
+            args.num_items_per_type,
+        )
+        logger.info("Total items to process: %d", len(dataset))
+
+    run_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    results_path = Path(args.output_dir) / "validation_results.json"
+    validation_metadata = {
+        "validation_mode": args.validation_mode,
+        "dataset_path": args.dataset_path,
+        "num_items_per_type": args.num_items_per_type,
+        "question_types": args.question_types,
+        "final_llm_batch_size": args.final_llm_batch_size,
+        "judge_batch_size": args.judge_batch_size,
+        "calculate_memory_hit_rate": args.calculate_memory_hit_rate,
+        "judge_mode": args.judge_mode,
+        "judge_model": args.judge_model,
+        "config_path": args.config,
+        "timestamp": run_timestamp,
+    }
 
     # Initialize persistence
     persistence = MemoryStatePersistence(args.output_dir)
 
-    # Initialize judge client
+    # Initialize judge client (only for modes that need it)
     judge_client = None
-    if args.judge_mode != "none":
+    if args.judge_mode != "none" and args.validation_mode in ("full", "judge_only"):
         judge_client = JudgeClient(
             mode=args.judge_mode,
             model=args.judge_model,
@@ -1195,9 +1711,11 @@ def run_validation(args: argparse.Namespace) -> None:
             local_model_path=args.judge_local_model_path,
         )
 
-    # Build pipeline
-    cli_overrides = build_cli_overrides(args)
-    pipeline = build_pipeline_from_config(args.config, cli_overrides)
+    # Build pipeline (only for modes that need it)
+    pipeline = None
+    if args.validation_mode in ("full", "memory_only", "final_llm_only"):
+        cli_overrides = build_cli_overrides(args)
+        pipeline = build_pipeline_from_config(args.config, cli_overrides)
 
     # Initialize batch processor
     batch_processor = BatchProcessor(
@@ -1207,41 +1725,78 @@ def run_validation(args: argparse.Namespace) -> None:
         judge_batch_size=args.judge_batch_size,
         calculate_memory_hit_rate=args.calculate_memory_hit_rate,
         persistence=persistence,
+        results_json_path=results_path,
+        validation_metadata=validation_metadata,
+        timing=timing,
+        validation_mode=args.validation_mode,
+        input_state_dir=Path(args.input_state_dir) if args.input_state_dir else None,
+        input_answers_path=Path(args.input_answers_path) if args.input_answers_path else None,
     )
 
-    # Process each item
-    for idx, item in enumerate(dataset):
-        global_idx = idx
+    # Process each item (only for modes that need dataset processing)
+    if args.validation_mode in ("full", "memory_only"):
+        for idx, item in enumerate(dataset):
+            global_idx = idx
 
-        logger.info("-" * 70)
-        logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset), global_idx)
-        logger.info("Question type: %s", item.get("question_type", "unknown"))
-        logger.info("Question: %s", item.get("question", ""))
+            logger.info("-" * 70)
+            logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset), global_idx)
+            logger.info("Question type: %s", item.get("question_type", "unknown"))
+            logger.info("Question: %s", item.get("question", ""))
 
-        # Count messages for timing
-        sessions = item.get("haystack_sessions", [])
-        num_messages = sum(len(s) for s in sessions)
+            # Count messages for timing
+            sessions = item.get("haystack_sessions", [])
+            num_messages = sum(len(s) for s in sessions)
 
-        start_time = time.time()
-        try:
-            batch_processor.process_single_item(item, global_idx)
-        except Exception as e:
-            logger.exception("Error processing item %d: %s", global_idx, e)
-        finally:
-            processing_time = time.time() - start_time
-            timing.add_item(num_messages, processing_time)
+            start_time = time.time()
+            try:
+                batch_processor.process_single_item(item, global_idx)
+            except Exception as e:
+                logger.exception("Error processing item %d: %s", global_idx, e)
+            finally:
+                processing_time = time.time() - start_time
+                timing.add_item(num_messages, processing_time)
 
     # Finalize - flush remaining buffers
     timing.end_total()
     all_results, stats = batch_processor.finalize()
 
-    # Compute average score
+    # Mode-specific summary
+    logger.info("=" * 70)
+    if args.validation_mode == "memory_only":
+        logger.info("Memory-Only Processing Complete")
+        logger.info("=" * 70)
+        logger.info("Output files:")
+        logger.info("  Memory states: %s", persistence.output_dir / "memory_only_states.json")
+        logger.info("  Chunks: %s", persistence.output_dir / "chunk_*/")
+        logger.info("\nNext step - run final LLM:")
+        logger.info("  python validate_longmemeval.py \\")
+        logger.info("    --validation-mode final_llm_only \\")
+        logger.info("    --input-state-dir %s \\", args.output_dir)
+        logger.info("    --output-dir ./results_final_llm")
+    elif args.validation_mode == "final_llm_only":
+        logger.info("Final LLM Processing Complete")
+        logger.info("=" * 70)
+        logger.info("Output files:")
+        logger.info("  Answers: %s", persistence.output_dir / "intermediate_answers.json")
+        logger.info("\nNext step - run judge:")
+        logger.info("  python validate_longmemeval.py \\")
+        logger.info("    --validation-mode judge_only \\")
+        logger.info("    --input-answers-path %s \\", persistence.output_dir / "intermediate_answers.json")
+        logger.info("    --output-dir ./results_judge")
+    elif args.validation_mode == "judge_only":
+        logger.info("Judge Evaluation Complete")
+        logger.info("=" * 70)
+        _print_final_stats(stats, timing.get_stats(), args, results_path)
+    else:  # full mode
+        logger.info("Validation Complete")
+        logger.info("=" * 70)
+        _print_final_stats(stats, timing.get_stats(), args, results_path)
+
+
+def _print_final_stats(stats: Dict, timing_stats: Dict, args: argparse.Namespace, results_path: Path) -> None:
+    """Print final statistics summary."""
     avg_score = stats["total_score"] / stats["total"] if stats["total"] > 0 else 0
 
-    # Final summary
-    logger.info("=" * 70)
-    logger.info("Validation Complete")
-    logger.info("=" * 70)
     logger.info("Statistics:")
     logger.info("  Total processed: %d", stats["total"])
     logger.info("  Average score: %.3f", avg_score)
@@ -1263,7 +1818,6 @@ def run_validation(args: argparse.Namespace) -> None:
             logger.info("  Rate: %.2f%%", hit_rate * 100)
 
     # Timing summary
-    timing_stats = timing.get_stats()
     logger.info("\nTiming statistics:")
     logger.info("  Total time: %.2fs", timing_stats.get("total_time", 0))
     if "time_per_item" in timing_stats:
@@ -1271,36 +1825,6 @@ def run_validation(args: argparse.Namespace) -> None:
         logger.info("  Per item: min=%.3fs, max=%.3fs, p50=%.3fs, p95=%.3fs, p99=%.3fs",
                     t.get("min", 0), t.get("max", 0), t.get("p50", 0),
                     t.get("p95", 0), t.get("p99", 0))
-
-    if stats["total"] > 0:
-        accuracy = stats["correct"] / stats["total"]
-        logger.info("  Accuracy: %.2f%%", accuracy * 100)
-
-    # Save final results
-    results_path = Path(args.output_dir) / "validation_results.json"
-    with open(results_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "metadata": {
-                    "dataset_path": args.dataset_path,
-                    "num_items_per_type": args.num_items_per_type,
-                    "question_types": args.question_types,
-                    "final_llm_batch_size": args.final_llm_batch_size,
-                    "judge_batch_size": args.judge_batch_size,
-                    "calculate_memory_hit_rate": args.calculate_memory_hit_rate,
-                    "judge_mode": args.judge_mode,
-                    "judge_model": args.judge_model,
-                    "config_path": args.config,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                },
-                "statistics": stats,
-                "timing": timing_stats,
-                "results": all_results,
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
 
     logger.info("Results saved to: %s", results_path)
 
@@ -1366,12 +1890,23 @@ def main():
     load_dst_memory_dotenv()
 
     parser = argparse.ArgumentParser(
-        description="Validate GigaMemory DST pipeline on LongMemEval (v2 with batch processing)",
+        description="Validate GigaMemory DST pipeline on LongMemEval (v3 with multiple validation modes)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Using default config file (run_config.json in same directory)
+    # Full pipeline (default): memory -> final LLM -> judge
     python validate_longmemeval.py
+
+    # Memory only: process dialogues and save memory state
+    python validate_longmemeval.py --validation-mode memory_only
+
+    # Final LLM only: load saved memory state and generate answers
+    python validate_longmemeval.py --validation-mode final_llm_only \\
+        --input-state-dir ./results_memory_only
+
+    # Judge only: evaluate saved answers
+    python validate_longmemeval.py --validation-mode judge_only \\
+        --input-answers-path ./results_final_llm/intermediate_answers.json
 
     # Using custom config file
     python validate_longmemeval.py --config ./my_validation_config.json
@@ -1381,12 +1916,6 @@ Examples:
         --val-shared-num-items-per-type 20 \\
         --val-batch-final-llm-batch-size 10 \\
         --val-judge-model openai/gpt-4o-mini
-
-    # Legacy: using only CLI args (without config file)
-    python validate_longmemeval.py \\
-        --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \\
-        --output-dir ./results \\
-        --num-items-per-type 10
         """,
     )
 
@@ -1394,6 +1923,22 @@ Examples:
     parser.add_argument("--config", type=str,
                         default=str(Path(__file__).parent / "run_config.json"),
                         help="Path to validation config JSON file (default: run_config.json)")
+
+    # Validation mode (NEW in v3)
+    mode_group = parser.add_argument_group("Validation Mode (v3)")
+    mode_group.add_argument("--validation-mode", type=str,
+                           choices=["full", "memory_only", "final_llm_only", "judge_only"],
+                           default="full",
+                           help="Validation mode: full (default), memory_only, final_llm_only, judge_only")
+    mode_group.add_argument("--input-state-dir", type=str,
+                           default="",
+                           help="Input directory with saved memory states (for final_llm_only mode)")
+    mode_group.add_argument("--input-answers-path", type=str,
+                           default="",
+                           help="Path to intermediate answers JSON (for judge_only mode)")
+    mode_group.add_argument("--memory-only-output-suffix", type=str,
+                           default="_memory_only",
+                           help="Suffix for memory_only output directories")
 
     # Validation parameters (override config file)
     val_group = parser.add_argument_group("Validation Config Overrides (--val-*)")
@@ -1583,6 +2128,16 @@ Examples:
         config["judge"]["max_tokens"] = args.val_judge_max_tokens
     if args.val_judge_local_model_path:
         config["judge"]["local_model_path"] = args.val_judge_local_model_path
+
+    # Handle validation mode args
+    if args.validation_mode:
+        config["validation_mode"]["mode"] = args.validation_mode
+    if args.input_state_dir:
+        config["validation_mode"]["input_state_dir"] = args.input_state_dir
+    if args.input_answers_path:
+        config["validation_mode"]["input_answers_path"] = args.input_answers_path
+    if args.memory_only_output_suffix:
+        config["validation_mode"]["memory_only_output_suffix"] = args.memory_only_output_suffix
 
     # Handle legacy args
     if args.dataset_path:

@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import copy
 import json
 import logging
 import os
@@ -620,6 +621,14 @@ Respond ONLY with JSON:
 # Batch Processing with Timing
 # ============================================================================
 
+def _atomic_write_validation_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(str(tmp), str(path))
+
+
 @dataclass
 class AccumulatedItem:
     global_index: int
@@ -639,12 +648,16 @@ class BatchProcessor:
         final_llm_batch_size: int,
         judge_batch_size: int,
         timing: TimingStats,
+        results_json_path: Optional[Path] = None,
+        validation_metadata: Optional[Dict[str, Any]] = None,
     ):
         self.final_llm = final_llm
         self.judge = judge
         self.final_llm_batch_size = final_llm_batch_size
         self.judge_batch_size = judge_batch_size
         self.timing = timing
+        self._results_json_path = results_json_path
+        self._validation_metadata = validation_metadata
 
         self.item_buffer: List[AccumulatedItem] = []
         self.answer_buffer: List[Tuple[AccumulatedItem, str, Optional[str]]] = []
@@ -739,7 +752,39 @@ class BatchProcessor:
 
             self.stats["total"] += 1
 
+            self._write_results_json_snapshot()
+
         self.answer_buffer.clear()
+
+    def _write_results_json_snapshot(self) -> None:
+        if self._results_json_path is None or self._validation_metadata is None:
+            return
+        by_type = copy.deepcopy(self.stats["by_type"])
+        for st in by_type.values():
+            if isinstance(st, dict) and st.get("count", 0) > 0:
+                st["average_score"] = st["total_score"] / st["count"]
+        avg_score = (
+            sum(r["score"] for r in self.results) / len(self.results)
+            if self.results else 0.0
+        )
+        timing_stats = self.timing.get_stats()
+        if timing_stats.get("total_time", 0) == 0 and self.timing.total_start is not None:
+            timing_stats = dict(timing_stats)
+            timing_stats["total_time"] = time.time() - self.timing.total_start
+
+        payload = {
+            "metadata": self._validation_metadata,
+            "statistics": {
+                "total": self.stats["total"],
+                "errors_final_llm": self.stats["errors_final_llm"],
+                "errors_judge": self.stats["errors_judge"],
+                "average_score": avg_score,
+                "by_type": by_type,
+            },
+            "timing": timing_stats,
+            "results": list(self.results),
+        }
+        _atomic_write_validation_json(self._results_json_path, payload)
 
     def finalize(self) -> Tuple[List[Dict], Dict, Dict]:
         if self.item_buffer:
@@ -755,6 +800,7 @@ class BatchProcessor:
                     self.stats["by_type"][qt]["total_score"] / count
                 )
 
+        self._write_results_json_snapshot()
         return self.results, self.stats, self.timing.get_stats()
 
 
@@ -798,6 +844,20 @@ def run_validation(config: Dict[str, Any]) -> None:
 
     logger.info("Total items to process: %d", len(dataset))
 
+    run_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    results_path = output_path / "validation_results.json"
+    validation_metadata = {
+        "strategy": baseline["strategy"],
+        "dataset_path": shared["dataset_path"],
+        "num_items": len(dataset),
+        "question_types": shared.get("question_types", list(QUESTION_TYPES.keys())),
+        "final_llm_mode": final_llm_cfg["mode"],
+        "final_llm_model": final_llm_cfg.get("model", ""),
+        "judge_mode": judge_cfg["mode"],
+        "judge_model": judge_cfg.get("model", ""),
+        "timestamp": run_timestamp,
+    }
+
     # Initialize clients
     final_llm = FinalLLMClient(
         mode=final_llm_cfg["mode"],
@@ -825,6 +885,8 @@ def run_validation(config: Dict[str, Any]) -> None:
         final_llm_batch_size=baseline["final_llm_batch_size"],
         judge_batch_size=baseline["judge_batch_size"],
         timing=timing,
+        results_json_path=results_path,
+        validation_metadata=validation_metadata,
     )
 
     # Select extraction function
@@ -890,38 +952,7 @@ def run_validation(config: Dict[str, Any]) -> None:
                     t.get("min", 0), t.get("max", 0), t.get("p50", 0),
                     t.get("p95", 0), t.get("p99", 0))
 
-    # Save results
-    results_file = output_path / "validation_results.json"
-    with open(results_file, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "metadata": {
-                    "strategy": baseline["strategy"],
-                    "dataset_path": shared["dataset_path"],
-                    "num_items": len(dataset),
-                    "question_types": shared.get("question_types", list(QUESTION_TYPES.keys())),
-                    "final_llm_mode": final_llm_cfg["mode"],
-                    "final_llm_model": final_llm_cfg.get("model", ""),
-                    "judge_mode": judge_cfg["mode"],
-                    "judge_model": judge_cfg.get("model", ""),
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                },
-                "statistics": {
-                    "total": stats["total"],
-                    "errors_final_llm": stats["errors_final_llm"],
-                    "errors_judge": stats["errors_judge"],
-                    "average_score": avg_score,
-                    "by_type": stats["by_type"],
-                },
-                "timing": timing_stats,
-                "results": results,
-            },
-            f,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    logger.info("\nResults saved to: %s", results_file)
+    logger.info("\nResults saved to: %s", results_path)
 
 
 # ============================================================================

@@ -1,6 +1,54 @@
-# LongMemEval Validation - Тестирование GigaMemory
+# LongMemEval Validation - Тестирование GigaMemory v3
 
 Этот документ описывает скрипт валидации (`validate_longmemeval.py`) для тестирования GigaMemory DST pipeline на LongMemEval датасете.
+
+## Режимы валидации (Validation Modes) v3
+
+Начиная с версии 3, скрипт поддерживает 4 режима работы, позволяющие разделить процесс валидации на этапы:
+
+### Режимы
+
+| Режим | Описание | Выходные файлы |
+|-------|----------|----------------|
+| `full` | Полный пайплайн: память → финальная LLM → судья | `validation_results.json` |
+| `memory_only` | Только обработка памяти и сохранение состояний | `memory_only_states.json`, `chunk_*/` |
+| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов | `intermediate_answers.json` |
+| `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `validation_results.json` |
+
+### Когда использовать разные режимы
+
+**`full`** - используйте по умолчанию для полной валидации в одном запуске.
+
+**`memory_only`** - используйте когда:
+- Хотите разделить процесс на этапы для экономии ресурсов
+- Нужно сохранить промежуточные состояния памяти для анализа
+- Планируете запускать финальную LLM позже с другими параметрами
+
+**`final_llm_only`** - используйте когда:
+- Уже обработали диалоги в режиме `memory_only`
+- Хотите протестировать разные финальные LLM на одних и тех же состояниях памяти
+- Нужно оптимизировать GPU (выгрузка моделей памяти перед загрузкой финальной LLM)
+
+**`judge_only`** - используйте когда:
+- Уже сгенерированы ответы в режиме `final_llm_only`
+- Хотите переоценить ответы с другой моделью-судьёй
+- Нужно включить Memory Hit Rate оценку после основного тестирования
+
+### Пайплайн работы режимов
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  memory_only    │ -> │ final_llm_only │ -> │   judge_only    │
+│                 │    │                 │    │                 │
+│  Dataset        │    │  Saved Memory   │    │  Saved Answers  │
+│  ↓              │    │  ↓              │    │  ↓              │
+│  Memory States  │    │  Final LLM      │    │  Judge          │
+│  (chunk_*/)     │    │  Answers        │    │  Evaluation     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+        │                       │                       │
+        v                       v                       v
+memory_only_states.json  intermediate_answers.json  validation_results.json
+```
 
 ## Возможности
 
@@ -123,134 +171,256 @@
 
 ## Примеры использования
 
-### Пример 1: Базовое тестирование (10 примеров на каждый тип)
+### Пример 1: Полный пайплайн (режим `full`)
+
+Базовое тестирование - обработка памяти, генерация ответов и оценка судьёй в одном запуске.
+
+```bash
+python validate_longmemeval.py \
+    --config ./config_full.json
+```
+
+Или с CLI параметрами:
 
 ```bash
 python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_basic \
+    --output-dir ./results_full \
     --num-items-per-type 10 \
+    --validation-mode full \
     --config ../../DST_memory/run_config.json
 ```
 
 **Что происходит:**
-1. Загружается сбалансированная выборка: 10 single-session-user, 10 single-session-preference, 10 multi-session, 10 knowledge-update
-2. Обрабатывается Dialog 1 -> сразу вызов финальной LLM -> сразу оценка судьей
-3. ... и так далее для всех 40 диалогов
+1. Загружается сбалансированная выборка: 10 примеров каждого типа (40 всего)
+2. Каждый диалог обрабатывается через memory pipeline
+3. Вызывается финальная LLM для генерации ответа
+4. Судья оценивает ответ по шкале 0-1
+5. Результаты сохраняются в `validation_results.json`
 
-### Пример 2: Расширенное тестирование с batch processing
+### Пример 2: Пошаговая валидация (3 этапа)
+
+Разделение процесса на этапы для экономии ресурсов и гибкости.
+
+#### Этап 1: Обработка памяти (`memory_only`)
 
 ```bash
 python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_batch \
-    --num-items-per-type 20 \
-    --final-llm-batch-size 5 \
-    --judge-batch-size 10 \
-    --config ../../DST_memory/run_config.json
+    --config ./config_memory_only.json
 ```
 
-### Пример 3: Memory Hit Rate Metric
+Или с CLI:
 
 ```bash
 python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_mhr \
+    --output-dir ./results_memory_only \
     --num-items-per-type 10 \
-    --calculate-memory-hit-rate \
-    --judge-mode openrouter \
-    --judge-model "openai/gpt-oss-120b:free" \
+    --validation-mode memory_only \
     --config ../../DST_memory/run_config.json
 ```
 
-### Пример 4: Тестирование только одного типа вопросов
+**Выходные файлы:**
+```
+results_memory_only/
+├── memory_only_states.json     # Состояния всех диалогов
+├── chunk_0000/
+│   ├── dst_state.json         # DST состояние диалога 0
+│   └── ragu_storage/          # Векторная БД диалога 0
+├── chunk_0001/
+│   ├── dst_state.json
+│   └── ragu_storage/
+└── ...
+```
+
+#### Этап 2: Генерация ответов (`final_llm_only`)
 
 ```bash
 python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_knowledge_update \
-    --num-items-per-type 50 \
-    --question-types "knowledge-update" \
+    --config ./config_final_llm.json
+```
+
+Или с CLI:
+
+```bash
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory_only \
+    --output-dir ./results_final_llm \
+    --final-llm-batch-size 5 \
     --config ../../DST_memory/run_config.json
+```
+
+**Параметры:**
+- `--input-state-dir` - директория с результатами `memory_only` (обязательно)
+- `--final-llm-batch-size` - размер батча для финальной LLM
+
+**Выходные файлы:**
+```
+results_final_llm/
+└── intermediate_answers.json     # Сгенерированные ответы
+```
+
+#### Этап 3: Оценка судьёй (`judge_only`)
+
+```bash
+python validate_longmemeval.py \
+    --config ./config_judge.json
+```
+
+Или с CLI:
+
+```bash
+python validate_longmemeval.py \
+    --validation-mode judge_only \
+    --input-answers-path ./results_final_llm/intermediate_answers.json \
+    --input-state-dir ./results_memory_only \
+    --output-dir ./results_judge \
+    --judge-batch-size 10 \
+    --calculate-memory-hit-rate \
+    --config ../../DST_memory/run_config.json
+```
+
+**Параметры:**
+- `--input-answers-path` - путь к `intermediate_answers.json` (обязательно)
+- `--input-state-dir` - путь к сохранённым состояниям памяти (рекомендуется для Memory Hit Rate)
+- `--calculate-memory-hit-rate` - включить оценку Memory Hit Rate
+
+**Примечание:** `--input-state-dir` рекомендуется указывать для Memory Hit Rate, так как судья должен проверить наличие фактов в памяти. Если не указать, будут использованы пути из `intermediate_answers.json`, которые могут быть невалидны при перемещении файлов.
+
+**Выходные файлы:**
+```
+results_judge/
+└── validation_results.json     # Итоговые метрики
+```
+
+### Пример 3: Тестирование разных финальных LLM на одной памяти
+
+Сначала обрабатываем диалоги один раз:
+
+```bash
+python validate_longmemeval.py \
+    --validation-mode memory_only \
+    --output-dir ./results_memory \
+    --config ../../DST_memory/run_config.json
+```
+
+Затем тестируем разные финальные модели:
+
+```bash
+# GPT-4o-mini
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory \
+    --output-dir ./results_llm_gpt4o_mini \
+    --gm-llm-model "openai/gpt-4o-mini" \
+    --config ../../DST_memory/run_config.json
+
+# Claude 3.5 Sonnet
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory \
+    --output-dir ./results_llm_claude \
+    --gm-llm-model "anthropic/claude-3.5-sonnet" \
+    --config ../../DST_memory/run_config.json
+
+# Llama 3.1 70B (local)
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory \
+    --output-dir ./results_llm_llama \
+    --gm-llm-mode local \
+    --gm-llm-model "meta-llama/Llama-3.1-70B-Instruct" \
+    --config ../../DST_memory/run_config.json
+```
+
+И оцениваем всех одним судьёй:
+
+```bash
+for answers in ./results_llm_*/intermediate_answers.json; do
+    output_dir=$(dirname "$answers")_judge
+    python validate_longmemeval.py \
+        --validation-mode judge_only \
+        --input-answers-path "$answers" \
+        --output-dir "$output_dir" \
+        --judge-model "openai/gpt-4o"
+done
+```
+
+### Пример 4: Memory Hit Rate Metric
+
+```bash
+# Полный пайплайн с MHR
+python validate_longmemeval.py \
+    --config ./config_full.json \
+    --calculate-memory-hit-rate
+
+# Или добавить MHR позже через judge_only
+python validate_longmemeval.py \
+    --validation-mode judge_only \
+    --input-answers-path ./results/intermediate_answers.json \
+    --calculate-memory-hit-rate \
+    --output-dir ./results_with_mhr
 ```
 
 **Вывод метрик:**
 ```
 Statistics:
-  Total processed: 50
+  Total processed: 40
   Correct: 35
-  Incorrect: 15
-  Accuracy: 70.00%
-  Memory hits: 42
-  Memory misses: 8
-  Memory Hit Rate: 84.00%
+  Incorrect: 5
+  Average score: 0.875
+  Memory hits: 38
+  Memory misses: 2
+  Memory Hit Rate: 0.95
 ```
 
 **Интерпретация:**
-- 84% случаев факт был в контексте (memory hit)
-- Но accuracy только 70% - значит проблема в финальной LLM, не в памяти
+- MHR = 95% - память сохраняет факты хорошо
+- Accuracy = 87.5% - финальная LLM иногда ошибается
+- Gap = 7.5% - небольшая проблема в использовании контекста
 
-### Пример 5: Полная конфигурация через CLI
-
-```bash
-python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_custom \
-    --num-items-per-type 20 \
-    --config ../../DST_memory/run_config.json \
-    \
-    # Override GigaMemory settings
-    --gm-memory-strategy topk_graph_records \
-    --gm-graph-top-k-records 50 \
-    --gm-prompt-language en \
-    --gm-slot-use-stub false \
-    --gm-slot-model-path "Qwen/Qwen3-0.6B" \
-    --gm-importance-threshold 0.3 \
-    --gm-triplet-deletion-mode llm_inline \
-    --gm-slot-context-enabled true \
-    \
-    # Judge settings
-    --judge-mode openrouter \
-    --judge-model "anthropic/claude-3.5-sonnet"
-```
-
-### Пример 6: Локальная финальная LLM с выгрузкой моделей
+### Пример 5: Локальная финальная LLM с оптимизацией GPU
 
 ```bash
-# В run_config.json:
-# {
-#   "shared": {
-#     "llm_mode": "local",
-#     "llm_model": "meta-llama/Llama-3.1-70B-Instruct",
-#     "unload_models_before_final_llm": true,
-#     "slot_model_path": "Qwen/Qwen3-0.6B",
-#     "slot_use_stub": false
-#   }
-# }
-
+# Этап 1: Обработка памяти (использует GPU для classifier и slot model)
 python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_local_llm \
-    --num-items-per-type 5 \
-    --final-llm-batch-size 5 \
+    --validation-mode memory_only \
+    --output-dir ./results_memory \
+    --config ../../DST_memory/run_config.json
+
+# Этап 2: Генерация ответов (выгружает модели памяти, загружает финальную LLM)
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory \
+    --output-dir ./results_final_llm \
+    --gm-llm-mode local \
+    --gm-llm-model "meta-llama/Llama-3.1-70B-Instruct" \
+    --gm-unload-models-before-final-llm true \
+    --final-llm-batch-size 10 \
+    --config ../../DST_memory/run_config.json
+
+# Этап 3: Оценка (можно использовать local judge)
+python validate_longmemeval.py \
+    --validation-mode judge_only \
+    --input-answers-path ./results_final_llm/intermediate_answers.json \
+    --output-dir ./results_judge \
+    --judge-mode local \
+    --judge-local-model-path "meta-llama/Llama-3.2-1B-Instruct" \
     --config ../../DST_memory/run_config.json
 ```
 
-**Что происходит:**
-1. Загружаются модели GigaMemory (classifier, slot model)
-2. Обрабатываются диалоги 1-5 через memory pipeline
-3. **Выгружаются модели GigaMemory** (unload_local_models)
-4. Загружается Llama-3.1-70B для финальных ответов
-5. Генерируются ответы на диалоги 1-5
-6. **Выгружается Llama-3.1-70B**
-7. **Перезагружаются модели GigaMemory**
+**Преимущества разделения:**
+1. Модели памяти (небольшие) загружаются один раз
+2. Финальная LLM (большая) загружается после выгрузки моделей памяти
+3. Нет конфликтов за GPU память между компонентами
 
 ## Структура вывода
 
 ```
 output-dir/
 ├── validation.log              # Полный лог выполнения
-├── validation_results.json     # Итоговые метрики и результаты
+├── validation_results.json     # Метрики и результаты (перезаписывается после каждой пары ответ+оценка; формат тот же)
 │   {
 │     "metadata": {
 │       "num_items_per_type": 10,
@@ -300,7 +470,18 @@ output-dir/
 └── ...
 ```
 
-## Полный список CLI параметров GigaMemory
+## Полный список CLI параметров
+
+### Параметры режима валидации
+
+| Параметр | Описание | Возможные значения |
+|----------|----------|-------------------|
+| `--validation-mode` | Режим валидации | `full`, `memory_only`, `final_llm_only`, `judge_only` |
+| `--input-state-dir` | Директория с состояниями (для `final_llm_only` и `judge_only`) | `./results_memory_only` |
+| `--input-answers-path` | Путь к ответам (для `judge_only`) | `./results/intermediate_answers.json` |
+| `--memory-only-output-suffix` | Суффикс для выходных директорий | `_memory_only` |
+
+### Параметры GigaMemory
 
 | Параметр | Описание | Пример |
 |----------|----------|--------|
@@ -319,6 +500,22 @@ output-dir/
 | `--gm-triplet-deletion-mode` | Режим удаления | `none`, `heuristic`, `llm_inline`, `llm_separate` |
 | `--gm-prompt-language` | Язык промптов | `ru`, `en` |
 | `--gm-unload-models-before-final-llm` | Выгрузка моделей | `true`, `false` |
+
+### Таблица сравнения режимов
+
+| Характеристика | `full` | `memory_only` | `final_llm_only` | `judge_only` |
+|----------------|--------|---------------|------------------|--------------|
+| Загружает датасет | ✓ | ✓ | ✗ | ✗ |
+| Обрабатывает память | ✓ | ✓ | ✗ | ✗ |
+| Вызывает final LLM | ✓ | ✗ | ✓ | ✗ |
+| Вызывает judge | ✓ | ✗ | ✗ | ✓ |
+| Memory Hit Rate | ✓ | ✗ | ✗ | ✓ |
+| Промежуточные файлы | chunk_*/ | memory_only_states.json | intermediate_answers.json | validation_results.json |
+| Зависимости | Нет | Нет | memory_only | final_llm_only |
+| API вызовы | 2N-3N | 0 | N | N-2N |
+| GPU оптимизация | Ограничена | Да | Да | Не требуется |
+
+**N** - количество тестовых примеров
 
 ## Таблица метрик и их интерпретация
 
@@ -401,15 +598,36 @@ python compare_results.py ./results_strategy_*/validation_results.json
 - Убедитесь, что GPU имеет достаточно памяти для финальной модели после выгрузки
 - Рекомендуется `final_llm_batch_size >= 5` чтобы амортизировать время загрузки/выгрузки
 
-## Сравнение v1 и v2
+## Сравнение версий
 
-| Функция | v1 | v2 |
-|---------|-----|-----|
-| Sequential processing | ✓ | ✓ |
-| Batch final LLM | ✗ | ✓ |
-| Batch judge | ✗ | ✓ |
-| Memory Hit Rate | ✗ | ✓ |
-| Model unloading | ✗ | ✓ |
-| CLI config override | Частично | Полная |
-| Speed (local LLM) | Медленно | Быстро |
-| API calls (OpenRouter) | 2N | 2N - 3N |
+| Функция | v1 | v2 | v3 |
+|---------|-----|-----|-----|
+| Sequential processing | ✓ | ✓ | ✓ |
+| Batch final LLM | ✗ | ✓ | ✓ |
+| Batch judge | ✗ | ✓ | ✓ |
+| Memory Hit Rate | ✗ | ✓ | ✓ |
+| Model unloading | ✗ | ✓ | ✓ |
+| CLI config override | Частично | Полная | Полная |
+| Speed (local LLM) | Медленно | Быстро | Быстро |
+| API calls (OpenRouter) | 2N | 2N - 3N | 2N - 3N |
+| **Validation modes** | ✗ | ✗ | **✓** |
+| **Separate stages** | ✗ | ✗ | **✓** |
+| **A/B testing support** | ✗ | ✗ | **✓** |
+
+### Режимы v3
+
+```bash
+# Полный пайплайн (как v2)
+python validate_longmemeval.py --validation-mode full
+
+# Только память - сохраняет состояния
+python validate_longmemeval.py --validation-mode memory_only
+
+# Только финальная LLM - загружает сохранённые состояния
+python validate_longmemeval.py --validation-mode final_llm_only \
+    --input-state-dir ./results_memory_only
+
+# Только судья - оценивает сохранённые ответы
+python validate_longmemeval.py --validation-mode judge_only \
+    --input-answers-path ./results_final_llm/intermediate_answers.json
+```

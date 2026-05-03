@@ -109,6 +109,8 @@ python validate_baseline.py --strategy recent_10_plus_user --output-dir ./result
 }
 ```
 
+Файл `validation_results.json` в каталоге результатов **атомарно перезаписывается** после каждого завершённого примера (ответ финальной LLM + оценка судьи); структура JSON не меняется. Пока накопленный батч судьи не сброшен, новые строки в `results` не появляются (логика батчей сохранена).
+
 ## Scoring Criteria
 
 | Score | Description | Criteria |
