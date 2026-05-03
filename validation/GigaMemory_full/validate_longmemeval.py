@@ -27,6 +27,9 @@ Usage:
     # Using custom config
     python validate_longmemeval.py --config ./my_config.json
 
+    # Multiple questions per row (one memory pass, then each question scored separately):
+    # use a non-empty ``questions`` list on the dataset object; see test_data/minimal_test.json.
+
 Config file structure mirrors DST_memory/run_config.json with additional validation parameters:
     {
       "shared": { ... validation dataset/output params ... },
@@ -838,6 +841,41 @@ def extract_user_messages_from_sessions(sessions: List[List[Dict]]) -> List[str]
     return user_messages
 
 
+def normalize_question_specs(item: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Build the list of evaluation questions for one dataset row.
+
+    If ``questions`` is a non-empty list of dicts, each dict should have
+    ``question_id``, ``question``, and ``answer`` (or ``reference_answer``).
+    Otherwise the legacy single fields ``question_id`` / ``question`` / ``answer``
+    on the row are used as one question.
+
+    All questions share the same ``haystack_sessions`` and one memory pass
+    (``write_to_memory`` for the whole dialogue), then are scored separately.
+    """
+    raw = item.get("questions")
+    if isinstance(raw, list) and len(raw) > 0:
+        specs: List[Dict[str, str]] = []
+        for i, q in enumerate(raw):
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("question_id", "") or "").strip() or f"q_{i}"
+            qtext = str(q.get("question", "") or "")
+            ref = q.get("answer", q.get("reference_answer", ""))
+            specs.append({
+                "question_id": qid,
+                "question": qtext,
+                "reference_answer": str(ref if ref is not None else ""),
+            })
+        if specs:
+            return specs
+    return [{
+        "question_id": str(item.get("question_id", "") or ""),
+        "question": str(item.get("question", "") or ""),
+        "reference_answer": str(item.get("answer", "") or ""),
+    }]
+
+
 # ============================================================================
 # Pipeline Building
 # ============================================================================
@@ -1018,6 +1056,7 @@ class AccumulatedDialogue:
     question_type: str
     pipeline_state: Dict[str, Any]  # Memory slots, deleted facts, etc.
     dataset_ordinal: Optional[int] = None  # index in source LongMemEval JSON array
+    dialogue_row_index: Optional[int] = None  # dataset row index (one chunk_* per row)
 
 
 @dataclass
@@ -1031,6 +1070,7 @@ class AccumulatedAnswer:
     predicted_answer: str
     memory_context: Dict[str, Any]
     dataset_ordinal: Optional[int] = None
+    dialogue_row_index: Optional[int] = None
 
 
 @dataclass
@@ -1047,6 +1087,7 @@ class MemoryOnlyState:
     ragu_storage_path: Optional[str]  # Path to RAGU storage
     pipeline_state: Dict[str, Any]  # Full pipeline state including memory_context
     dataset_ordinal: Optional[int] = None  # index in source LongMemEval JSON array
+    dialogue_row_index: Optional[int] = None  # one chunk dir per row; shared across questions
 
 
 @dataclass
@@ -1061,6 +1102,7 @@ class IntermediateAnswer:
     memory_context: Dict[str, Any]
     memory_state_path: str  # Path for Memory Hit Rate calculation
     dataset_ordinal: Optional[int] = None
+    dialogue_row_index: Optional[int] = None
 
 
 class BatchProcessor:
@@ -1135,10 +1177,20 @@ class BatchProcessor:
     def process_single_item(
         self,
         item: Dict[str, Any],
-        global_index: int,
+        dialogue_row_index: int,
+        flat_index_start: int,
     ) -> Optional[Dict[str, Any]]:
         """
-        Process a single item through memory pipeline.
+        Process one dataset row through the memory pipeline.
+
+        One row may define multiple questions (``questions`` list). All questions
+        share a single ``write_to_memory`` pass over ``haystack_sessions``, then
+        ``answer_without_final_llm`` / final LLM / judge run per question in order.
+
+        ``dialogue_row_index`` indexes the dataset row (and ``chunk_*`` folder).
+        ``flat_index_start`` is the running global index for the first question
+        of this row; each question gets ``flat_index_start + k``.
+
         Behavior depends on validation_mode:
         - full/memory_only: processes through memory pipeline
         - final_llm_only/judge_only: loads from saved state (no processing)
@@ -1151,21 +1203,34 @@ class BatchProcessor:
         if self.validation_mode in ("final_llm_only", "judge_only"):
             return None
 
-        dialogue_id = f"longmemeval_{global_index}_{item.get('question_id', 'unknown')}"
-        question = item.get("question", "")
-        reference_answer = item.get("answer", "")
+        question_specs = normalize_question_specs(item)
+        if not question_specs:
+            raise ValueError(f"No questions in dataset row {dialogue_row_index}")
+
         question_type = item.get("question_type", "")
         sessions = item.get("haystack_sessions", [])
 
-        # Extract and process user messages
+        did = str(item.get("dialogue_id", "") or "").strip()
+        if did:
+            dialogue_id = did
+        elif len(question_specs) == 1:
+            qid0 = question_specs[0]["question_id"] or "unknown"
+            dialogue_id = f"longmemeval_{dialogue_row_index}_{qid0}"
+        else:
+            dialogue_id = f"longmemeval_{dialogue_row_index}"
+
+        # Extract and process user messages (once per row)
         user_messages = extract_user_messages_from_sessions(sessions)
 
         logger.info(
-            "[Batch] Processing memory for item %d: %d sessions, %d messages, type=%s",
-            global_index, len(sessions), len(user_messages), question_type,
+            "[Batch] Row %d: one memory pass, %d question(s), %d sessions, %d user messages, type=%s",
+            dialogue_row_index,
+            len(question_specs),
+            len(sessions),
+            len(user_messages),
+            question_type,
         )
 
-        # Process through memory pipeline
         write_logs = []
         from dst_memory.core.models import Message
 
@@ -1176,8 +1241,8 @@ class BatchProcessor:
             else:
                 msg_for_log = msg[:_msg_preview_len] + "…"
             logger.info(
-                "[Batch] Item %d: write_to_memory message %d/%d — %s",
-                global_index,
+                "[Batch] Row %d: write_to_memory message %d/%d — %s",
+                dialogue_row_index,
                 mi,
                 len(user_messages),
                 msg_for_log.replace("\n", "\\n"),
@@ -1188,83 +1253,103 @@ class BatchProcessor:
                 self._timing.add_user_message(time.time() - t0)
             write_logs.append(log)
 
-        # Get memory state (without calling final LLM)
-        answer_details = self.pipeline.answer_without_final_llm(dialogue_id, question)
-
-        if self.save_giga_memory_logs:
-            self.dialogue_logs.append({
-                "dialogue_id": dialogue_id,
-                "global_index": global_index,
-                "question_id": item.get("question_id", ""),
-                "question": question,
-                "question_type": question_type,
-                "reference_answer": reference_answer,
-                "write_logs": write_logs,
-                "answer_without_final_llm": answer_details,
-                "final_llm_prompt": answer_details.get("final_llm_prompt"),
-                "memory_context_for_final_llm": answer_details.get("memory_context_for_final_llm"),
-                "expired_facts": answer_details.get("expired_facts", []),
-                "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
-            })
-
-        # Save memory state
-        chunk_id = f"{global_index:04d}"
+        chunk_id = f"{dialogue_row_index:04d}"
         saved_paths = self.persistence.save_chunk_state(chunk_id, self.pipeline, dialogue_id)
 
-        # For memory_only mode: save state for later stages
-        if self.validation_mode == "memory_only":
-            state = self.pipeline.dst.get_state(dialogue_id)
-            memory_state = MemoryOnlyState(
-                global_index=global_index,
-                dialogue_id=dialogue_id,
-                question_id=item.get("question_id", ""),
-                question=question,
-                reference_answer=reference_answer,
-                question_type=question_type,
-                memory_state_path=str(saved_paths.get("dst_state", "")),
-                dst_state=state.to_dict() if hasattr(state, "to_dict") else {},
-                ragu_storage_path=str(saved_paths.get("ragu_storage", "")) if saved_paths.get("ragu_storage") else None,
-                dataset_ordinal=item.get("_validation_dataset_ordinal"),
-                pipeline_state={
+        state = self.pipeline.dst.get_state(dialogue_id)
+        dst_snapshot = state.to_dict() if hasattr(state, "to_dict") else {}
+
+        ds_ord = item.get("_validation_dataset_ordinal")
+
+        for qi, qspec in enumerate(question_specs):
+            flat_gix = flat_index_start + qi
+            question = qspec["question"]
+            reference_answer = qspec["reference_answer"]
+            qid = qspec["question_id"]
+
+            logger.info(
+                "[Batch] Row %d question %d/%d (flat index %d, question_id=%s): %s",
+                dialogue_row_index,
+                qi + 1,
+                len(question_specs),
+                flat_gix,
+                qid,
+                (question[:200] + "…") if len(question) > 200 else question,
+            )
+
+            answer_details = self.pipeline.answer_without_final_llm(dialogue_id, question)
+
+            if self.save_giga_memory_logs:
+                self.dialogue_logs.append({
+                    "dialogue_id": dialogue_id,
+                    "dialogue_row_index": dialogue_row_index,
+                    "global_index": flat_gix,
+                    "question_index_in_row": qi,
+                    "question_id": qid,
+                    "question": question,
+                    "question_type": question_type,
+                    "reference_answer": reference_answer,
                     "write_logs": write_logs,
-                    "memory_slots": answer_details.get("memory_slots", []),
+                    "answer_without_final_llm": answer_details,
+                    "final_llm_prompt": answer_details.get("final_llm_prompt"),
+                    "memory_context_for_final_llm": answer_details.get("memory_context_for_final_llm"),
                     "expired_facts": answer_details.get("expired_facts", []),
                     "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
-                    "use_memory": answer_details.get("use_memory", False),
-                    "memory_context": answer_details.get("memory_context_for_final_llm", {}),
-                    "final_llm_prompt": answer_details.get("final_llm_prompt", []),
-                },
-            )
-            self.memory_only_states.append(memory_state)
-            self._write_memory_only_states()
+                })
 
-        # Create accumulated dialogue (only for full mode)
-        if self.validation_mode == "full":
-            acc_dialogue = AccumulatedDialogue(
-                global_index=global_index,
-                dialogue_id=dialogue_id,
-                question_id=item.get("question_id", ""),
-                question=question,
-                reference_answer=reference_answer,
-                question_type=question_type,
-                dataset_ordinal=item.get("_validation_dataset_ordinal"),
-                pipeline_state={
-                    "write_logs": write_logs,
-                    "memory_slots": answer_details.get("memory_slots", []),
-                    "expired_facts": answer_details.get("expired_facts", []),
-                    "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
-                    "use_memory": answer_details.get("use_memory", False),
-                    "memory_context": answer_details.get("memory_context_for_final_llm", {}),
-                    "final_llm_prompt": answer_details.get("final_llm_prompt", []),
-                },
-            )
-            self.dialogue_buffer.append(acc_dialogue)
+            if self.validation_mode == "memory_only":
+                memory_state = MemoryOnlyState(
+                    global_index=flat_gix,
+                    dialogue_id=dialogue_id,
+                    question_id=qid,
+                    question=question,
+                    reference_answer=reference_answer,
+                    question_type=question_type,
+                    memory_state_path=str(saved_paths.get("dst_state", "")),
+                    dst_state=copy.deepcopy(dst_snapshot),
+                    ragu_storage_path=str(saved_paths.get("ragu_storage", ""))
+                    if saved_paths.get("ragu_storage")
+                    else None,
+                    dataset_ordinal=ds_ord,
+                    dialogue_row_index=dialogue_row_index,
+                    pipeline_state={
+                        "write_logs": write_logs,
+                        "memory_slots": answer_details.get("memory_slots", []),
+                        "expired_facts": answer_details.get("expired_facts", []),
+                        "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
+                        "use_memory": answer_details.get("use_memory", False),
+                        "memory_context": answer_details.get("memory_context_for_final_llm", {}),
+                        "final_llm_prompt": answer_details.get("final_llm_prompt", []),
+                    },
+                )
+                self.memory_only_states.append(memory_state)
+                self._write_memory_only_states()
 
-            # Check if we should flush final LLM batch
-            if len(self.dialogue_buffer) >= self.final_llm_batch_size:
-                self._flush_final_llm_batch()
+            if self.validation_mode == "full":
+                acc_dialogue = AccumulatedDialogue(
+                    global_index=flat_gix,
+                    dialogue_id=dialogue_id,
+                    question_id=qid,
+                    question=question,
+                    reference_answer=reference_answer,
+                    question_type=question_type,
+                    dataset_ordinal=ds_ord,
+                    dialogue_row_index=dialogue_row_index,
+                    pipeline_state={
+                        "write_logs": write_logs,
+                        "memory_slots": answer_details.get("memory_slots", []),
+                        "expired_facts": answer_details.get("expired_facts", []),
+                        "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
+                        "use_memory": answer_details.get("use_memory", False),
+                        "memory_context": answer_details.get("memory_context_for_final_llm", {}),
+                        "final_llm_prompt": answer_details.get("final_llm_prompt", []),
+                    },
+                )
+                self.dialogue_buffer.append(acc_dialogue)
 
-        # Clear memory for next dialogue
+                if len(self.dialogue_buffer) >= self.final_llm_batch_size:
+                    self._flush_final_llm_batch()
+
         self.pipeline.clear_memory(dialogue_id)
 
         return None  # Result will be added by batch processing
@@ -1287,6 +1372,8 @@ class BatchProcessor:
             }
             if state.dataset_ordinal is not None:
                 row["_validation_dataset_ordinal"] = state.dataset_ordinal
+            if state.dialogue_row_index is not None:
+                row["_validation_dialogue_row_index"] = state.dialogue_row_index
             states_data.append(row)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
@@ -1361,6 +1448,7 @@ class BatchProcessor:
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
                 dataset_ordinal=acc.dataset_ordinal,
+                dialogue_row_index=acc.dialogue_row_index,
             )
 
             self.answer_buffer.append(acc_answer)
@@ -1376,6 +1464,7 @@ class BatchProcessor:
                 memory_context=acc.pipeline_state["memory_context"],
                 memory_state_path="",  # Not available in full mode
                 dataset_ordinal=acc.dataset_ordinal,
+                dialogue_row_index=acc.dialogue_row_index,
             ))
 
         # Write intermediate answers
@@ -1478,6 +1567,7 @@ class BatchProcessor:
                     memory_context=memory_context,
                     memory_state_path=memory_state_path,
                     dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
+                    dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
                 )
                 self.intermediate_answers.append(intermediate)
 
@@ -1491,6 +1581,7 @@ class BatchProcessor:
                     predicted_answer=predicted_answer,
                     memory_context=memory_context,
                     dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
+                    dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
                 )
                 self.answer_buffer.append(acc_answer)
 
@@ -1526,6 +1617,8 @@ class BatchProcessor:
             }
             if ans.dataset_ordinal is not None:
                 row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
+            if ans.dialogue_row_index is not None:
+                row_a["_validation_dialogue_row_index"] = ans.dialogue_row_index
             answers_data.append(row_a)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
@@ -1594,6 +1687,10 @@ class BatchProcessor:
             "memory_hit_evaluation": memory_hit_result,
             "memory_hit": memory_hit_result.get("fact_present", False) if memory_hit_result else None,
         }
+        if acc.dataset_ordinal is not None:
+            result["_validation_dataset_ordinal"] = acc.dataset_ordinal
+        if acc.dialogue_row_index is not None:
+            result["_validation_dialogue_row_index"] = acc.dialogue_row_index
 
         self.results.append(result)
 
@@ -1755,6 +1852,7 @@ class BatchProcessor:
                     predicted_answer=ans_data["predicted_answer"],
                     memory_context=memory_context,
                     dataset_ordinal=ans_data.get("_validation_dataset_ordinal"),
+                    dialogue_row_index=ans_data.get("_validation_dialogue_row_index"),
                 )
                 self._evaluate_single_answer(acc, memory_state_path)
 
@@ -1958,23 +2056,32 @@ def run_validation(args: argparse.Namespace) -> None:
 
     # Process each item (only for modes that need dataset processing)
     if args.validation_mode in ("full", "memory_only"):
+        flat_q = 0
         for idx, item in enumerate(dataset):
-            global_idx = idx
+            q_specs = normalize_question_specs(item)
 
             logger.info("-" * 70)
-            logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset), global_idx)
+            logger.info(
+                "Processing dataset row %d/%d (%d evaluation question(s)), flat indices from %d",
+                idx + 1,
+                len(dataset),
+                len(q_specs),
+                flat_q,
+            )
             logger.info("Question type: %s", item.get("question_type", "unknown"))
-            logger.info("Question: %s", item.get("question", ""))
+            for j, sp in enumerate(q_specs):
+                logger.info("  Question %d/%d: %s", j + 1, len(q_specs), sp.get("question", ""))
 
-            # Count messages for timing
+            # Count messages for timing (one memory pass per row)
             sessions = item.get("haystack_sessions", [])
             num_messages = sum(len(s) for s in sessions)
 
             start_time = time.time()
             try:
-                batch_processor.process_single_item(item, global_idx)
+                batch_processor.process_single_item(item, idx, flat_q)
+                flat_q += len(q_specs)
             except Exception as e:
-                logger.exception("Error processing item %d: %s", global_idx, e)
+                logger.exception("Error processing dataset row %d: %s", idx, e)
             finally:
                 processing_time = time.time() - start_time
                 timing.add_item(num_messages, processing_time)

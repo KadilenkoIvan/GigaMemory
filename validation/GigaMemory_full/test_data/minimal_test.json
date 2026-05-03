@@ -1,10 +1,8 @@
 [
   {
-    "question_id": "test_001",
+    "dialogue_id": "minimal_multi_dog_dialogue",
     "question_type": "single-session-user",
-    "question": "What is my dog's name?",
     "question_date": "2023/05/30 (Tue) 23:40",
-    "answer": "Max",
     "answer_session_ids": [1],
     "haystack_dates": ["2023/05/30"],
     "haystack_session_ids": [1, 2],
@@ -18,6 +16,18 @@
         {"role": "user", "content": "My dog is very energetic today."},
         {"role": "assistant", "content": "Sounds like Max is having fun!"}
       ]
+    ],
+    "questions": [
+      {
+        "question_id": "test_001a",
+        "question": "What is my dog's name?",
+        "answer": "Max"
+      },
+      {
+        "question_id": "test_001b",
+        "question": "How old is my dog?",
+        "answer": "3"
+      }
     ]
   },
   {

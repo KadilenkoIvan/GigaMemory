@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from ...slots.ontology import DEFAULT_USER_SLOTS
+from ...slots.ontology import (
+    DEFAULT_USER_SLOTS,
+    TRIPLET_CLARIFY_EVENTS_TRAVEL_CHAIN,
+    TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY,
+    TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY,
+    triplet_prompt_show_clarification,
+)
 from .prompt_fewshots import (
     triplet_context_few_shot_messages,
     triplet_per_slot_few_shot_messages,
@@ -53,7 +59,7 @@ def build_triplet_messages(
         )
 
     slot_boundary_block = ""
-    if slot_name in ("FAMILY", "ROMANCE"):
+    if triplet_prompt_show_clarification(slot_name, TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY):
         slot_boundary_block = (
             "Boundary between slots FAMILY and ROMANCE:\n"
             "  FAMILY — blood relatives and legal family OF THE USER:\n"
@@ -65,6 +71,28 @@ def build_triplet_messages(
             "    → MUST NOT go into the user's FAMILY slot.\n"
             "    Example: \"my friend has a sister\" — do NOT add to the user's FAMILY; "
             "add to FRIENDS if the current slot is FRIENDS.\n\n"
+        )
+
+    events_travel_chain_block = ""
+    if triplet_prompt_show_clarification(slot_name, TRIPLET_CLARIFY_EVENTS_TRAVEL_CHAIN):
+        events_travel_chain_block = (
+            "For EVENTS and TRAVEL — chain (place/event becomes subject of its attributes):\n"
+            "  user → action → place or event\n"
+            "  place or event → attribute → value\n"
+            "  Wrong: {\"subject\":\"user\",\"relation\":\"trip\",\"object\":\"tokyo september\"}\n"
+            "  Right: {\"subject\":\"user\",\"relation\":\"trip\",\"object\":\"tokyo\"}\n"
+            "         {\"subject\":\"tokyo\",\"relation\":\"date\",\"object\":\"september\"}\n"
+            "         {\"subject\":\"tokyo\",\"relation\":\"travels with\",\"object\":\"family\"}\n\n"
+        )
+
+    kinship_foreign_family_block = ""
+    if triplet_prompt_show_clarification(slot_name, TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY):
+        kinship_foreign_family_block = (
+            "Kinship accuracy:\n"
+            "  Be clear who is whose. Subject is the one who \"has\" the relation.\n"
+            "  If the relative belongs to someone else, not the user, do not describe them as the user's relative.\n"
+            "  Someone else's family — do NOT add those facts to the user's FAMILY slot; "
+            "use FRIENDS when the current slot is FRIENDS.\n\n"
         )
 
     context_block = ""
@@ -173,17 +201,9 @@ def build_triplet_messages(
         "  2. Entity attributes — always use the role first, then the name if present:\n"
         "     Wrong: {\"subject\":\"ryzhik\",\"relation\":\"sick\",\"object\":\"yes\"}\n"
         "     Right: {\"subject\":\"user's cat\",\"relation\":\"name\",\"object\":\"ryzhik\"}\n"
-        "            {\"subject\":\"ryzhik\",\"relation\":\"condition\",\"object\":\"sick\"}\n"
-
-        "For events and trips — chain (place/event becomes subject of its attributes):\n"
-        "  user → action → place or event\n"
-        "  place or event → attribute → value\n"
-        "  Wrong: {\"subject\":\"user\",\"relation\":\"trip\",\"object\":\"tokyo september\"}\n"
-        "  Right: {\"subject\":\"user\",\"relation\":\"trip\",\"object\":\"tokyo\"}\n"
-        "         {\"subject\":\"tokyo\",\"relation\":\"date\",\"object\":\"september\"}\n"
-        "         {\"subject\":\"tokyo\",\"relation\":\"travels with\",\"object\":\"family\"}\n"
-
-        "Each triplet stands alone — understandable when read alone.\n"
+        "            {\"subject\":\"ryzhik\",\"relation\":\"condition\",\"object\":\"sick\"}\n\n"
+        + events_travel_chain_block
+        + "Each triplet stands alone — understandable when read alone.\n"
         "  Subject and object must uniquely name the entity without context:\n"
         "  Wrong: {\"subject\":\"elder\",\"relation\":\"name\",\"object\":\"alesha\"}\n"
         "  Right: {\"subject\":\"user's elder son\",\"relation\":\"name\",\"object\":\"alesha\"}\n"
@@ -191,20 +211,16 @@ def build_triplet_messages(
         "The relation must be unambiguous — use a chain:\n"
         "  Wrong: {\"subject\":\"user\",\"relation\":\"frequency\",\"object\":\"once a week\"}\n"
         "  Right: {\"subject\":\"user\",\"relation\":\"goes to\",\"object\":\"fishing\"}\n"
-        "         {\"subject\":\"fishing\",\"relation\":\"frequency\",\"object\":\"once a week\"}\n"
-
-        "Kinship accuracy:\n"
-        "  Be clear who is whose. Subject is the one who \"has\" the relation.\n"
-        "  If the relative belongs to someone else, not the user, do not describe them as the user's relative.\n"
-        "  Someone else's family — do NOT add those facts to the user's FAMILY slot; "
-        "use FRIENDS when the current slot is FRIENDS.\n"
-
-        "Do not invent facts — only what is explicitly stated.\n"
+        "         {\"subject\":\"fishing\",\"relation\":\"frequency\",\"object\":\"once a week\"}\n\n"
+        + kinship_foreign_family_block
+        + "Do not invent facts — only what is explicitly stated.\n"
         "It is forbidden to create entries that mention the user but do not belong to the current slot.\n"
         "Do not record missing information — if a fact is not mentioned or unknown,\n"
         "  do not create triplets like \"user | hobby | unknown\",\n"
-        "  Forbidden: \"user | age | not specified\", etc. Only concrete facts.\n"
-        "Ignore pure emotion with no checkable facts.\n"
+        "  Forbidden: \"user | age | not specified\", etc. Only concrete facts.\n\n"
+        "VERY IMPORTANT: A fact can be indicated without an object, if it is obvious from the context, such facts need to be added.\n"
+        "In the message, the fact can be indicated indirectly, you need to understand it from the context and add it.\n"
+        "The message may contain not only a fact, but also a question, reasoning, emotions, assessments, etc. In this case, it is necessary to add facts, even if it is not mentioned directly.\n\n"
         + ttl_block
         + delete_block
         + context_block
