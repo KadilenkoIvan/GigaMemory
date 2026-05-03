@@ -74,7 +74,8 @@ class TimingStats:
     """Collect and compute timing statistics."""
 
     def __init__(self):
-        self.items: List[Dict[str, float]] = []
+        self.items: List[Dict[str, float]] = []  # one row per LongMemEval item (dialogue)
+        self.user_message_seconds: List[float] = []  # one sample per write_to_memory call
         self.total_start: Optional[float] = None
         self.total_time: float = 0.0
 
@@ -85,8 +86,13 @@ class TimingStats:
         if self.total_start:
             self.total_time = time.time() - self.total_start
 
+    def add_user_message(self, seconds: float) -> None:
+        """Record wall time for a single user message (write_to_memory)."""
+        if seconds >= 0:
+            self.user_message_seconds.append(seconds)
+
     def add_item(self, num_messages: int, processing_time: float):
-        """Add timing for a single item."""
+        """Add wall-clock timing for one full validation item (entire dialogue memory pass)."""
         self.items.append({
             "num_messages": num_messages,
             "time": processing_time,
@@ -103,40 +109,59 @@ class TimingStats:
         c = f + 1 if f + 1 < len(sorted_vals) else f
         return sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f])
 
+    def _percentile_block(self, values: List[float]) -> Dict[str, float]:
+        if not values:
+            return {
+                "min": 0.0,
+                "max": 0.0,
+                "p50": 0.0,
+                "p95": 0.0,
+                "p99": 0.0,
+                "mean": 0.0,
+            }
+        return {
+            "min": min(values),
+            "max": max(values),
+            "p50": self.compute_percentile(values, 50),
+            "p95": self.compute_percentile(values, 95),
+            "p99": self.compute_percentile(values, 99),
+            "mean": sum(values) / len(values),
+        }
+
     def get_stats(self) -> Dict[str, Any]:
         """Get computed statistics."""
         times = [item["time"] for item in self.items]
-        per_msg_times = [item["time_per_message"] for item in self.items if item["num_messages"] > 0]
+        # Legacy: one amortized ratio per dialogue (wall / session turns in haystack)
+        per_dialogue_amortized = [
+            item["time_per_message"] for item in self.items if item["num_messages"] > 0
+        ]
         total_messages = sum(item["num_messages"] for item in self.items)
+        um = self.user_message_seconds
 
-        if not times:
+        if not times and not um:
             return {
                 "total_time": self.total_time,
                 "total_items": 0,
                 "total_messages": 0,
+                "total_user_message_writes": 0,
             }
 
-        return {
+        out: Dict[str, Any] = {
             "total_time": self.total_time,
             "total_items": len(self.items),
             "total_messages": total_messages,
-            "time_per_item": {
-                "min": min(times),
-                "max": max(times),
-                "p50": self.compute_percentile(times, 50),
-                "p95": self.compute_percentile(times, 95),
-                "p99": self.compute_percentile(times, 99),
-                "mean": sum(times) / len(times),
-            },
-            "time_per_message": {
-                "min": min(per_msg_times) if per_msg_times else 0,
-                "max": max(per_msg_times) if per_msg_times else 0,
-                "p50": self.compute_percentile(per_msg_times, 50) if per_msg_times else 0,
-                "p95": self.compute_percentile(per_msg_times, 95) if per_msg_times else 0,
-                "p99": self.compute_percentile(per_msg_times, 99) if per_msg_times else 0,
-                "mean": sum(per_msg_times) / len(per_msg_times) if per_msg_times else 0,
-            },
+            "total_user_message_writes": len(um),
         }
+        if times:
+            dialogue_block = self._percentile_block(times)
+            out["time_per_dialogue"] = dialogue_block
+            # Backward-compatible alias (was misread as "per message" in logs)
+            out["time_per_item"] = dict(dialogue_block)
+        if um:
+            out["time_per_user_message"] = self._percentile_block(um)
+        if per_dialogue_amortized:
+            out["time_per_message"] = self._percentile_block(per_dialogue_amortized)
+        return out
 
 
 # ============================================================================
@@ -750,34 +775,54 @@ class MemoryStatePersistence:
 # Dataset Loading
 # ============================================================================
 
+def _validation_sort_key(row: Dict[str, Any]) -> Tuple[int, int]:
+    """Stable ordering: index in source JSON array, then global_index within the run."""
+    raw = row.get("_validation_dataset_ordinal")
+    ds = int(raw) if raw is not None else (1 << 30)
+    gi = row.get("global_index")
+    gi_int = int(gi) if gi is not None else 0
+    return (ds, gi_int)
+
+
 def load_dataset_balanced(
     dataset_path: str,
     question_types: List[str],
     num_per_type: int
 ) -> List[Dict[str, Any]]:
-    """Load dataset with balanced sampling across question types."""
+    """Load dataset with balanced sampling across question types.
+
+    Selection is deterministic: a single top-to-bottom scan of the JSON array.
+    For each row, if ``question_type`` is in ``question_types`` and that type's
+    quota is not yet filled, the row is taken (first occurrences win). Order in
+    the returned list follows **file order** of selected rows (not grouped by
+    type). Each item includes ``_validation_dataset_ordinal`` = 0-based index in
+    the source ``data`` array for traceability across validation modes.
+    """
     with open(dataset_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Group by question type
-    by_type: Dict[str, List[Dict]] = {qt: [] for qt in question_types}
-    for item in data:
+    limits = {qt: num_per_type for qt in question_types}
+    counts = {qt: 0 for qt in question_types}
+    result: List[Dict[str, Any]] = []
+
+    for dataset_ordinal, item in enumerate(data):
         qt = item.get("question_type", "")
-        if qt in by_type:
-            by_type[qt].append(item)
+        if qt not in counts:
+            continue
+        if counts[qt] >= limits[qt]:
+            continue
+        row = dict(item)
+        row["_validation_dataset_ordinal"] = dataset_ordinal
+        result.append(row)
+        counts[qt] += 1
+        if all(counts[t] >= limits[t] for t in question_types):
+            break
 
-    # Sample from each type
-    result = []
-    type_counts = {}
     for qt in question_types:
-        available = len(by_type[qt])
-        to_sample = min(num_per_type, available)
-        sampled = by_type[qt][:to_sample]
-        result.extend(sampled)
-        type_counts[qt] = len(sampled)
-        logger.info("Type %s: sampled %d/%d available", qt, to_sample, available)
+        got = counts.get(qt, 0)
+        logger.info("Type %s: sampled %d (requested up to %d per type)", qt, got, num_per_type)
 
-    logger.info("Total loaded: %d items", len(result))
+    logger.info("Total loaded: %d items (deterministic file-order sampling)", len(result))
     return result
 
 
@@ -972,6 +1017,7 @@ class AccumulatedDialogue:
     reference_answer: str
     question_type: str
     pipeline_state: Dict[str, Any]  # Memory slots, deleted facts, etc.
+    dataset_ordinal: Optional[int] = None  # index in source LongMemEval JSON array
 
 
 @dataclass
@@ -984,6 +1030,7 @@ class AccumulatedAnswer:
     question_type: str
     predicted_answer: str
     memory_context: Dict[str, Any]
+    dataset_ordinal: Optional[int] = None
 
 
 @dataclass
@@ -999,6 +1046,7 @@ class MemoryOnlyState:
     dst_state: Dict[str, Any]  # Serialized DST state
     ragu_storage_path: Optional[str]  # Path to RAGU storage
     pipeline_state: Dict[str, Any]  # Full pipeline state including memory_context
+    dataset_ordinal: Optional[int] = None  # index in source LongMemEval JSON array
 
 
 @dataclass
@@ -1012,6 +1060,7 @@ class IntermediateAnswer:
     predicted_answer: str
     memory_context: Dict[str, Any]
     memory_state_path: str  # Path for Memory Hit Rate calculation
+    dataset_ordinal: Optional[int] = None
 
 
 class BatchProcessor:
@@ -1120,8 +1169,23 @@ class BatchProcessor:
         write_logs = []
         from dst_memory.core.models import Message
 
-        for msg in user_messages:
+        _msg_preview_len = 500
+        for mi, msg in enumerate(user_messages, start=1):
+            if len(msg) <= _msg_preview_len:
+                msg_for_log = msg
+            else:
+                msg_for_log = msg[:_msg_preview_len] + "…"
+            logger.info(
+                "[Batch] Item %d: write_to_memory message %d/%d — %s",
+                global_index,
+                mi,
+                len(user_messages),
+                msg_for_log.replace("\n", "\\n"),
+            )
+            t0 = time.time()
             log = self.pipeline.write_to_memory(dialogue_id, Message(role="user", content=msg))
+            if self._timing is not None:
+                self._timing.add_user_message(time.time() - t0)
             write_logs.append(log)
 
         # Get memory state (without calling final LLM)
@@ -1160,6 +1224,7 @@ class BatchProcessor:
                 memory_state_path=str(saved_paths.get("dst_state", "")),
                 dst_state=state.to_dict() if hasattr(state, "to_dict") else {},
                 ragu_storage_path=str(saved_paths.get("ragu_storage", "")) if saved_paths.get("ragu_storage") else None,
+                dataset_ordinal=item.get("_validation_dataset_ordinal"),
                 pipeline_state={
                     "write_logs": write_logs,
                     "memory_slots": answer_details.get("memory_slots", []),
@@ -1182,6 +1247,7 @@ class BatchProcessor:
                 question=question,
                 reference_answer=reference_answer,
                 question_type=question_type,
+                dataset_ordinal=item.get("_validation_dataset_ordinal"),
                 pipeline_state={
                     "write_logs": write_logs,
                     "memory_slots": answer_details.get("memory_slots", []),
@@ -1208,7 +1274,7 @@ class BatchProcessor:
         output_path = self.persistence.output_dir / "memory_only_states.json"
         states_data = []
         for state in self.memory_only_states:
-            states_data.append({
+            row: Dict[str, Any] = {
                 "global_index": state.global_index,
                 "dialogue_id": state.dialogue_id,
                 "question_id": state.question_id,
@@ -1218,7 +1284,10 @@ class BatchProcessor:
                 "memory_state_path": state.memory_state_path,
                 "ragu_storage_path": state.ragu_storage_path,
                 "pipeline_state": state.pipeline_state,
-            })
+            }
+            if state.dataset_ordinal is not None:
+                row["_validation_dataset_ordinal"] = state.dataset_ordinal
+            states_data.append(row)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
             "states": states_data,
@@ -1291,6 +1360,7 @@ class BatchProcessor:
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
+                dataset_ordinal=acc.dataset_ordinal,
             )
 
             self.answer_buffer.append(acc_answer)
@@ -1305,6 +1375,7 @@ class BatchProcessor:
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
                 memory_state_path="",  # Not available in full mode
+                dataset_ordinal=acc.dataset_ordinal,
             ))
 
         # Write intermediate answers
@@ -1341,8 +1412,9 @@ class BatchProcessor:
         with open(states_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        states = data.get("states", [])
-        logger.info("[FinalLLMOnly] Loaded %d memory states", len(states))
+        states = list(data.get("states", []))
+        states.sort(key=_validation_sort_key)
+        logger.info("[FinalLLMOnly] Loaded %d memory states (sorted by dataset ordinal)", len(states))
 
         # Group states into batches
         state_batches = [
@@ -1405,6 +1477,7 @@ class BatchProcessor:
                     predicted_answer=predicted_answer,
                     memory_context=memory_context,
                     memory_state_path=memory_state_path,
+                    dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
                 )
                 self.intermediate_answers.append(intermediate)
 
@@ -1417,6 +1490,7 @@ class BatchProcessor:
                     question_type=question_type,
                     predicted_answer=predicted_answer,
                     memory_context=memory_context,
+                    dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
                 )
                 self.answer_buffer.append(acc_answer)
 
@@ -1440,7 +1514,7 @@ class BatchProcessor:
         output_path = self.persistence.output_dir / "intermediate_answers.json"
         answers_data = []
         for ans in self.intermediate_answers:
-            answers_data.append({
+            row_a: Dict[str, Any] = {
                 "global_index": ans.global_index,
                 "question_id": ans.question_id,
                 "question": ans.question,
@@ -1449,7 +1523,10 @@ class BatchProcessor:
                 "predicted_answer": ans.predicted_answer,
                 "memory_context": ans.memory_context,
                 "memory_state_path": ans.memory_state_path,
-            })
+            }
+            if ans.dataset_ordinal is not None:
+                row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
+            answers_data.append(row_a)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
             "answers": answers_data,
@@ -1635,8 +1712,9 @@ class BatchProcessor:
         with open(input_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        answers = data.get("answers", [])
-        logger.info("[JudgeOnly] Loaded %d answers to evaluate", len(answers))
+        answers = list(data.get("answers", []))
+        answers.sort(key=_validation_sort_key)
+        logger.info("[JudgeOnly] Loaded %d answers to evaluate (sorted by dataset ordinal)", len(answers))
 
         # Load memory states from input_state_dir if provided (for Memory Hit Rate)
         memory_states_map = {}
@@ -1676,6 +1754,7 @@ class BatchProcessor:
                     question_type=ans_data.get("question_type", ""),
                     predicted_answer=ans_data["predicted_answer"],
                     memory_context=memory_context,
+                    dataset_ordinal=ans_data.get("_validation_dataset_ordinal"),
                 )
                 self._evaluate_single_answer(acc, memory_state_path)
 
@@ -1972,11 +2051,22 @@ def _print_final_stats(stats: Dict, timing_stats: Dict, args: argparse.Namespace
     # Timing summary
     logger.info("\nTiming statistics:")
     logger.info("  Total time: %.2fs", timing_stats.get("total_time", 0))
-    if "time_per_item" in timing_stats:
-        t = timing_stats["time_per_item"]
-        logger.info("  Per item: min=%.3fs, max=%.3fs, p50=%.3fs, p95=%.3fs, p99=%.3fs",
-                    t.get("min", 0), t.get("max", 0), t.get("p50", 0),
-                    t.get("p95", 0), t.get("p99", 0))
+    n_writes = timing_stats.get("total_user_message_writes", 0)
+    if n_writes:
+        logger.info("  User message writes (write_to_memory): %d", n_writes)
+    if "time_per_user_message" in timing_stats:
+        t = timing_stats["time_per_user_message"]
+        logger.info(
+            "  Per user message (write_to_memory): min=%.3fs, max=%.3fs, p50=%.3fs, p95=%.3fs, p99=%.3fs",
+            t.get("min", 0), t.get("max", 0), t.get("p50", 0), t.get("p95", 0), t.get("p99", 0),
+        )
+    if "time_per_dialogue" in timing_stats:
+        t = timing_stats["time_per_dialogue"]
+        logger.info(
+            "  Per dialogue (full LongMemEval item, memory pass): min=%.3fs, max=%.3fs, "
+            "p50=%.3fs, p95=%.3fs, p99=%.3fs",
+            t.get("min", 0), t.get("max", 0), t.get("p50", 0), t.get("p95", 0), t.get("p99", 0),
+        )
 
     logger.info("Results saved to: %s", results_path)
 

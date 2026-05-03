@@ -379,6 +379,13 @@ TRIPLET_PER_SLOT_BY_SLOT_BASE: Dict[str, List[Tuple[str, List[dict]]]] = {
                 {"subject": "user", "relation": "level of study", "object": "master's degree", "ttl": "1y"},
             ],
         ),
+        (
+            "Completed a degree in corporate finance, it will realy helped me to find a job",
+            [
+                {"subject": "user", "relation": "has degree in", "object": "corporate finance", "ttl": "inf"},
+                {"subject": "corporate finance", "relation": "help", "object": "find a job", "ttl": "inf"},
+            ],
+        ),
     ],
     "SPORTS": [
         (
