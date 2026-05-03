@@ -229,7 +229,10 @@ def build_triplet_messages(
         "Response schema:\n"
         f"{output_schema}\n"
         f"Maximum triplets: {max_triplets}.\n"
-        'If there are no stable facts: {"triplets":[]}.'
+        "If there are no stable facts: {"triplets":[]}.\n\n"
+        "VERY IMPORTANT: A fact can be indicated without an object, if it is obvious from the context, such facts need to be added.\n"
+        "In the message, the fact can be indicated indirectly, you need to understand it from the context and add it.\n"
+        "The message may contain not only a fact, but also a question, reasoning, emotions, assessments, etc. In this case, it is necessary to add facts, even if it is not mentioned directly.\n\n"
     )
 
     def user_turn_no_slot(msg: str) -> str:
