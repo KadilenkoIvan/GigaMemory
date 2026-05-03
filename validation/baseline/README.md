@@ -1,99 +1,55 @@
 # Baseline Validation for LongMemEval
 
-This directory contains baseline validation scripts for comparing against GigaMemory DST pipeline.
+Baseline testing with simple context-passing strategies. Includes timing metrics, retry logic, and 0-1 scoring scale.
 
-## Baseline Strategies
+## Features
 
-### 1. `full_context`
-Pass **ALL** user and assistant messages from all sessions to the final LLM.
+- **Two baseline strategies:**
+  - `full_context` — all user + assistant messages
+  - `recent_10_plus_user` — last 10 pairs + remaining user messages
 
-**Context format:**
-```
-User: Message 1
-Assistant: Response 1
-User: Message 2
-Assistant: Response 2
-...
-User: Message N
-Assistant: Response N
+- **Timing metrics:**
+  - Total processing time
+  - Time per item (min, max, p50, p95, p99)
+  - Time per message (min, max, p50, p95, p99)
 
-Question: {question}
-```
+- **Retry logic:** 3 attempts with exponential backoff for HTTP 429/500 errors
 
-### 2. `recent_10_plus_user`
-Pass:
-- Last **10 complete user/assistant pairs** (most recent)
-- PLUS **all remaining user messages** from earlier sessions
+- **Judge scoring 0-1 scale:**
+  - 1.0 = Perfect match
+  - 0.8 = Minor inaccuracy
+  - 0.6 = Partial answer
+  - 0.4 = Weak coverage
+  - 0.2 = Minimal match
+  - 0.0 = No match
 
-**Context format:**
-```
-User: [Early message 1]
-User: [Early message 2]
-...
-User: [Early message M]
-User: [Recent message M+1]
-Assistant: [Recent response M+1]
-...
-User: [Recent message M+10]
-Assistant: [Recent response M+10]
+- **Per-question-type metrics:** aggregated scores by type
 
-Question: {question}
-```
-
-This strategy tests whether the "lost in the middle" effect affects retrieval of older information when recent context is present.
-
-## Structure
-
-```
-baseline/
-├── validate_baseline.py      # Main validation script
-├── run_config.json          # Configuration file
-└── README.md                # This file
-```
-
-## Usage
-
-### Basic Usage (Full Context)
-
-```bash
-cd validation/baseline
-python validate_baseline.py
-```
-
-### Recent 10 + User Strategy
-
-```bash
-python validate_baseline.py --strategy recent_10_plus_user --output-dir ./results_recent10
-```
-
-### With Custom Config
-
-```bash
-python validate_baseline.py --config ./my_config.json --output-dir ./results
-```
+- **Balanced sampling:** N items per question type
 
 ## Configuration
-
-Edit `run_config.json`:
 
 ```json
 {
   "shared": {
     "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
     "output_dir": "./results",
-    "start_index": 0,
-    "num_items": 311,
-    "log_level": "INFO"
+    "num_items_per_type": 10,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ]
   },
   "baseline": {
     "strategy": "full_context",
-    "final_llm_batch_size": 10,
-    "judge_batch_size": 20
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1
   },
   "final_llm": {
     "mode": "openrouter",
-    "model": "openai/gpt-oss-120b:free",
-    "api_key": "${OPENROUTER_API_KEY}"
+    "model": "openai/gpt-oss-120b:free"
   },
   "judge": {
     "mode": "openrouter",
@@ -102,129 +58,80 @@ Edit `run_config.json`:
 }
 ```
 
-## Comparison with GigaMemory
-
-For fair comparison:
-
-1. **Use same final LLM** (copy settings from GigaMemory config)
-2. **Use same judge** (copy settings from GigaMemory config)
-3. **Use same dataset range** (same `start_index` and `num_items`)
-4. **Use same batch sizes** (for performance consistency)
-
-### Example Comparison Run
+## Usage
 
 ```bash
-# 1. Run GigaMemory validation
-cd validation/GigaMemory_full
-python validate_longmemeval.py --config ./run_config.json
+# Full context baseline
+python validate_baseline.py --config ./run_config.json
 
-# 2. Run Baseline - Full Context
-cd validation/baseline
-python validate_baseline.py \
-    --strategy full_context \
-    --output-dir ./results_full_context
-
-# 3. Run Baseline - Recent 10 + User
-python validate_baseline.py \
-    --strategy recent_10_plus_user \
-    --output-dir ./results_recent10
-
-# 4. Compare results
-python compare_results.py \
-    ../GigaMemory_full/results/validation_results.json \
-    ./results_full_context/validation_results.json \
-    ./results_recent10/validation_results.json
+# Recent 10 + user strategy
+python validate_baseline.py --strategy recent_10_plus_user --output-dir ./results_recent10
 ```
 
 ## Output Format
 
-Output matches GigaMemory format:
-
 ```json
 {
-  "metadata": {
-    "strategy": "full_context",
-    "dataset_path": "...",
-    "start_index": 0,
-    "num_items": 50,
-    "final_llm_mode": "openrouter",
-    "final_llm_model": "openai/gpt-oss-120b:free",
-    "judge_mode": "openrouter",
-    "judge_model": "openai/gpt-oss-120b:free",
-    "timestamp": "2025-01-01 12:00:00"
-  },
+  "metadata": {...},
   "statistics": {
-    "total": 50,
-    "correct": 42,
-    "incorrect": 8
+    "total": 40,
+    "errors_final_llm": 0,
+    "errors_judge": 0,
+    "average_score": 0.75,
+    "by_type": {
+      "single-session-user": {"count": 10, "average_score": 0.82, "errors": 0},
+      "single-session-preference": {"count": 10, "average_score": 0.78, "errors": 0},
+      "multi-session": {"count": 10, "average_score": 0.65, "errors": 0},
+      "knowledge-update": {"count": 10, "average_score": 0.75, "errors": 0}
+    }
+  },
+  "timing": {
+    "total_time": 120.5,
+    "total_items": 40,
+    "total_messages": 2400,
+    "time_per_item": {"min": 1.2, "max": 5.8, "p50": 2.8, "p95": 4.5, "p99": 5.2},
+    "time_per_message": {"min": 0.02, "max": 0.15, "p50": 0.05, "p95": 0.08, "p99": 0.10}
   },
   "results": [
     {
       "global_index": 0,
-      "question_id": "abc123",
-      "question": "What is my dog's name?",
-      "reference_answer": "Max",
-      "predicted_answer": "Your dog's name is Max",
+      "question_id": "...",
+      "question": "...",
+      "reference_answer": "...",
+      "predicted_answer": "...",
       "question_type": "single-session-user",
-      "correct": true,
-      "judge_evaluation": {
-        "correct": true,
-        "reasoning": "Correctly identifies the dog's name"
-      }
+      "score": 1.0,
+      "reasoning": "Perfect match",
+      "final_llm_error": null,
+      "judge_error": null
     }
   ]
 }
 ```
 
-## Metrics
+## Scoring Criteria
 
-- **Accuracy** = correct / total (primary metric for comparison)
+| Score | Description | Criteria |
+|-------|-------------|----------|
+| 1.0 | Perfect | All key entities match, meaning identical |
+| 0.8 | Minor error | All entities present, one slightly distorted |
+| 0.6 | Partial | Most covered, one important entity missing |
+| 0.4 | Weak | One correct entity from several needed |
+| 0.2 | Minimal | Related domain, but content doesn't match |
+| 0.0 | None | Incorrect, contradicts, or "don't know" |
 
-Unlike GigaMemory, baseline does **not** calculate:
-- Memory Hit Rate (no "memory" in baseline - just raw context)
-- Deleted facts tracking
-- Slot-based metrics
+### Special Rules
 
-## Expected Results
+- **knowledge-update:** Old fact instead of new = 0.0
+- **single-session-preference:** Correct fact used = 1.0 (regardless of phrasing)
+- **multi-session:** Partial aggregation scored proportionally
 
-Based on "Lost in the Middle" research:
-
-| Strategy | Expected Accuracy | Notes |
-|----------|-------------------|-------|
-| `full_context` | ~40-60% | Degrades with longer context |
-| `recent_10_plus_user` | ~50-70% | Better if answer in recent context |
-| GigaMemory | ~70-85% | Structured memory should outperform |
-
-## Troubleshooting
-
-### Out of Memory
-
-The `full_context` strategy with 50+ sessions may exceed context window:
-
-```bash
-# Reduce batch size
---val-batch-final-llm-batch-size 1
-
-# Or use a model with larger context window
---gm-llm-model "anthropic/claude-3-opus-200k"
-```
-
-### Slow Processing
-
-```bash
-# Increase batch sizes
---val-batch-final-llm-batch-size 20
---val-batch-judge-batch-size 40
-```
-
-## Differences from GigaMemory
+## Comparison with GigaMemory
 
 | Feature | GigaMemory | Baseline |
 |---------|-----------|----------|
-| Memory mechanism | Structured slots + RAGU | Raw context |
-| Context length | Controlled (slots) | Full (can be very long) |
-| TTL / Deletion | Yes | No |
-| Memory Hit Rate | Yes | No |
-| State saving | Per-dialogue | None |
-| Processing time | Slower (extraction) | Faster (no extraction) |
-| Cost | Higher (more LLM calls) | Lower (just final LLM + judge) |
+| Memory | Structured slots | Raw context |
+| Scoring | 0-1 scale | 0-1 scale |
+| Retry | Yes (3 attempts) | Yes (3 attempts) |
+| Timing | Full metrics | Full metrics |
+| Per-type metrics | Yes | Yes |

@@ -53,6 +53,129 @@ if str(ragu_path) not in sys.path:
 
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
 from dst_memory.utils.run_config_loader import load_run_config, shared_section
+import random
+
+
+# ============================================================================
+# Timing Utilities
+# ============================================================================
+
+class TimingStats:
+    """Collect and compute timing statistics."""
+
+    def __init__(self):
+        self.items: List[Dict[str, float]] = []
+        self.total_start: Optional[float] = None
+        self.total_time: float = 0.0
+
+    def start_total(self):
+        self.total_start = time.time()
+
+    def end_total(self):
+        if self.total_start:
+            self.total_time = time.time() - self.total_start
+
+    def add_item(self, num_messages: int, processing_time: float):
+        """Add timing for a single item."""
+        self.items.append({
+            "num_messages": num_messages,
+            "time": processing_time,
+            "time_per_message": processing_time / num_messages if num_messages > 0 else 0,
+        })
+
+    def compute_percentile(self, values: List[float], p: float) -> float:
+        """Compute percentile (0-100)."""
+        if not values:
+            return 0.0
+        sorted_vals = sorted(values)
+        k = (len(sorted_vals) - 1) * p / 100
+        f = int(k)
+        c = f + 1 if f + 1 < len(sorted_vals) else f
+        return sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f])
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get computed statistics."""
+        times = [item["time"] for item in self.items]
+        per_msg_times = [item["time_per_message"] for item in self.items if item["num_messages"] > 0]
+        total_messages = sum(item["num_messages"] for item in self.items)
+
+        if not times:
+            return {
+                "total_time": self.total_time,
+                "total_items": 0,
+                "total_messages": 0,
+            }
+
+        return {
+            "total_time": self.total_time,
+            "total_items": len(self.items),
+            "total_messages": total_messages,
+            "time_per_item": {
+                "min": min(times),
+                "max": max(times),
+                "p50": self.compute_percentile(times, 50),
+                "p95": self.compute_percentile(times, 95),
+                "p99": self.compute_percentile(times, 99),
+                "mean": sum(times) / len(times),
+            },
+            "time_per_message": {
+                "min": min(per_msg_times) if per_msg_times else 0,
+                "max": max(per_msg_times) if per_msg_times else 0,
+                "p50": self.compute_percentile(per_msg_times, 50) if per_msg_times else 0,
+                "p95": self.compute_percentile(per_msg_times, 95) if per_msg_times else 0,
+                "p99": self.compute_percentile(per_msg_times, 99) if per_msg_times else 0,
+                "mean": sum(per_msg_times) / len(per_msg_times) if per_msg_times else 0,
+            },
+        }
+
+
+# ============================================================================
+# Retry Decorator
+# ============================================================================
+
+def retry_with_backoff(max_retries: int = 3, backoff_base: float = 1.0):
+    """Decorator for retrying with exponential backoff."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except urllib.error.HTTPError as e:
+                    last_exception = e
+                    if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                        wait_time = backoff_base * (2 ** attempt) + random.uniform(0, 1)
+                        logger.warning("HTTP %d error, retrying in %.1fs (attempt %d/%d)",
+                                       e.code, wait_time, attempt + 1, max_retries)
+                        time.sleep(wait_time)
+                    else:
+                        raise
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_time = backoff_base * (2 ** attempt) + random.uniform(0, 1)
+                        logger.warning("Error: %s, retrying in %.1fs (attempt %d/%d)",
+                                       e, wait_time, attempt + 1, max_retries)
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            raise last_exception
+        return wrapper
+    return decorator
+
+
+# ============================================================================
+# Question Types (for judge and per-type metrics)
+# ============================================================================
+
+QUESTION_TYPES = {
+    "single-session-user": "User mentioned a fact about themselves in one session - system should remember it",
+    "single-session-preference": "User previously shared their preferences - system should use them when answering a new request",
+    "multi-session": "Facts about user are scattered across multiple sessions - system should collect them together",
+    "knowledge-update": "User provided new fact contradicting old one - system should return the current one",
+}
+
+RELEVANT_TYPES = list(QUESTION_TYPES.keys())
 
 
 # ============================================================================
@@ -65,8 +188,8 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
         "shared": {
             "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
             "output_dir": "./results",
-            "start_index": 0,
-            "num_items": 10,
+            "num_items_per_type": 10,  # Balanced sampling: N per question type
+            "question_types": list(QUESTION_TYPES.keys()),
             "log_level": "INFO",
             "log_file": True,
             "save_memory_state": True,
@@ -129,8 +252,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     # Validation params (shared)
     args.dataset_path = shared.get("dataset_path", "")
     args.output_dir = shared.get("output_dir", "./results")
-    args.start_index = shared.get("start_index", 0)
-    args.num_items = shared.get("num_items", 10)
+    args.num_items_per_type = shared.get("num_items_per_type", 10)
+    args.question_types = shared.get("question_types", list(QUESTION_TYPES.keys()))
     args.log_level = shared.get("log_level", "INFO")
     args.log_file = shared.get("log_file", True)
     args.save_memory_state = shared.get("save_memory_state", True)
@@ -285,18 +408,31 @@ class JudgeClient:
             model if mode == "openrouter" else local_model_path,
         )
 
-    def _get_system_prompt_answer_correctness(self) -> str:
-        return (
-            "You are an expert evaluator assessing the correctness of answers.\n"
-            "Your task is to compare a predicted answer with a reference (gold) answer\n"
-            "and determine if they convey the same information, even if worded differently.\n\n"
-            "Evaluation criteria:\n"
-            "1. Semantic equivalence: Do both answers convey the same core information?\n"
-            "2. Factual correctness: Is the predicted answer factually accurate based on the reference?\n"
-            "3. No hallucinations: Does the predicted answer introduce false information?\n\n"
-            "Respond with ONLY a JSON object in this exact format:\n"
-            '{"correct": true/false, "reasoning": "brief explanation"}'
-        )
+    def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
+        """Get system prompt with 0-1 scoring criteria."""
+        type_desc = QUESTION_TYPES.get(question_type, "General question answering")
+
+        return f"""You are an expert evaluator assessing answer quality.
+
+Question Type: {question_type}
+Type Description: {type_desc}
+
+Your task: Compare the predicted answer with the reference (gold) answer and return a score from 0.0 to 1.0 representing how well the predicted answer covers the factual content of the reference.
+
+Scoring Scale:
+1.0 - Perfect match: Contains all key entities and facts from reference. Wording may differ, but meaning is identical.
+0.8 - Minor inaccuracy: All key entities present, but one is slightly distorted (wrong number, approximate date, slight name variation).
+0.6 - Partial answer: Covers most of reference, but one of several equally important entities is missing or replaced.
+0.4 - Weak coverage: Only one correct entity from several needed mentioned, OR correct category but wrong specific fact.
+0.2 - Minimal match: Thematically related to question but factually almost no overlap with reference — guessed domain but not content.
+0.0 - No match: Factually incorrect, contradicts reference, or system said "I don't know" when reference exists.
+
+Special Rules:
+- For knowledge-update: If system named old/outdated fact instead of new one → 0.0 (old fact doesn't count).
+- For single-session-preference: Judge if correct user fact was used, not quote accuracy. Different phrasing with correct fact = 1.0.
+- For multi-session: If aggregation needed (e.g., "how many total"), partial count scores proportionally: found 2 of 4 needed entities → 0.4-0.6 depending on importance of missing ones.
+
+Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}"""
 
     def _get_system_prompt_memory_hit(self) -> str:
         return (
@@ -314,9 +450,9 @@ class JudgeClient:
     def _get_user_prompt_answer_correctness(self, question: str, predicted: str, reference: str) -> str:
         return (
             f"Question: {question}\n\n"
-            f"Predicted Answer: {predicted}\n\n"
             f"Reference Answer: {reference}\n\n"
-            "Evaluate if the predicted answer is semantically equivalent to the reference."
+            f"Predicted Answer: {predicted}\n\n"
+            "Score the predicted answer's coverage of the reference (0.0 to 1.0)."
         )
 
     def _get_user_prompt_memory_hit(self, question: str, reference_answer: str, memory_context: Dict) -> str:
@@ -329,18 +465,24 @@ class JudgeClient:
         )
 
     def evaluate_answer(
-        self, question: str, predicted_answer: str, reference_answer: str
-    ) -> Dict[str, Any]:
-        """Evaluate if predicted answer is correct (semantic equivalence)."""
+        self, question: str, predicted_answer: str, reference_answer: str,
+        question_type: str
+    ) -> Tuple[float, str, Optional[str]]:
+        """Evaluate answer. Returns (score, reasoning, error). Score: 0.0 to 1.0"""
         if not predicted_answer or not predicted_answer.strip():
-            return {"correct": False, "reasoning": "Empty predicted answer"}
+            return 0.0, "Empty predicted answer", None
         if not reference_answer or not reference_answer.strip():
-            return {"correct": False, "reasoning": "Empty reference answer"}
+            return 0.0, "Empty reference answer", None
 
-        system_msg = self._get_system_prompt_answer_correctness()
+        system_msg = self._get_system_prompt_answer_correctness(question_type)
         user_msg = self._get_user_prompt_answer_correctness(question, predicted_answer, reference_answer)
 
-        return self._call_judge(system_msg, user_msg, mode="correctness")
+        try:
+            result = self._call_judge(system_msg, user_msg, mode="correctness")
+            return float(result.get("score", 0)), str(result.get("reasoning", "No reasoning")), None
+        except Exception as e:
+            logger.error("Judge evaluation failed: %s", e)
+            return 0.0, f"Error: {e}", str(e)
 
     def evaluate_memory_hit(
         self, question: str, reference_answer: str, memory_context: Dict
@@ -363,10 +505,24 @@ class JudgeClient:
         else:
             raise ValueError(f"Unknown judge mode: {self.mode}")
 
-    def _call_openrouter(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
-        """Call OpenRouter API."""
+    @retry_with_backoff(max_retries=3)
+    def _call_openrouter_api(self, body: Dict, headers: Dict) -> str:
+        """Call OpenRouter API with retry."""
         import urllib.request
-        import urllib.error
+
+        url = f"{self.api_url.rstrip('/')}/chat/completions"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.read().decode("utf-8")
+
+    def _call_openrouter(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
+        """Call OpenRouter API with retry."""
 
         body = {
             "model": self.model,
@@ -383,23 +539,11 @@ class JudgeClient:
             "Content-Type": "application/json",
         }
 
-        url = f"{self.api_url.rstrip('/')}/chat/completions"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(body).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            logger.error("Judge HTTP error: %s", e)
-            return self._error_result(mode, f"HTTP error: {e.code}")
+            raw = self._call_openrouter_api(body, headers)
         except Exception as e:
-            logger.error("Judge request error: %s", e)
-            return self._error_result(mode, f"Request error: {e}")
+            logger.error("Judge API failed after retries: %s", e)
+            return self._error_result(mode, f"API error: {e}")
 
         try:
             data = json.loads(raw)
@@ -446,7 +590,7 @@ class JudgeClient:
 
         if mode == "correctness":
             return {
-                "correct": bool(result.get("correct", False)),
+                "score": float(result.get("score", 0)),
                 "reasoning": str(result.get("reasoning", "No reasoning provided")),
             }
         else:  # memory_hit
@@ -459,7 +603,7 @@ class JudgeClient:
     def _error_result(self, mode: str, error_msg: str) -> Dict[str, Any]:
         """Return error result."""
         if mode == "correctness":
-            return {"correct": False, "reasoning": error_msg}
+            return {"score": 0.0, "reasoning": error_msg}
         else:
             return {"fact_present": False, "reasoning": error_msg, "location": "error"}
 
@@ -570,25 +714,35 @@ class MemoryStatePersistence:
 # Dataset Loading
 # ============================================================================
 
-def load_longmemeval_dataset(dataset_path: str) -> List[Dict[str, Any]]:
-    """Load LongMemEval dataset from JSON file."""
+def load_dataset_balanced(
+    dataset_path: str,
+    question_types: List[str],
+    num_per_type: int
+) -> List[Dict[str, Any]]:
+    """Load dataset with balanced sampling across question types."""
     with open(dataset_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # Filter relevant question types
-    filtered = [
-        item for item in data
-        if item.get("question_type") in RELEVANT_QUESTION_TYPES
-    ]
+    # Group by question type
+    by_type: Dict[str, List[Dict]] = {qt: [] for qt in question_types}
+    for item in data:
+        qt = item.get("question_type", "")
+        if qt in by_type:
+            by_type[qt].append(item)
 
-    logger.info(
-        "Loaded LongMemEval dataset: %d total, %d relevant (types: %s)",
-        len(data),
-        len(filtered),
-        ", ".join(RELEVANT_QUESTION_TYPES),
-    )
+    # Sample from each type
+    result = []
+    type_counts = {}
+    for qt in question_types:
+        available = len(by_type[qt])
+        to_sample = min(num_per_type, available)
+        sampled = by_type[qt][:to_sample]
+        result.extend(sampled)
+        type_counts[qt] = len(sampled)
+        logger.info("Type %s: sampled %d/%d available", qt, to_sample, available)
 
-    return filtered
+    logger.info("Total loaded: %d items", len(result))
+    return result
 
 
 def extract_user_messages_from_sessions(sessions: List[List[Dict]]) -> List[str]:
@@ -734,11 +888,13 @@ class BatchProcessor:
         # Statistics
         self.stats = {
             "total": 0,
-            "correct": 0,
-            "incorrect": 0,
+            "total_score": 0.0,
+            "errors_final_llm": 0,
+            "errors_judge": 0,
             "memory_hit": 0,
             "memory_miss": 0,
-            "no_judge": 0,
+            "by_type": {qt: {"count": 0, "total_score": 0.0, "errors": 0}
+                        for qt in QUESTION_TYPES.keys()},
         }
 
     def process_single_item(
@@ -898,11 +1054,12 @@ class BatchProcessor:
         )
 
         for acc in self.answer_buffer:
-            # Evaluate answer correctness
-            judge_result = self.judge_client.evaluate_answer(
+            # Evaluate answer correctness (0-1 score)
+            score, reasoning, judge_error = self.judge_client.evaluate_answer(
                 question=acc.question,
                 predicted_answer=acc.predicted_answer,
                 reference_answer=acc.reference_answer,
+                question_type=acc.question_type,
             )
 
             # Evaluate memory hit rate if requested
@@ -921,8 +1078,10 @@ class BatchProcessor:
                 "question": acc.question,
                 "reference_answer": acc.reference_answer,
                 "predicted_answer": acc.predicted_answer,
-                "judge_evaluation": judge_result,
-                "correct": judge_result.get("correct", False),
+                "question_type": acc.question_type,
+                "score": score,
+                "reasoning": reasoning,
+                "judge_error": judge_error,
                 "memory_hit_evaluation": memory_hit_result,
                 "memory_hit": memory_hit_result.get("fact_present", False) if memory_hit_result else None,
             }
@@ -931,10 +1090,17 @@ class BatchProcessor:
 
             # Update stats
             self.stats["total"] += 1
-            if judge_result.get("correct", False):
-                self.stats["correct"] += 1
-            else:
-                self.stats["incorrect"] += 1
+            self.stats["total_score"] += score
+            if judge_error:
+                self.stats["errors_judge"] += 1
+
+            # Per-type stats
+            qt = acc.question_type
+            if qt in self.stats["by_type"]:
+                self.stats["by_type"][qt]["count"] += 1
+                self.stats["by_type"][qt]["total_score"] += score
+                if judge_error:
+                    self.stats["by_type"][qt]["errors"] += 1
 
             if memory_hit_result:
                 if memory_hit_result.get("fact_present", False):
@@ -957,6 +1123,14 @@ class BatchProcessor:
         if self.answer_buffer:
             self._flush_judge_batch()
 
+        # Compute per-type averages
+        for qt in self.stats["by_type"]:
+            count = self.stats["by_type"][qt]["count"]
+            if count > 0:
+                self.stats["by_type"][qt]["average_score"] = (
+                    self.stats["by_type"][qt]["total_score"] / count
+                )
+
         return self.results, self.stats
 
 
@@ -970,31 +1144,32 @@ def run_validation(args: argparse.Namespace) -> None:
     log_file_path = Path(args.output_dir) / "validation.log" if args.log_file else None
     setup_logging(args.log_level, str(log_file_path) if log_file_path else None)
 
+    # Initialize timing
+    timing = TimingStats()
+    timing.start_total()
+
     logger.info("=" * 70)
     logger.info("LongMemEval Validation v2 - Starting")
     logger.info("=" * 70)
     logger.info("Configuration:")
     logger.info("  Dataset: %s", args.dataset_path)
     logger.info("  Output: %s", args.output_dir)
-    logger.info("  Start index: %d", args.start_index)
-    logger.info("  Num items: %d", args.num_items)
+    logger.info("  Items per type: %d", args.num_items_per_type)
+    logger.info("  Question types: %s", args.question_types)
     logger.info("  Final LLM batch size: %d", args.final_llm_batch_size)
     logger.info("  Judge batch size: %d", args.judge_batch_size)
     logger.info("  Calculate memory hit rate: %s", args.calculate_memory_hit_rate)
     logger.info("  Judge mode: %s", args.judge_mode)
     logger.info("  GigaMemory config: %s", args.config)
 
-    # Load dataset
-    dataset = load_longmemeval_dataset(args.dataset_path)
+    # Load dataset with balanced sampling
+    dataset = load_dataset_balanced(
+        args.dataset_path,
+        args.question_types,
+        args.num_items_per_type,
+    )
 
-    if args.start_index >= len(dataset):
-        logger.error("Start index %d exceeds dataset size %d", args.start_index, len(dataset))
-        return
-
-    end_index = min(args.start_index + args.num_items, len(dataset))
-    dataset_slice = dataset[args.start_index:end_index]
-
-    logger.info("Processing items %d to %d (total %d)", args.start_index, end_index - 1, len(dataset_slice))
+    logger.info("Total items to process: %d", len(dataset))
 
     # Initialize persistence
     persistence = MemoryStatePersistence(args.output_dir)
@@ -1027,19 +1202,33 @@ def run_validation(args: argparse.Namespace) -> None:
     )
 
     # Process each item
-    for idx, item in enumerate(dataset_slice):
-        global_idx = args.start_index + idx
+    for idx, item in enumerate(dataset):
+        global_idx = idx
 
         logger.info("-" * 70)
-        logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset_slice), global_idx)
+        logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset), global_idx)
+        logger.info("Question type: %s", item.get("question_type", "unknown"))
+        logger.info("Question: %s", item.get("question", ""))
 
+        # Count messages for timing
+        sessions = item.get("haystack_sessions", [])
+        num_messages = sum(len(s) for s in sessions)
+
+        start_time = time.time()
         try:
             batch_processor.process_single_item(item, global_idx)
         except Exception as e:
             logger.exception("Error processing item %d: %s", global_idx, e)
+        finally:
+            processing_time = time.time() - start_time
+            timing.add_item(num_messages, processing_time)
 
     # Finalize - flush remaining buffers
+    timing.end_total()
     all_results, stats = batch_processor.finalize()
+
+    # Compute average score
+    avg_score = stats["total_score"] / stats["total"] if stats["total"] > 0 else 0
 
     # Final summary
     logger.info("=" * 70)
@@ -1047,15 +1236,33 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("=" * 70)
     logger.info("Statistics:")
     logger.info("  Total processed: %d", stats["total"])
-    logger.info("  Correct: %d", stats["correct"])
-    logger.info("  Incorrect: %d", stats["incorrect"])
+    logger.info("  Average score: %.3f", avg_score)
+    logger.info("  Judge errors: %d", stats["errors_judge"])
+
+    logger.info("\nPer-question-type results:")
+    for qt, qt_stats in stats["by_type"].items():
+        if qt_stats["count"] > 0:
+            avg = qt_stats.get("average_score", 0)
+            logger.info("  %s: %d items, avg score=%.3f, errors=%d",
+                        qt, qt_stats["count"], avg, qt_stats["errors"])
 
     if args.calculate_memory_hit_rate:
-        logger.info("  Memory hits: %d", stats["memory_hit"])
-        logger.info("  Memory misses: %d", stats["memory_miss"])
+        logger.info("\nMemory Hit Rate:")
+        logger.info("  Hits: %d", stats["memory_hit"])
+        logger.info("  Misses: %d", stats["memory_miss"])
         if stats["memory_hit"] + stats["memory_miss"] > 0:
             hit_rate = stats["memory_hit"] / (stats["memory_hit"] + stats["memory_miss"])
-            logger.info("  Memory Hit Rate: %.2f%%", hit_rate * 100)
+            logger.info("  Rate: %.2f%%", hit_rate * 100)
+
+    # Timing summary
+    timing_stats = timing.get_stats()
+    logger.info("\nTiming statistics:")
+    logger.info("  Total time: %.2fs", timing_stats.get("total_time", 0))
+    if "time_per_item" in timing_stats:
+        t = timing_stats["time_per_item"]
+        logger.info("  Per item: min=%.3fs, max=%.3fs, p50=%.3fs, p95=%.3fs, p99=%.3fs",
+                    t.get("min", 0), t.get("max", 0), t.get("p50", 0),
+                    t.get("p95", 0), t.get("p99", 0))
 
     if stats["total"] > 0:
         accuracy = stats["correct"] / stats["total"]
@@ -1068,8 +1275,8 @@ def run_validation(args: argparse.Namespace) -> None:
             {
                 "metadata": {
                     "dataset_path": args.dataset_path,
-                    "start_index": args.start_index,
-                    "num_items": args.num_items,
+                    "num_items_per_type": args.num_items_per_type,
+                    "question_types": args.question_types,
                     "final_llm_batch_size": args.final_llm_batch_size,
                     "judge_batch_size": args.judge_batch_size,
                     "calculate_memory_hit_rate": args.calculate_memory_hit_rate,
@@ -1079,6 +1286,7 @@ def run_validation(args: argparse.Namespace) -> None:
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 },
                 "statistics": stats,
+                "timing": timing_stats,
                 "results": all_results,
             },
             f,
@@ -1155,23 +1363,22 @@ def main():
         epilog="""
 Examples:
     # Using default config file (run_config.json in same directory)
-    python validate_longmemeval_v2.py
+    python validate_longmemeval.py
 
     # Using custom config file
-    python validate_longmemeval_v2.py --config ./my_validation_config.json
+    python validate_longmemeval.py --config ./my_validation_config.json
 
     # Override specific config parameters via CLI
-    python validate_longmemeval_v2.py \\
-        --val-shared-start-index 20 \\
-        --val-shared-num-items 50 \\
-        --val-batch-final-llm-batch-size 10
+    python validate_longmemeval.py \\
+        --val-shared-num-items-per-type 20 \\
+        --val-batch-final-llm-batch-size 10 \\
+        --val-judge-model openai/gpt-4o-mini
 
     # Legacy: using only CLI args (without config file)
-    python validate_longmemeval_v2.py \\
+    python validate_longmemeval.py \\
         --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \\
         --output-dir ./results \\
-        --start-index 0 \\
-        --num-items 10
+        --num-items-per-type 10
         """,
     )
 
@@ -1187,10 +1394,10 @@ Examples:
                            help="Override: dataset path")
     val_group.add_argument("--val-shared-output-dir", type=str,
                            help="Override: output directory")
-    val_group.add_argument("--val-shared-start-index", type=int,
-                           help="Override: start index")
-    val_group.add_argument("--val-shared-num-items", type=int,
-                           help="Override: number of items")
+    val_group.add_argument("--val-shared-num-items-per-type", type=int,
+                           help="Override: number of items per question type (balanced sampling)")
+    val_group.add_argument("--val-shared-question-types", type=str,
+                           help="Override: comma-separated list of question types to test")
     val_group.add_argument("--val-shared-log-level", type=str,
                            choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                            help="Override: log level")
@@ -1227,8 +1434,8 @@ Examples:
     legacy_group = parser.add_argument_group("Legacy CLI Args (use --val-* or config file instead)")
     legacy_group.add_argument("--dataset-path", type=str, help="[Legacy] Dataset path")
     legacy_group.add_argument("--output-dir", type=str, help="[Legacy] Output directory")
-    legacy_group.add_argument("--start-index", type=int, help="[Legacy] Start index")
-    legacy_group.add_argument("--num-items", type=int, help="[Legacy] Number of items")
+    legacy_group.add_argument("--num-items-per-type", type=int, help="[Legacy] Number of items per question type (balanced sampling)")
+    legacy_group.add_argument("--question-types", type=str, help="[Legacy] Comma-separated list of question types to test")
 
     # Batch processing (NEW)
     parser.add_argument("--final-llm-batch-size", type=int, default=1,
@@ -1336,10 +1543,10 @@ Examples:
         config["shared"]["dataset_path"] = args.val_shared_dataset_path
     if args.val_shared_output_dir:
         config["shared"]["output_dir"] = args.val_shared_output_dir
-    if args.val_shared_start_index is not None:
-        config["shared"]["start_index"] = args.val_shared_start_index
-    if args.val_shared_num_items is not None:
-        config["shared"]["num_items"] = args.val_shared_num_items
+    if args.val_shared_num_items_per_type is not None:
+        config["shared"]["num_items_per_type"] = args.val_shared_num_items_per_type
+    if args.val_shared_question_types:
+        config["shared"]["question_types"] = args.val_shared_question_types.split(",")
     if args.val_shared_log_level:
         config["shared"]["log_level"] = args.val_shared_log_level
     if args.val_shared_log_file is not None:
@@ -1374,10 +1581,12 @@ Examples:
         config["shared"]["dataset_path"] = args.dataset_path
     if args.output_dir:
         config["shared"]["output_dir"] = args.output_dir
-    if args.start_index is not None:
-        config["shared"]["start_index"] = args.start_index
-    if args.num_items is not None:
-        config["shared"]["num_items"] = args.num_items
+
+    # Handle new balanced sampling args
+    if args.num_items_per_type is not None:
+        config["shared"]["num_items_per_type"] = args.num_items_per_type
+    if args.question_types:
+        config["shared"]["question_types"] = args.question_types.split(",")
 
     # Convert config to args namespace
     config_args = config_to_args(config)

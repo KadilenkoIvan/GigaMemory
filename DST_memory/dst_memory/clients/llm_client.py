@@ -164,7 +164,11 @@ class FinalLLMClient:
             return base
         return f"{base.rstrip('/')}/chat/completions"
 
-    def _openai_compatible_chat(self, messages: List[Dict[str, str]]) -> str:
+    def _openai_compatible_chat(self, messages: List[Dict[str, str]], max_retries: int = 3) -> str:
+        """Call API with retry logic for transient errors."""
+        import time
+        import random
+
         if not self.api_key.strip():
             raise ValueError(
                 "llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY."
@@ -188,43 +192,71 @@ class FinalLLMClient:
         if self.x_title.strip():
             headers["X-OpenRouter-Title"] = self.x_title.strip()
 
-        req = urllib.request.Request(
-            self._chat_url(),
-            data=json.dumps(body).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", errors="replace")
-            logger.error("Final LLM HTTP %s: %s", e.code, detail[:500])
-            raise RuntimeError(f"Final LLM request failed: HTTP {e.code}") from e
-        except urllib.error.URLError as e:
-            logger.error("Final LLM URL error: %s", e)
-            raise RuntimeError(f"Final LLM request failed: {e}") from e
+        last_exception = None
+        for attempt in range(max_retries):
+            req = urllib.request.Request(
+                self._chat_url(),
+                data=json.dumps(body).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    raw = resp.read().decode("utf-8")
 
-        data = json.loads(raw)
-        err = data.get("error")
-        if err:
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-            raise RuntimeError(f"Final LLM API error: {msg}")
+                data = json.loads(raw)
+                err = data.get("error")
+                if err:
+                    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    raise RuntimeError(f"Final LLM API error: {msg}")
 
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError("Final LLM response has no choices")
-        message = choices[0].get("message") or {}
-        content = message.get("content")
-        if content is None:
-            raise RuntimeError("Final LLM response has empty content")
-        if isinstance(content, list):
-            parts = []
-            for p in content:
-                if isinstance(p, dict) and p.get("type") == "text":
-                    parts.append(p.get("text") or "")
-            content = "".join(parts).strip()
-        text = str(content).strip()
-        if not text:
-            raise RuntimeError("Final LLM returned blank text")
-        return text
+                choices = data.get("choices") or []
+                if not choices:
+                    raise RuntimeError("Final LLM response has no choices")
+                message = choices[0].get("message") or {}
+                content = message.get("content")
+                if content is None:
+                    raise RuntimeError("Final LLM response has empty content")
+                if isinstance(content, list):
+                    parts = []
+                    for p in content:
+                        if isinstance(p, dict) and p.get("type") == "text":
+                            parts.append(p.get("text") or "")
+                    content = "".join(parts).strip()
+                text = str(content).strip()
+                if not text:
+                    raise RuntimeError("Final LLM returned blank text")
+                return text
+
+            except urllib.error.HTTPError as e:
+                last_exception = e
+                if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning("Final LLM HTTP %d, retrying in %.1fs (attempt %d/%d)",
+                                   e.code, wait_time, attempt + 1, max_retries)
+                    time.sleep(wait_time)
+                    continue
+                detail = e.read().decode("utf-8", errors="replace")
+                logger.error("Final LLM HTTP %s: %s", e.code, detail[:500])
+                raise RuntimeError(f"Final LLM request failed: HTTP {e.code}") from e
+            except urllib.error.URLError as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning("Final LLM URL error, retrying in %.1fs (attempt %d/%d): %s",
+                                   wait_time, attempt + 1, max_retries, e)
+                    time.sleep(wait_time)
+                    continue
+                logger.error("Final LLM URL error: %s", e)
+                raise RuntimeError(f"Final LLM request failed: {e}") from e
+            except Exception as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning("Final LLM error, retrying in %.1fs (attempt %d/%d): %s",
+                                   wait_time, attempt + 1, max_retries, e)
+                    time.sleep(wait_time)
+                    continue
+                raise
+
+        raise last_exception if last_exception else RuntimeError("Final LLM failed after retries")

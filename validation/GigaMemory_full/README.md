@@ -1,51 +1,83 @@
-# LongMemEval Validation v2 - Расширенное тестирование GigaMemory
+# LongMemEval Validation - Тестирование GigaMemory
 
-Этот документ описывает расширенную версию скрипта валидации (`validate_longmemeval_v2.py`) с поддержкой batch processing, метрики Memory Hit Rate и полной конфигурации через CLI.
+Этот документ описывает скрипт валидации (`validate_longmemeval.py`) для тестирования GigaMemory DST pipeline на LongMemEval датасете.
 
-## Что нового в версии 2
+## Возможности
 
-### 1. Batch Processing для финальной LLM
+### 1. Сбалансированная выборка (Balanced Sampling)
 
-Параметр `--final-llm-batch-size` позволяет накапливать обработанные диалоги и вызывать финальную LLM пакетно:
+Параметр `num_items_per_type` определяет количество примеров для каждого типа вопросов:
 
-- Значение `1` (по умолчанию): стандартное поведение - ответ после каждого диалога
-- Значение `N > 1`: накапливаем N диалогов, потом последовательно вызываем финальную LLM
+- Позволяет протестировать одинаковое количество примеров каждого типа
+- Поддерживаемые типы: `single-session-user`, `single-session-preference`, `multi-session`, `knowledge-update`
+- Обеспечивает честное сравнение между разными типами вопросов
 
-**Зачем это нужно**: если финальная LLM локальная и большая, выгрузка/загрузка других моделей между вызовами оптимизирует использование GPU.
+### 2. Оценка по шкале 0-1 (Continuous Scoring)
 
-### 2. Batch Processing для судьи
+Судья оценивает ответы по шкале от 0.0 до 1.0:
 
-Параметр `--judge-batch-size` позволяет накапливать ответы перед вызовом судьи:
+- **1.0**: Идеальное совпадение - все сущности и факты присутствуют
+- **0.8**: Незначительные неточности (число, дата, имя)
+- **0.6**: Частичный ответ - отсутствует одна из нескольких ключевых сущностей
+- **0.4**: Слабое покрытие - только одна правильная сущность из нескольких
+- **0.2**: Минимальное совпадение - тематически связано, но фактически нет
+- **0.0**: Полное несовпадение, противоречие, или "не знаю"
+
+### 3. Метрики по типам вопросов (Per-Question-Type Metrics)
+
+Статистика собирается отдельно для каждого типа вопроса:
+
+- Средний score по каждому типу
+- Количество ошибок судьи по типу
+- Позволяет выявить слабые места системы для конкретных типов
+
+### 4. Расширенная статистика времени выполнения (Timing Stats)
+
+Собираются детальные метрики производительности:
+
+- Общее время выполнения
+- Время на диалог (min, max, p50, p95, p99, mean)
+- Время на сообщение (min, max, p50, p95, p99, mean)
+
+### 5. Повторные попытки (Retry Logic)
+
+Автоматические повторные попытки при HTTP ошибках (429, 500, 502, 503, 504):
+
+- До 3 попыток с экспоненциальной задержкой
+- Применяется к вызовам финальной LLM и судьи
+- Улучшает надёжность при работе с API
+
+### 6. Batch Processing для финальной LLM
+
+Параметр `final_llm_batch_size` позволяет накапливать обработанные диалоги и вызывать финальную LLM пакетно:
+
+- Значение `1` (по умолчанию): стандартное поведение
+- Значение `N > 1`: накапливаем N диалогов, потом вызываем финальную LLM
+
+### 7. Batch Processing для судьи
+
+Параметр `judge_batch_size` позволяет накапливать ответы перед вызовом судьи:
 
 - Значение `1` (по умолчанию): оценка после каждого ответа
 - Значение `M > 1`: накапливаем M ответов, потом оцениваем пакетно
 
-### 3. Memory Hit Rate Metric
+### 8. Memory Hit Rate Metric
 
-Параметр `--calculate-memory-hit-rate` включает дополнительную метрику:
+Параметр `calculate_memory_hit_rate` включает дополнительную метрику:
 
 - **Memory Hit Rate** = доля случаев, когда нужный факт был в контексте LLM
 - Проверяется отдельным вызовом судьи, который анализирует `memory_context`
 - Помогает различать проблемы: плохое сохранение в память vs плохой ответ LLM
 
-### 4. Model Unloading для локальной финальной LLM
+### 9. Полная конфигурация через CLI
 
-Параметр в конфиге `unload_models_before_final_llm` (по умолчанию `true`):
-
-- При `llm_mode=local` и значении `true`: перед вызовом финальной LLM выгружаются все другие модели
-- Освобождает GPU память для большой финальной модели
-- После обработки батча модели перезагружаются автоматически
-
-### 5. Полная конфигурация GigaMemory через CLI
-
-Все параметры GigaMemory можно переопределить через CLI без редактирования `run_config.json`:
+Все параметры можно переопределить через CLI:
 
 ```bash
 --gm-memory-strategy topk_graph_records \
 --gm-graph-top-k-records 50 \
 --gm-prompt-language en \
---gm-slot-use-stub true \
---gm-llm-mode openrouter
+--val-shared-num-items-per-type 20
 ```
 
 ## Архитектура обработки
@@ -91,63 +123,54 @@
 
 ## Примеры использования
 
-### Пример 1: Базовое тестирование (batch_size=1)
+### Пример 1: Базовое тестирование (10 примеров на каждый тип)
 
 ```bash
-python validate_longmemeval_v2.py \
+python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
     --output-dir ./results_basic \
-    --start-index 0 \
-    --num-items 10 \
+    --num-items-per-type 10 \
     --config ../../DST_memory/run_config.json
 ```
 
 **Что происходит:**
-1. Обрабатывается Dialog 1 -> сразу вызов финальной LLM -> сразу оценка судьей
-2. Обрабатывается Dialog 2 -> сразу вызов финальной LLM -> сразу оценка судьей
-3. ... и так далее
+1. Загружается сбалансированная выборка: 10 single-session-user, 10 single-session-preference, 10 multi-session, 10 knowledge-update
+2. Обрабатывается Dialog 1 -> сразу вызов финальной LLM -> сразу оценка судьей
+3. ... и так далее для всех 40 диалогов
 
-### Пример 2: Batch Processing (final_llm_batch_size=5)
+### Пример 2: Расширенное тестирование с batch processing
 
 ```bash
-python validate_longmemeval_v2.py \
+python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_batch5 \
-    --start-index 0 \
-    --num-items 20 \
+    --output-dir ./results_batch \
+    --num-items-per-type 20 \
     --final-llm-batch-size 5 \
     --judge-batch-size 10 \
     --config ../../DST_memory/run_config.json
 ```
 
-**Что происходит:**
-
-1. **Memory Phase (последовательно):**
-   - Обрабатываем Dialog 1-5 через memory pipeline (write_to_memory)
-   - Сохраняем состояние памяти для каждого диалога
-   - Накапливаем в буфере
-
-2. **Final LLM Phase (когда буфер полон):**
-   - Выгружаем модели GigaMemory (если local LLM)
-   - Последовательно: Dialog 1 -> финальная LLM -> Answer 1
-   - Последовательно: Dialog 2 -> финальная LLM -> Answer 2
-   - ... Dialog 5 -> финальная LLM -> Answer 5
-   - Перезагружаем модели GigaMemory
-
-3. **Judge Phase (когда буфер ответов полон):**
-   - Последовательно оцениваем Answer 1-10 судьей
-
 ### Пример 3: Memory Hit Rate Metric
 
 ```bash
-python validate_longmemeval_v2.py \
+python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
     --output-dir ./results_mhr \
-    --start-index 0 \
-    --num-items 50 \
+    --num-items-per-type 10 \
     --calculate-memory-hit-rate \
     --judge-mode openrouter \
     --judge-model "openai/gpt-oss-120b:free" \
+    --config ../../DST_memory/run_config.json
+```
+
+### Пример 4: Тестирование только одного типа вопросов
+
+```bash
+python validate_longmemeval.py \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results_knowledge_update \
+    --num-items-per-type 50 \
+    --question-types "knowledge-update" \
     --config ../../DST_memory/run_config.json
 ```
 
@@ -167,14 +190,13 @@ Statistics:
 - 84% случаев факт был в контексте (memory hit)
 - Но accuracy только 70% - значит проблема в финальной LLM, не в памяти
 
-### Пример 4: Полная конфигурация через CLI
+### Пример 5: Полная конфигурация через CLI
 
 ```bash
-python validate_longmemeval_v2.py \
+python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
     --output-dir ./results_custom \
-    --start-index 0 \
-    --num-items 20 \
+    --num-items-per-type 20 \
     --config ../../DST_memory/run_config.json \
     \
     # Override GigaMemory settings
@@ -192,7 +214,7 @@ python validate_longmemeval_v2.py \
     --judge-model "anthropic/claude-3.5-sonnet"
 ```
 
-### Пример 5: Локальная финальная LLM с выгрузкой моделей
+### Пример 6: Локальная финальная LLM с выгрузкой моделей
 
 ```bash
 # В run_config.json:
@@ -206,11 +228,10 @@ python validate_longmemeval_v2.py \
 #   }
 # }
 
-python validate_longmemeval_v2.py \
+python validate_longmemeval.py \
     --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
     --output-dir ./results_local_llm \
-    --start-index 0 \
-    --num-items 5 \
+    --num-items-per-type 5 \
     --final-llm-batch-size 5 \
     --config ../../DST_memory/run_config.json
 ```
@@ -232,24 +253,37 @@ output-dir/
 ├── validation_results.json     # Итоговые метрики и результаты
 │   {
 │     "metadata": {
+│       "num_items_per_type": 10,
+│       "question_types": ["single-session-user", ...],
 │       "final_llm_batch_size": 5,
 │       "judge_batch_size": 10,
 │       "calculate_memory_hit_rate": true,
 │       ...
 │     },
 │     "statistics": {
-│       "total": 50,
-│       "correct": 35,
-│       "incorrect": 15,
-│       "memory_hit": 42,
-│       "memory_miss": 8
+│       "total": 40,
+│       "total_score": 31.5,
+│       "by_type": {
+│         "knowledge-update": {"count": 10, "average_score": 0.85, "errors": 0},
+│         ...
+│       },
+│       "memory_hit": 35,
+│       "memory_miss": 5
+│     },
+│     "timing": {
+│       "total_time": 245.3,
+│       "total_items": 40,
+│       "time_per_item": {"min": 3.1, "max": 8.5, "p50": 5.8, ...}
 │     },
 │     "results": [
 │       {
 │         "global_index": 0,
 │         "question_id": "...",
 │         "question": "...",
+│         "question_type": "knowledge-update",
 │         "reference_answer": "...",
+│         "score": 1.0,
+│         "reasoning": "Perfect match",
 │         "predicted_answer": "...",
 │         "correct": true,
 │         "memory_hit": true,
@@ -337,13 +371,13 @@ python merge_results.py ./results_batch_*/validation_results.json
 
 ```bash
 # Strategy A: full_graph_json
-python validate_longmemeval_v2.py ... --gm-memory-strategy full_graph_json --output-dir ./results_strategy_a
+python validate_longmemeval.py ... --gm-memory-strategy full_graph_json --output-dir ./results_strategy_a
 
 # Strategy B: topk_graph_records
-python validate_longmemeval_v2.py ... --gm-memory-strategy topk_graph_records --gm-graph-top-k-records 30 --output-dir ./results_strategy_b
+python validate_longmemeval.py ... --gm-memory-strategy topk_graph_records --gm-graph-top-k-records 30 --output-dir ./results_strategy_b
 
 # Strategy C: relevant_slots_full
-python validate_longmemeval_v2.py ... --gm-memory-strategy relevant_slots_full --output-dir ./results_strategy_c
+python validate_longmemeval.py ... --gm-memory-strategy relevant_slots_full --output-dir ./results_strategy_c
 
 # Сравнить метрики
 python compare_results.py ./results_strategy_*/validation_results.json
@@ -353,9 +387,8 @@ python compare_results.py ./results_strategy_*/validation_results.json
 
 ### Batch sizes
 
-- `--final-llm-batch-size` должен быть <= `--num-items`
-- `--judge-batch-size` должен быть кратен или превышать `--final-llm-batch-size`
-- Рекомендуется: `judge_batch_size = 2 * final_llm_batch_size`
+- Рекомендуется: `judge_batch_size >= final_llm_batch_size`
+- Для локальных моделей: используйте `final_llm_batch_size >= 5` чтобы амортизировать время загрузки/выгрузки
 
 ### Memory Hit Rate
 

@@ -1,5 +1,5 @@
 {
-  "_description": "Configuration file for LongMemEval validation script (validate_longmemeval_v2.py)",
+  "_description": "Configuration file for LongMemEval validation script (validate_longmemeval.py)",
   "_note": "This file mirrors the structure of DST_memory/run_config.json with additional validation-specific parameters",
 
   "shared": {
@@ -7,8 +7,8 @@
 
     "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
     "output_dir": "./results",
-    "start_index": 0,
-    "num_items": 10,
+    "num_items_per_type": 10,
+    "question_types": ["single-session-user", "single-session-preference", "multi-session", "knowledge-update"],
 
     "log_level": "INFO",
     "log_file": true,

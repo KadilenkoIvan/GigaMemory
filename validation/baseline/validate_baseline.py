@@ -5,9 +5,12 @@ Two baseline strategies:
 1. full_context: Pass ALL user and assistant messages to final LLM
 2. recent_10_plus_user: Pass last 10 user/assistant pairs + remaining user messages
 
-Metrics collected same way as GigaMemory for fair comparison:
-- Accuracy (correct / total)
-- Batch processing for optimization
+Features:
+- Timing metrics (total, per-message, min/max/p50/p95/p99)
+- Retry logic (3 attempts) for HTTP errors
+- Judge scoring 0-1 scale with detailed criteria
+- Per-question-type metrics
+- Balanced sampling across question types
 
 Usage:
     python validate_baseline.py --config ./run_config.json
@@ -19,9 +22,12 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+import random
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.error
+import urllib.request
 
 # Setup logging
 def setup_logging(level: str, log_file: Optional[str] = None) -> None:
@@ -39,8 +45,127 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# Timing Utilities
+# ============================================================================
+
+class TimingStats:
+    """Collect and compute timing statistics."""
+
+    def __init__(self):
+        self.items: List[Dict[str, float]] = []
+        self.total_start: Optional[float] = None
+        self.total_time: float = 0.0
+
+    def start_total(self):
+        self.total_start = time.time()
+
+    def end_total(self):
+        if self.total_start:
+            self.total_time = time.time() - self.total_start
+
+    def add_item(self, num_messages: int, processing_time: float):
+        """Add timing for a single item."""
+        self.items.append({
+            "num_messages": num_messages,
+            "time": processing_time,
+            "time_per_message": processing_time / num_messages if num_messages > 0 else 0,
+        })
+
+    def compute_percentile(self, values: List[float], p: float) -> float:
+        """Compute percentile (0-100)."""
+        if not values:
+            return 0.0
+        sorted_vals = sorted(values)
+        k = (len(sorted_vals) - 1) * p / 100
+        f = int(k)
+        c = f + 1 if f + 1 < len(sorted_vals) else f
+        return sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f])
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get computed statistics."""
+        times = [item["time"] for item in self.items]
+        per_msg_times = [item["time_per_message"] for item in self.items if item["num_messages"] > 0]
+        total_messages = sum(item["num_messages"] for item in self.items)
+
+        if not times:
+            return {
+                "total_time": self.total_time,
+                "total_items": 0,
+                "total_messages": 0,
+            }
+
+        return {
+            "total_time": self.total_time,
+            "total_items": len(self.items),
+            "total_messages": total_messages,
+            "time_per_item": {
+                "min": min(times),
+                "max": max(times),
+                "p50": self.compute_percentile(times, 50),
+                "p95": self.compute_percentile(times, 95),
+                "p99": self.compute_percentile(times, 99),
+                "mean": sum(times) / len(times),
+            },
+            "time_per_message": {
+                "min": min(per_msg_times) if per_msg_times else 0,
+                "max": max(per_msg_times) if per_msg_times else 0,
+                "p50": self.compute_percentile(per_msg_times, 50) if per_msg_times else 0,
+                "p95": self.compute_percentile(per_msg_times, 95) if per_msg_times else 0,
+                "p99": self.compute_percentile(per_msg_times, 99) if per_msg_times else 0,
+                "mean": sum(per_msg_times) / len(per_msg_times) if per_msg_times else 0,
+            },
+        }
+
+
+# ============================================================================
+# Retry Decorator
+# ============================================================================
+
+def retry_with_backoff(max_retries: int = 3, backoff_base: float = 1.0):
+    """Decorator for retrying with exponential backoff."""
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except urllib.error.HTTPError as e:
+                    last_exception = e
+                    if e.code in (400, 429, 500, 502, 503, 504):
+                        wait_time = backoff_base * (2 ** attempt) + random.uniform(0, 1)
+                        logger.warning("HTTP %d error, retrying in %.1fs (attempt %d/%d)",
+                                       e.code, wait_time, attempt + 1, max_retries)
+                        time.sleep(wait_time)
+                    else:
+                        raise
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_time = backoff_base * (2 ** attempt) + random.uniform(0, 1)
+                        logger.warning("Error: %s, retrying in %.1fs (attempt %d/%d)",
+                                       e, wait_time, attempt + 1, max_retries)
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            raise last_exception
+        return wrapper
+    return decorator
+
+
+# ============================================================================
 # Configuration
 # ============================================================================
+
+# Question type definitions with descriptions for judge
+QUESTION_TYPES = {
+    "single-session-user": "User mentioned a fact about themselves in one session - system should remember it",
+    "single-session-preference": "User previously shared their preferences - system should use them when answering a new request",
+    "multi-session": "Facts about user are scattered across multiple sessions - system should collect them together",
+    "knowledge-update": "User provided new fact contradicting old one - system should return the current one",
+}
+
+RELEVANT_TYPES = list(QUESTION_TYPES.keys())
+
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load config from JSON file with defaults."""
@@ -49,17 +174,18 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
             "output_dir": "./results",
             "start_index": 0,
-            "num_items": 10,
+            "num_items_per_type": 10,
+            "question_types": list(QUESTION_TYPES.keys()),
             "log_level": "INFO",
             "log_file": True,
         },
         "baseline": {
-            "strategy": "full_context",  # or "recent_10_plus_user"
+            "strategy": "full_context",
             "final_llm_batch_size": 1,
             "judge_batch_size": 1,
         },
         "final_llm": {
-            "mode": "openrouter",  # "openrouter", "local", "stub"
+            "mode": "openrouter",
             "model": "openai/gpt-oss-120b:free",
             "api_url": "https://openrouter.ai/api/v1",
             "api_key": "",
@@ -86,7 +212,6 @@ def load_config(config_path: str) -> Dict[str, Any]:
         with open(config_path, "r", encoding="utf-8") as f:
             user_config = json.load(f)
 
-        # Merge
         for section in ["shared", "baseline", "final_llm", "judge"]:
             if section in user_config:
                 defaults[section].update(user_config[section])
@@ -98,25 +223,35 @@ def load_config(config_path: str) -> Dict[str, Any]:
 
 
 # ============================================================================
-# Dataset Loading
+# Dataset Loading with Balanced Sampling
 # ============================================================================
 
-RELEVANT_TYPES = [
-    "single-session-user",
-    "single-session-preference",
-    "multi-session",
-    "knowledge-update",
-]
-
-
-def load_dataset(dataset_path: str) -> List[Dict[str, Any]]:
-    """Load and filter LongMemEval dataset."""
+def load_dataset_balanced(dataset_path: str, question_types: List[str],
+                          num_per_type: int) -> List[Dict[str, Any]]:
+    """Load dataset with balanced sampling across question types."""
     with open(dataset_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    filtered = [item for item in data if item.get("question_type") in RELEVANT_TYPES]
-    logger.info("Loaded dataset: %d total, %d relevant", len(data), len(filtered))
-    return filtered
+    # Group by question type
+    by_type: Dict[str, List[Dict]] = {qt: [] for qt in question_types}
+    for item in data:
+        qt = item.get("question_type", "")
+        if qt in by_type:
+            by_type[qt].append(item)
+
+    # Sample from each type
+    result = []
+    type_counts = {}
+    for qt in question_types:
+        available = len(by_type[qt])
+        to_sample = min(num_per_type, available)
+        sampled = by_type[qt][:to_sample]
+        result.extend(sampled)
+        type_counts[qt] = len(sampled)
+        logger.info("Type %s: sampled %d/%d available", qt, to_sample, available)
+
+    logger.info("Total loaded: %d items", len(result))
+    return result
 
 
 def extract_context_full(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
@@ -132,12 +267,7 @@ def extract_context_full(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
 
 
 def extract_context_recent_10_plus_user(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
-    """
-    Extract context with strategy:
-    - Last 10 user/assistant pairs
-    - All remaining user messages from earlier sessions
-    """
-    # First, collect all turns with metadata
+    """Extract: last 10 pairs + remaining user messages."""
     all_turns = []
     for session_idx, session in enumerate(sessions):
         for turn_idx, turn in enumerate(session):
@@ -154,56 +284,39 @@ def extract_context_recent_10_plus_user(sessions: List[List[Dict]]) -> List[Dict
     if not all_turns:
         return []
 
-    # Find last 10 pairs (20 turns if alternating)
-    # A "pair" is user followed by assistant
     recent_pairs = []
-    remaining_user = []
-
-    # Start from the end and find complete pairs
     i = len(all_turns) - 1
     pairs_found = 0
 
     while i >= 0 and pairs_found < 10:
-        # Look for assistant followed by user (going backwards)
         if all_turns[i]["role"] == "assistant" and i > 0:
             if all_turns[i - 1]["role"] == "user":
-                # Found a pair
-                recent_pairs.insert(0, all_turns[i - 1])  # user first
-                recent_pairs.insert(0, all_turns[i])        # then assistant
+                recent_pairs.insert(0, all_turns[i - 1])
+                recent_pairs.insert(0, all_turns[i])
                 pairs_found += 1
                 i -= 2
                 continue
         i -= 1
 
-    # If we didn't find 10 pairs, take what we have and continue
-    # Now collect all user messages that are NOT in recent_pairs
     recent_indices = {(t["session_idx"], t["turn_idx"]) for t in recent_pairs}
+    remaining_user = []
 
     for turn in all_turns:
         if turn["role"] == "user":
             key = (turn["session_idx"], turn["turn_idx"])
             if key not in recent_indices:
-                remaining_user.append({
-                    "role": "user",
-                    "content": turn["content"],
-                })
+                remaining_user.append({"role": "user", "content": turn["content"]})
 
-    # Combine: remaining user messages + recent pairs
     context = remaining_user + recent_pairs
-
-    logger.debug(
-        "Context built: %d early user messages + %d recent pairs",
-        len(remaining_user), len(recent_pairs) // 2
-    )
-    return context
+    return [{"role": t["role"], "content": t["content"]} for t in context]
 
 
 # ============================================================================
-# Final LLM Client (simplified from GigaMemory)
+# Final LLM Client with Retry
 # ============================================================================
 
 class FinalLLMClient:
-    """Final LLM client for baseline (no memory context needed)."""
+    """Final LLM client with retry logic."""
 
     def __init__(
         self,
@@ -222,17 +335,11 @@ class FinalLLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path
-        self._local_serving = None
 
         logger.info("FinalLLM mode=%s model=%s", mode, model if mode != "local" else local_model_path)
 
-    def build_messages(
-        self,
-        question: str,
-        context: List[Dict[str, str]],
-    ) -> List[Dict[str, str]]:
-        """Build messages list with context and question."""
-        # Format context as conversation history
+    def build_messages(self, question: str, context: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Build messages with full context (no truncation)."""
         context_text = ""
         for turn in context:
             role_label = "User" if turn["role"] == "user" else "Assistant"
@@ -255,161 +362,9 @@ class FinalLLMClient:
             {"role": "user", "content": user},
         ]
 
-    def generate(self, question: str, context: List[Dict[str, str]]) -> str:
-        """Generate answer using final LLM."""
-        messages = self.build_messages(question, context)
-
-        if self.mode == "stub":
-            return f"[STUB] Answer to: {question[:50]}..."
-
-        if self.mode == "openrouter":
-            return self._call_openrouter(messages)
-
-        if self.mode == "local":
-            return self._call_local(messages)
-
-        raise ValueError(f"Unknown mode: {self.mode}")
-
-    def _call_openrouter(self, messages: List[Dict[str, str]]) -> str:
-        """Call OpenRouter API."""
-        import urllib.request
-        import urllib.error
-
-        body = {
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "messages": messages,
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        url = f"{self.api_url.rstrip('/')}/chat/completions"
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(body).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            logger.error("Final LLM call failed: %s", e)
-            return f"[ERROR: {e}]"
-
-    def _call_local(self, messages: List[Dict[str, str]]) -> str:
-        """Call local model."""
-        # Import here to avoid dependency issues
-        try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            import torch
-
-            if self._local_serving is None:
-                logger.info("Loading local model: %s", self.local_model_path)
-                tokenizer = AutoTokenizer.from_pretrained(self.local_model_path)
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.local_model_path,
-                    torch_dtype=torch.float16,
-                    device_map="auto",
-                )
-                self._local_serving = (model, tokenizer)
-
-            model, tokenizer = self._local_serving
-
-            # Format messages
-            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                )
-
-            response = tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-            return response.strip()
-
-        except Exception as e:
-            logger.error("Local LLM failed: %s", e)
-            return f"[ERROR: {e}]"
-
-
-# ============================================================================
-# Judge Client (same as GigaMemory)
-# ============================================================================
-
-class JudgeClient:
-    """LLM-as-Judge for baseline (same implementation as GigaMemory)."""
-
-    def __init__(
-        self,
-        mode: str = "openrouter",
-        model: str = "openai/gpt-oss-120b:free",
-        api_url: str = "https://openrouter.ai/api/v1",
-        api_key: str = "",
-        temperature: float = 0.0,
-        max_tokens: int = 1024,
-        local_model_path: str = "",
-    ):
-        self.mode = mode
-        self.model = model
-        self.api_url = api_url
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.local_model_path = local_model_path
-
-    def evaluate(self, question: str, predicted: str, reference: str) -> Dict[str, Any]:
-        """Evaluate answer correctness."""
-        if not predicted or not reference:
-            return {"correct": False, "reasoning": "Empty answer"}
-
-        system = (
-            "You are an expert evaluator. Compare predicted answer with reference.\n"
-            "Respond ONLY with JSON: {\"correct\": true/false, \"reasoning\": \"...\"}"
-        )
-
-        user = (
-            f"Question: {question}\n\n"
-            f"Predicted: {predicted}\n\n"
-            f"Reference: {reference}\n\n"
-            "Are they semantically equivalent?"
-        )
-
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ]
-
-        if self.mode == "none":
-            return {"correct": False, "reasoning": "Judge disabled"}
-
-        try:
-            if self.mode == "openrouter":
-                response = self._call_openrouter(messages)
-            else:
-                response = self._call_local(messages)
-
-            # Parse JSON
-            result = json.loads(response)
-            return {
-                "correct": bool(result.get("correct", False)),
-                "reasoning": str(result.get("reasoning", "No reasoning")),
-            }
-        except Exception as e:
-            logger.error("Judge failed: %s", e)
-            return {"correct": False, "reasoning": f"Error: {e}"}
-
-    def _call_openrouter(self, messages: List[Dict[str, str]]) -> str:
-        import urllib.request
-
+    @retry_with_backoff(max_retries=3)
+    def _call_api(self, messages: List[Dict[str, str]]) -> str:
+        """Call API with retry."""
         body = {
             "model": self.model,
             "temperature": self.temperature,
@@ -432,84 +387,258 @@ class JudgeClient:
 
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
+            return data["choices"][0]["message"]["content"].strip()
 
-    def _call_local(self, messages: List[Dict[str, str]]) -> str:
-        # Simplified - would need full implementation
-        return '{"correct": false, "reasoning": "Local judge not fully implemented"}'
+    def generate(self, question: str, context: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
+        """Generate answer. Returns (answer, error)."""
+        messages = self.build_messages(question, context)
+
+        if self.mode == "stub":
+            return f"[STUB] Answer to: {question[:50]}...", None
+
+        if self.mode == "openrouter":
+            try:
+                return self._call_api(messages), None
+            except Exception as e:
+                logger.error("Final LLM failed after retries: %s", e)
+                return "", str(e)
+
+        if self.mode == "local":
+            return self._call_local(messages)
+
+        return "", f"Unknown mode: {self.mode}"
+
+    def _call_local(self, messages: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            import torch
+
+            if not hasattr(self, '_model'):
+                logger.info("Loading local model: %s", self.local_model_path)
+                tokenizer = AutoTokenizer.from_pretrained(self.local_model_path)
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.local_model_path,
+                    torch_dtype=torch.float16,
+                    device_map="auto",
+                )
+                self._tokenizer = tokenizer
+                self._model = model
+
+            prompt = self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = self._tokenizer(prompt, return_tensors="pt").to(self._model.device)
+
+            with torch.no_grad():
+                outputs = self._model.generate(**inputs, max_new_tokens=self.max_tokens, temperature=self.temperature)
+
+            response = self._tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
+            return response.strip(), None
+
+        except Exception as e:
+            return "", str(e)
 
 
 # ============================================================================
-# Batch Processing
+# Judge Client with 0-1 Scoring
+# ============================================================================
+
+class JudgeClient:
+    """LLM-as-Judge with 0-1 scoring scale."""
+
+    def __init__(
+        self,
+        mode: str = "openrouter",
+        model: str = "openai/gpt-oss-120b:free",
+        api_url: str = "https://openrouter.ai/api/v1",
+        api_key: str = "",
+        temperature: float = 0.0,
+        max_tokens: int = 1024,
+        local_model_path: str = "",
+    ):
+        self.mode = mode
+        self.model = model
+        self.api_url = api_url
+        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def _get_system_prompt(self, question_type: str) -> str:
+        """Get system prompt with scoring criteria."""
+        type_desc = QUESTION_TYPES.get(question_type, "General question answering")
+
+        return f"""You are an expert evaluator assessing answer quality.
+
+Question Type: {question_type}
+Type Description: {type_desc}
+
+Your task: Compare the predicted answer with the reference (gold) answer and return a score from 0.0 to 1.0 representing how well the predicted answer covers the factual content of the reference.
+
+Scoring Scale:
+1.0 - Perfect match: Contains all key entities and facts from reference. Wording may differ, but meaning is identical.
+0.8 - Minor inaccuracy: All key entities present, but one is slightly distorted (wrong number, approximate date, slight name variation).
+0.6 - Partial answer: Covers most of reference, but one of several equally important entities is missing or replaced.
+0.4 - Weak coverage: Only one correct entity from several needed mentioned, OR correct category but wrong specific fact.
+0.2 - Minimal match: Thematically related to question but factually almost no overlap with reference — guessed domain but not content.
+0.0 - No match: Factually incorrect, contradicts reference, or system said "I don't know" when reference exists.
+
+Special Rules:
+- For knowledge-update: If system named old/outdated fact instead of new one → 0.0 (old fact doesn't count).
+- For single-session-preference: Judge if correct user fact was used, not quote accuracy. Different phrasing with correct fact = 1.0.
+- For multi-session: If aggregation needed (e.g., "how many total"), partial count scores proportionally: found 2 of 4 needed entities → 0.4-0.6 depending on importance of missing ones.
+
+Respond ONLY with JSON:
+{{"score": 0.0-1.0, "reasoning": "brief explanation of coverage and any missing elements"}}"""
+
+    @retry_with_backoff(max_retries=3)
+    def _call_judge_api(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Call judge API with retry."""
+        body = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "messages": messages,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        url = f"{self.api_url.rstrip('/')}/chat/completions"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+
+            # Parse JSON
+            json_str = content
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                json_str = content.split("```")[1].split("```")[0].strip()
+
+            result = json.loads(json_str)
+            return {
+                "score": float(result.get("score", 0)),
+                "reasoning": str(result.get("reasoning", "No reasoning")),
+            }
+
+    def evaluate(self, question: str, predicted: str, reference: str,
+                 question_type: str) -> Tuple[float, str, Optional[str]]:
+        """
+        Evaluate answer. Returns (score, reasoning, error).
+        Score: 0.0 to 1.0
+        """
+        if not predicted or not reference:
+            return 0.0, "Empty answer or reference", None
+
+        if self.mode == "none":
+            return 0.0, "Judge disabled", None
+
+        system = self._get_system_prompt(question_type)
+        user = (
+            f"Question: {question}\n\n"
+            f"Reference Answer: {reference}\n\n"
+            f"Predicted Answer: {predicted}\n\n"
+            f"Score the predicted answer's coverage of the reference."
+        )
+
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
+        try:
+            result = self._call_judge_api(messages)
+            return result["score"], result["reasoning"], None
+        except Exception as e:
+            logger.error("Judge failed after retries: %s", e)
+            return 0.0, f"Error: {e}", str(e)
+
+
+# ============================================================================
+# Batch Processing with Timing
 # ============================================================================
 
 @dataclass
 class AccumulatedItem:
-    """Item accumulated for batch processing."""
     global_index: int
     question_id: str
     question: str
     reference_answer: str
-    context: List[Dict[str, str]]
     question_type: str
+    context: List[Dict[str, str]]
+    num_messages: int
 
 
 class BatchProcessor:
-    """Batch processor for baseline (simplified from GigaMemory)."""
-
     def __init__(
         self,
         final_llm: FinalLLMClient,
         judge: JudgeClient,
         final_llm_batch_size: int,
         judge_batch_size: int,
+        timing: TimingStats,
     ):
         self.final_llm = final_llm
         self.judge = judge
         self.final_llm_batch_size = final_llm_batch_size
         self.judge_batch_size = judge_batch_size
+        self.timing = timing
 
         self.item_buffer: List[AccumulatedItem] = []
-        self.answer_buffer: List[Tuple[AccumulatedItem, str]] = []
+        self.answer_buffer: List[Tuple[AccumulatedItem, str, Optional[str]]] = []
         self.results: List[Dict[str, Any]] = []
 
-        self.stats = {"total": 0, "correct": 0, "incorrect": 0}
+        self.stats = {
+            "total": 0,
+            "errors_final_llm": 0,
+            "errors_judge": 0,
+            "by_type": {qt: {"count": 0, "total_score": 0.0, "errors": 0}
+                        for qt in QUESTION_TYPES.keys()},
+        }
 
-    def add_item(
-        self,
-        item: Dict[str, Any],
-        global_index: int,
-        context: List[Dict[str, str]],
-    ) -> None:
-        """Add item to buffer."""
+    def add_item(self, item: Dict[str, Any], global_idx: int,
+                 context: List[Dict[str, str]], num_messages: int) -> None:
+        start_time = time.time()
+
         acc = AccumulatedItem(
-            global_index=global_index,
+            global_index=global_idx,
             question_id=item.get("question_id", ""),
             question=item.get("question", ""),
             reference_answer=item.get("answer", ""),
-            context=context,
             question_type=item.get("question_type", ""),
+            context=context,
+            num_messages=num_messages,
         )
         self.item_buffer.append(acc)
 
         if len(self.item_buffer) >= self.final_llm_batch_size:
             self._flush_final_llm_batch()
 
+        processing_time = time.time() - start_time
+        self.timing.add_item(num_messages, processing_time)
+
     def _flush_final_llm_batch(self) -> None:
-        """Process accumulated items through final LLM."""
         if not self.item_buffer:
             return
 
         logger.info("[Batch] Processing %d items through final LLM", len(self.item_buffer))
 
         for item in self.item_buffer:
-            try:
-                answer = self.final_llm.generate(item.question, item.context)
-                logger.info("[Item %d] Answer: %s...", item.global_index, answer[:100])
-                self.answer_buffer.append((item, answer))
-            except Exception as e:
-                logger.error("[Item %d] Failed: %s", item.global_index, e)
-                self.answer_buffer.append((item, f"[ERROR: {e}]"))
+            answer, error = self.final_llm.generate(item.question, item.context)
+
+            if error:
+                logger.error("[Item %d] Final LLM error: %s", item.global_index, error)
+                self.stats["errors_final_llm"] += 1
+
+            logger.info("[Item %d] Answer: %s", item.global_index, answer)
+            self.answer_buffer.append((item, answer, error))
 
         self.item_buffer.clear()
 
@@ -517,17 +646,28 @@ class BatchProcessor:
             self._flush_judge_batch()
 
     def _flush_judge_batch(self) -> None:
-        """Process accumulated answers through judge."""
         if not self.answer_buffer or self.judge.mode == "none":
             self.answer_buffer.clear()
             return
 
         logger.info("[Batch] Judging %d answers", len(self.answer_buffer))
 
-        for item, predicted in self.answer_buffer:
-            judge_result = self.judge.evaluate(
-                item.question, predicted, item.reference_answer
+        for item, predicted, final_llm_error in self.answer_buffer:
+            score, reasoning, judge_error = self.judge.evaluate(
+                item.question, predicted, item.reference_answer, item.question_type
             )
+
+            if judge_error:
+                logger.error("[Item %d] Judge error: %s", item.global_index, judge_error)
+                self.stats["errors_judge"] += 1
+
+            # Update per-type stats
+            qt = item.question_type
+            if qt in self.stats["by_type"]:
+                self.stats["by_type"][qt]["count"] += 1
+                self.stats["by_type"][qt]["total_score"] += score
+                if judge_error or final_llm_error:
+                    self.stats["by_type"][qt]["errors"] += 1
 
             self.results.append({
                 "global_index": item.global_index,
@@ -536,26 +676,31 @@ class BatchProcessor:
                 "reference_answer": item.reference_answer,
                 "predicted_answer": predicted,
                 "question_type": item.question_type,
-                "correct": judge_result.get("correct", False),
-                "judge_evaluation": judge_result,
+                "score": score,
+                "reasoning": reasoning,
+                "final_llm_error": final_llm_error,
+                "judge_error": judge_error,
             })
 
             self.stats["total"] += 1
-            if judge_result.get("correct", False):
-                self.stats["correct"] += 1
-            else:
-                self.stats["incorrect"] += 1
 
         self.answer_buffer.clear()
 
-    def finalize(self) -> Tuple[List[Dict], Dict]:
-        """Flush remaining items."""
+    def finalize(self) -> Tuple[List[Dict], Dict, Dict]:
         if self.item_buffer:
             self._flush_final_llm_batch()
         if self.answer_buffer:
             self._flush_judge_batch()
 
-        return self.results, self.stats
+        # Compute per-type averages
+        for qt in self.stats["by_type"]:
+            count = self.stats["by_type"][qt]["count"]
+            if count > 0:
+                self.stats["by_type"][qt]["average_score"] = (
+                    self.stats["by_type"][qt]["total_score"] / count
+                )
+
+        return self.results, self.stats, self.timing.get_stats()
 
 
 # ============================================================================
@@ -563,23 +708,22 @@ class BatchProcessor:
 # ============================================================================
 
 def run_validation(config: Dict[str, Any]) -> None:
-    """Main validation entry point."""
     shared = config["shared"]
     baseline = config["baseline"]
     final_llm_cfg = config["final_llm"]
     judge_cfg = config["judge"]
 
-    # Create output directory first (before logging setup)
+    # Create output directory
     output_path = Path(shared["output_dir"])
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Setup logging (now directory exists)
-    log_file = (
-        output_path / "validation.log"
-        if shared.get("log_file", True)
-        else None
-    )
+    # Setup logging
+    log_file = output_path / "validation.log" if shared.get("log_file", True) else None
     setup_logging(shared.get("log_level", "INFO"), str(log_file) if log_file else None)
+
+    # Initialize timing
+    timing = TimingStats()
+    timing.start_total()
 
     logger.info("=" * 70)
     logger.info("Baseline Validation Starting")
@@ -587,16 +731,17 @@ def run_validation(config: Dict[str, Any]) -> None:
     logger.info("Strategy: %s", baseline["strategy"])
     logger.info("Dataset: %s", shared["dataset_path"])
     logger.info("Output: %s", shared["output_dir"])
-    logger.info("Final LLM batch: %d", baseline["final_llm_batch_size"])
-    logger.info("Judge batch: %d", baseline["judge_batch_size"])
+    logger.info("Question types: %s", shared.get("question_types", list(QUESTION_TYPES.keys())))
+    logger.info("Items per type: %d", shared.get("num_items_per_type", 10))
 
-    # Load dataset
-    dataset = load_dataset(shared["dataset_path"])
-    start = shared.get("start_index", 0)
-    end = min(start + shared.get("num_items", 10), len(dataset))
-    dataset_slice = dataset[start:end]
+    # Load dataset with balanced sampling
+    dataset = load_dataset_balanced(
+        shared["dataset_path"],
+        shared.get("question_types", list(QUESTION_TYPES.keys())),
+        shared.get("num_items_per_type", 10),
+    )
 
-    logger.info("Processing items %d to %d (%d total)", start, end - 1, len(dataset_slice))
+    logger.info("Total items to process: %d", len(dataset))
 
     # Initialize clients
     final_llm = FinalLLMClient(
@@ -616,18 +761,18 @@ def run_validation(config: Dict[str, Any]) -> None:
         api_key=judge_cfg.get("api_key", ""),
         temperature=judge_cfg.get("temperature", 0.0),
         max_tokens=judge_cfg.get("max_tokens", 1024),
-        local_model_path=judge_cfg.get("local_model_path", ""),
     )
 
-    # Initialize batch processor
+    # Initialize processor
     processor = BatchProcessor(
         final_llm=final_llm,
         judge=judge,
         final_llm_batch_size=baseline["final_llm_batch_size"],
         judge_batch_size=baseline["judge_batch_size"],
+        timing=timing,
     )
 
-    # Select context extraction function
+    # Select extraction function
     extract_fn = (
         extract_context_full
         if baseline["strategy"] == "full_context"
@@ -635,33 +780,62 @@ def run_validation(config: Dict[str, Any]) -> None:
     )
 
     # Process items
-    for idx, item in enumerate(dataset_slice):
-        global_idx = start + idx
+    for idx, item in enumerate(dataset):
+        global_idx = idx  # In balanced loading, global index is sequential
         sessions = item.get("haystack_sessions", [])
+        num_messages = sum(len(s) for s in sessions)
 
         logger.info("-" * 70)
-        logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset_slice), global_idx)
+        logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset), global_idx)
+        logger.info("Question type: %s", item.get("question_type", "unknown"))
+        logger.info("Question: %s", item.get("question", ""))
 
-        # Extract context based on strategy
         context = extract_fn(sessions)
-        logger.info("Extracted %d context turns", len(context))
+        logger.info("Extracted %d context turns from %d messages",
+                    len(context), num_messages)
 
-        processor.add_item(item, global_idx, context)
+        processor.add_item(item, global_idx, context, num_messages)
 
     # Finalize
-    results, stats = processor.finalize()
+    timing.end_total()
+    results, stats, timing_stats = processor.finalize()
 
     # Summary
     logger.info("=" * 70)
     logger.info("Validation Complete")
     logger.info("=" * 70)
-    logger.info("Total: %d", stats["total"])
-    logger.info("Correct: %d", stats["correct"])
-    logger.info("Incorrect: %d", stats["incorrect"])
-    if stats["total"] > 0:
-        logger.info("Accuracy: %.2f%%", (stats["correct"] / stats["total"]) * 100)
+    logger.info("Total processed: %d", stats["total"])
+    logger.info("Final LLM errors: %d", stats["errors_final_llm"])
+    logger.info("Judge errors: %d", stats["errors_judge"])
 
-    # Save results (directory already created at start)
+    # Per-type summary
+    logger.info("\nPer-question-type results:")
+    for qt, qt_stats in stats["by_type"].items():
+        if qt_stats["count"] > 0:
+            avg = qt_stats.get("average_score", 0)
+            logger.info("  %s: %d items, avg score=%.3f, errors=%d",
+                        qt, qt_stats["count"], avg, qt_stats["errors"])
+
+    # Overall average score
+    total_score = sum(r["score"] for r in results)
+    avg_score = total_score / len(results) if results else 0
+    logger.info("\nOverall average score: %.3f", avg_score)
+
+    # Timing summary
+    logger.info("\nTiming statistics:")
+    logger.info("  Total time: %.2fs", timing_stats.get("total_time", 0))
+    if "time_per_item" in timing_stats:
+        t = timing_stats["time_per_item"]
+        logger.info("  Per item: min=%.3fs, max=%.3fs, p50=%.3fs, p95=%.3fs, p99=%.3fs",
+                    t.get("min", 0), t.get("max", 0), t.get("p50", 0),
+                    t.get("p95", 0), t.get("p99", 0))
+    if "time_per_message" in timing_stats:
+        t = timing_stats["time_per_message"]
+        logger.info("  Per message: min=%.3fs, max=%.3fs, p50=%.3fs, p95=%.3fs, p99=%.3fs",
+                    t.get("min", 0), t.get("max", 0), t.get("p50", 0),
+                    t.get("p95", 0), t.get("p99", 0))
+
+    # Save results
     results_file = output_path / "validation_results.json"
     with open(results_file, "w", encoding="utf-8") as f:
         json.dump(
@@ -669,15 +843,22 @@ def run_validation(config: Dict[str, Any]) -> None:
                 "metadata": {
                     "strategy": baseline["strategy"],
                     "dataset_path": shared["dataset_path"],
-                    "start_index": start,
-                    "num_items": len(dataset_slice),
+                    "num_items": len(dataset),
+                    "question_types": shared.get("question_types", list(QUESTION_TYPES.keys())),
                     "final_llm_mode": final_llm_cfg["mode"],
                     "final_llm_model": final_llm_cfg.get("model", ""),
                     "judge_mode": judge_cfg["mode"],
                     "judge_model": judge_cfg.get("model", ""),
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 },
-                "statistics": stats,
+                "statistics": {
+                    "total": stats["total"],
+                    "errors_final_llm": stats["errors_final_llm"],
+                    "errors_judge": stats["errors_judge"],
+                    "average_score": avg_score,
+                    "by_type": stats["by_type"],
+                },
+                "timing": timing_stats,
                 "results": results,
             },
             f,
@@ -685,7 +866,7 @@ def run_validation(config: Dict[str, Any]) -> None:
             indent=2,
         )
 
-    logger.info("Results saved to: %s", results_file)
+    logger.info("\nResults saved to: %s", results_file)
 
 
 # ============================================================================
@@ -698,51 +879,37 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Full context baseline (default)
+    # Using config file
     python validate_baseline.py --config ./run_config.json
 
-    # Recent 10 + user messages baseline
-    python validate_baseline.py --config ./run_config.json --strategy recent_10_plus_user
+    # Full context strategy
+    python validate_baseline.py --strategy full_context --output-dir ./results_full
 
-    # With specific output directory
-    python validate_baseline.py \
-        --config ./run_config.json \
-        --output-dir ./results_recent10
+    # Recent 10 + user strategy
+    python validate_baseline.py --strategy recent_10_plus_user --output-dir ./results_recent10
         """,
     )
 
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=str(Path(__file__).parent / "run_config.json"),
-        help="Path to config file (default: run_config.json)",
-    )
+    parser.add_argument("--config", type=str,
+                        default=str(Path(__file__).parent / "run_config.json"),
+                        help="Path to config file")
 
-    parser.add_argument(
-        "--strategy",
-        type=str,
-        choices=["full_context", "recent_10_plus_user"],
-        help="Baseline strategy (overrides config)",
-    )
+    parser.add_argument("--strategy", type=str,
+                        choices=["full_context", "recent_10_plus_user"],
+                        help="Baseline strategy (overrides config)")
 
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        help="Output directory (overrides config)",
-    )
+    parser.add_argument("--output-dir", type=str,
+                        help="Output directory (overrides config)")
 
     args = parser.parse_args()
 
-    # Load config
     config = load_config(args.config)
 
-    # Apply CLI overrides
     if args.strategy:
         config["baseline"]["strategy"] = args.strategy
     if args.output_dir:
         config["shared"]["output_dir"] = args.output_dir
 
-    # Run
     run_validation(config)
 
 
