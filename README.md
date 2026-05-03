@@ -98,46 +98,122 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 
 Для тестирования качества системы памяти используется датасет **LongMemEval** (`xiaowu0162/longmemeval-cleaned`).
 
-```bash
-cd validation/full_pipeline
+### Структура валидации
 
-# Quick smoke test (no LLM)
-python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results \
-    --start-index 0 \
-    --num-items 5 \
-    --no-final-llm \
-    --judge-mode none
-
-# Full validation with OpenRouter judge
-python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results \
-    --start-index 0 \
-    --num-items 50 \
-    --judge-mode openrouter \
-    --judge-model "openai/gpt-oss-120b:free"
+```
+validation/
+├── GigaMemory_full/        # Полное тестирование GigaMemory
+│   ├── validate_longmemeval.py
+│   ├── run_config.json
+│   └── README.md
+└── baseline/               # Baseline тестирование
+    ├── validate_baseline.py
+    ├── run_config.json
+    └── README.md
 ```
 
-**Поддерживаемые параметры:**
-- `--start-index N` — начать с N-го примера (из релевантных)
-- `--num-items K` — обработать K примеров
-- `--judge-mode {openrouter,local,none}` — режим оценки ответов
-- `--save-memory-state` — сохранять состояние памяти после каждого примера
+### 1. GigaMemory Full Validation
 
-**Структура вывода:**
+Полное тестирование с structured memory, batch processing и Memory Hit Rate.
+
+```bash
+cd validation/GigaMemory_full
+
+# Используем конфиг файл (run_config.json)
+python validate_longmemeval.py
+
+# Или с кастомным конфигом
+python validate_longmemeval.py --config ./my_config.json
+
+# Batch processing: накапливаем 5 диалогов перед вызовом финальной LLM
+python validate_longmemeval.py \
+    --val-shared-start-index 0 \
+    --val-shared-num-items 20 \
+    --val-batch-final-llm-batch-size 5 \
+    --val-batch-judge-batch-size 10
+
+# С подсчётом Memory Hit Rate (дополнительная метрика)
+python validate_longmemeval.py \
+    --val-batch-calculate-memory-hit-rate true \
+    --val-judge-mode openrouter
+
+# С полной конфигурацией GigaMemory через CLI
+python validate_longmemeval.py \
+    --gm-memory-strategy topk_graph_records \
+    --gm-graph-top-k-records 50 \
+    --gm-prompt-language en
+```
+
+**Метрики:**
+- Accuracy (correct / total)
+- Memory Hit Rate (дополнительно, через `--calculate-memory-hit-rate`)
+
+### 2. Baseline Validation
+
+Сравнение с простыми стратегиями передачи контекста.
+
+```bash
+cd validation/baseline
+
+# Baseline: передаём ВЕСЬ контекст (все user + assistant)
+python validate_baseline.py --strategy full_context
+
+# Baseline: последние 10 пар + оставшиеся user сообщения
+python validate_baseline.py --strategy recent_10_plus_user --output-dir ./results_recent10
+```
+
+**Стратегии:**
+- `full_context` — все user и assistant сообщения из всех сессий
+- `recent_10_plus_user` — последние 10 пар + все ранние user сообщения
+
+**Метрики:**
+- Accuracy (correct / total)
+
+### Честное сравнение
+
+Для честного сравнения используйте **одинаковые** настройки:
+
+```bash
+# 1. GigaMemory
+cd validation/GigaMemory_full
+python validate_longmemeval.py --config ./run_config.json
+
+# 2. Baseline - Full Context
+cd validation/baseline
+python validate_baseline.py \
+    --strategy full_context \
+    --config ./run_config.json
+
+# 3. Baseline - Recent 10 + User
+python validate_baseline.py \
+    --strategy recent_10_plus_user \
+    --config ./run_config.json
+```
+
+### Структура вывода (GigaMemory)
+
 ```
 output-dir/
-├── validation_results.json     # Итоговые метрики и результаты
-├── validation.log              # Полный лог выполнения
-├── result_*.json               # Отдельные результаты по каждому примеру
-└── chunk_*/                    # Сохранённое состояние памяти
-    ├── dst_state.json         # DST-состояние + удалённые факты
-    └── ragu_storage/          # RAGU хранилище графа
+├── validation_results.json     # Итоговые метрики
+│   {
+│     "statistics": {
+│       "total": 50,
+│       "correct": 42,
+│       "incorrect": 8,
+│       "accuracy": 0.84,
+│       "memory_hit": 48,       # GigaMemory only
+│       "memory_miss": 2,       # GigaMemory only
+│       "memory_hit_rate": 0.96 # GigaMemory only
+│     },
+│     "results": [...]
+│   }
+├── validation.log              # Полный лог
+└── chunk_*/                    # Состояние памяти (GigaMemory only)
 ```
 
-Подробная документация: см. `validation/full_pipeline/README.md` и `validation/full_pipeline/CONFIG.md`.
+Подробная документация:
+- GigaMemory: `validation/GigaMemory_full/README.md`, `README_CONFIG.md`
+- Baseline: `validation/baseline/README.md`
 
 ## Подробная техдокументация
 

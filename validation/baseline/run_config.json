@@ -1,0 +1,50 @@
+{
+  "_description": "Baseline validation configuration for LongMemEval",
+  "_note": "Mirrors GigaMemory validation structure for fair comparison",
+
+  "shared": {
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
+    "output_dir": "./results",
+    "start_index": 0,
+    "num_items": 10,
+    "log_level": "INFO",
+    "log_file": true
+  },
+
+  "baseline": {
+    "_description": "Baseline strategy configuration",
+    "_strategies": [
+      "full_context: Pass ALL user and assistant messages to final LLM",
+      "recent_10_plus_user: Pass last 10 user/assistant pairs + remaining user messages"
+    ],
+
+    "strategy": "full_context",
+
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1
+  },
+
+  "final_llm": {
+    "_description": "Final LLM configuration (must match GigaMemory settings for fair comparison)",
+
+    "mode": "openrouter",
+    "model": "openai/gpt-oss-120b:free",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "local_model_path": ""
+  },
+
+  "judge": {
+    "_description": "LLM-as-Judge configuration (same as GigaMemory)",
+
+    "mode": "openrouter",
+    "model": "openai/gpt-oss-120b:free",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "local_model_path": ""
+  }
+}
