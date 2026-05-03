@@ -43,7 +43,8 @@ class DSTMemoryPipeline:
         logger.info(
             "Initializing pipeline threshold=%.3f top_k=%d llm_mode=%s gate=%s "
             "memory_gate_stub=%s memory_strategy=%s ragu=%s ttl_mode=%s semantic_dedup=%s "
-            "slot_context=%s deletion_mode=%s prompt_language=%s",
+            "slot_context=%s deletion_mode=%s prompt_language=%s "
+            "unload_before_final_llm=%s",
             config.importance_threshold,
             config.retrieval_top_k,
             config.llm_mode,
@@ -56,17 +57,22 @@ class DSTMemoryPipeline:
             config.slot_context_enabled,
             config.triplet_deletion_mode,
             getattr(config, "prompt_language", "ru"),
+            getattr(config, "unload_models_before_final_llm", True),
         )
         self.classifier = ImportanceClassifier(
             model_path=config.importance_model_path,
             threshold=config.importance_threshold,
         )
-        slot_serving = None
+
+        # Store slot_serving for unload/reload capability
+        self._slot_serving = None
         if not config.slot_use_stub:
-            slot_serving = LocalHFServing(
+            self._slot_serving = LocalHFServing(
                 config.slot_model_path,
                 enable_thinking=config.slot_model_enable_thinking,
             )
+        slot_serving = self._slot_serving
+
         triplet_extractor = TripletExtractionClient(
             use_stub=config.slot_use_stub,
             serving=slot_serving,
@@ -318,8 +324,105 @@ class DSTMemoryPipeline:
             "deleted_facts_with_reasons": self.dst.deleted_facts_with_reasons(dialogue_id),
         }
 
-    def answer(self, dialogue_id: str, question: str) -> str:
+    def unload_local_models(self) -> None:
+        """
+        Unload all local models (slot serving, classifier) from GPU/memory.
+        Called before loading final LLM to free GPU memory.
+        """
+        import gc
+        logger.info("Unloading local models from memory...")
+
+        # Unload slot serving (the main memory consumer)
+        if self._slot_serving is not None:
+            logger.info("Unloading slot serving model...")
+            # Note: LocalHFServing doesn't have explicit unload, we clear the reference
+            # and rely on garbage collection
+            self._slot_serving = None
+
+        # Clear any cached components that might hold model references
+        # The clients hold references to serving, but they should be weak
+        # We'll clear the triplet_extractor, slot_selector, conflict_resolver, etc.
+        if hasattr(self.dst, 'triplet_extractor'):
+            if hasattr(self.dst.triplet_extractor, '_serving'):
+                self.dst.triplet_extractor._serving = None
+        if hasattr(self.dst, 'slot_selector'):
+            if hasattr(self.dst.slot_selector, '_serving'):
+                self.dst.slot_selector._serving = None
+        if hasattr(self.dst, 'conflict_resolver'):
+            if hasattr(self.dst.conflict_resolver, '_serving'):
+                self.dst.conflict_resolver._serving = None
+
+        # Force garbage collection
+        gc.collect()
+
+        # Clear CUDA cache if available
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info("CUDA cache cleared")
+        except ImportError:
+            pass
+
+        logger.info("Local models unloaded")
+
+    def reload_local_models(self) -> None:
+        """
+        Reload local models after they were unloaded.
+        Called after final LLM processing is complete.
+        """
+        logger.info("Reloading local models...")
+
+        if not self.config.slot_use_stub and self._slot_serving is None:
+            from ..clients.serving import LocalHFServing
+            self._slot_serving = LocalHFServing(
+                self.config.slot_model_path,
+                enable_thinking=self.config.slot_model_enable_thinking,
+            )
+
+        # Re-attach serving to clients
+        if hasattr(self.dst, 'triplet_extractor'):
+            if hasattr(self.dst.triplet_extractor, '_serving'):
+                self.dst.triplet_extractor._serving = self._slot_serving
+        if hasattr(self.dst, 'slot_selector'):
+            if hasattr(self.dst.slot_selector, '_serving'):
+                self.dst.slot_selector._serving = self._slot_serving
+        if hasattr(self.dst, 'conflict_resolver'):
+            if hasattr(self.dst.conflict_resolver, '_serving'):
+                self.dst.conflict_resolver._serving = self._slot_serving
+
+        # Re-attach to memory gate
+        gate_stub = self.config.memory_gate_use_stub or self._slot_serving is None
+        self.memory_gate._serving = self._slot_serving if not gate_stub else None
+
+        logger.info("Local models reloaded")
+
+    def answer(self, dialogue_id: str, question: str, *, _unload_models: bool = False) -> str:
+        """
+        Generate answer using final LLM.
+
+        Args:
+            dialogue_id: Dialogue ID
+            question: User question
+            _unload_models: Internal flag to trigger model unloading before final LLM
+
+        Returns:
+            Answer text from final LLM
+        """
         logger.info("answer dialogue_id=%s", dialogue_id)
+
+        # Determine if we should unload models before final LLM
+        should_unload = (
+            getattr(self.config, 'unload_models_before_final_llm', True) and
+            self.config.llm_mode == 'local' and
+            _unload_models
+        )
+
+        if should_unload:
+            logger.info("Unloading models before final LLM (local mode)...")
+            self.unload_local_models()
+
         memory_context, gate_meta = self._memory_context_for_question(dialogue_id, question)
         logger.info(
             "answer memory context ready mode=%s active_slots=%s",

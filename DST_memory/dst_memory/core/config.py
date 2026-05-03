@@ -174,3 +174,13 @@ class PipelineConfig:
 
     # Prompt UI language for slot/triplet/gate/deletion/conflict LLM calls ("ru" | "en").
     prompt_language: str = "ru"
+
+    # -------------------------------------------------------------------
+    # Model unloading for local final LLM
+    # -------------------------------------------------------------------
+    # unload_models_before_final_llm:
+    #   When True (default) and llm_mode="local" — before calling the final LLM,
+    #   all other models (slot selector, triplet extractor, classifier, etc.)
+    #   are unloaded from GPU to free memory for the final LLM.
+    #   Ignored when llm_mode="openrouter" or "api" (no local models to unload).
+    unload_models_before_final_llm: bool = True

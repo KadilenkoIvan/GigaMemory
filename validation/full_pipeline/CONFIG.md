@@ -1,281 +1,397 @@
-# LongMemEval Validation Configuration
+# LongMemEval Validation Configuration v2
 
-This document describes the configuration options for the LongMemEval validation script.
+Документация для расширенной версии валидации (`validate_longmemeval_v2.py`) с batch processing, Memory Hit Rate и полной CLI конфигурацией.
 
-## Configuration Files
+## Новые возможности v2
 
-### DST_memory Config
+### 1. Batch Processing Parameters
 
-The validation script uses the same `run_config.json` as DST_memory. Key parameters:
+```bash
+# Размер батча для финальной LLM (default: 1)
+--final-llm-batch-size 5
 
+# Размер батча для судьи (default: 1)
+--judge-batch-size 10
+```
+
+**Как работает:**
+1. Фаза 1: Последовательная обработка диалогов через memory pipeline
+2. Фаза 2: Когда батч полон — последовательный вызов финальной LLM для всех накопленных
+3. Фаза 3: Когда батч ответов полон — последовательная оценка судьей
+
+**Рекомендации:**
+- `final_llm_batch_size` должен быть <= `num_items`
+- `judge_batch_size` должен быть >= `final_llm_batch_size`
+- Оптимально: `judge_batch_size = 2 * final_llm_batch_size`
+
+### 2. Memory Hit Rate Metric
+
+```bash
+# Включить подсчёт Memory Hit Rate (default: false)
+--calculate-memory-hit-rate
+```
+
+**Что измеряется:**
+- **Memory Hit Rate** = доля случаев, когда нужный факт попал в контекст финальной LLM
+- Измеряется отдельным вызовом судьи, который анализирует `memory_context`
+
+**Интерпретация результатов:**
 ```json
 {
-  "shared": {
-    "importance_model_path": "path/to/importance/classifier",
-    "importance_threshold": 0.25,
-    "memory_strategy": "full_graph_json",
-    "llm_mode": "openrouter",
-    "llm_model": "openai/gpt-oss-120b:free",
-    "slot_use_stub": false,
-    "slot_model_path": "DST_memory/models/Meno-Lite-0.1",
-    "ragu_embedder_model": "deepvk/USER-bge-m3",
-    "triplet_deletion_mode": "none",
-    "prompt_language": "ru"
+  "statistics": {
+    "accuracy": 0.75,
+    "memory_hit_rate": 0.90,
+    "gap": -0.15
   }
 }
 ```
 
-**Important**: The LongMemEval dataset is in English, so you may want to set `"prompt_language": "en"` for better extraction quality.
+- MHR=90%, Accuracy=75% → проблема в финальной LLM, не в памяти
+- MHR=60%, Accuracy=55% → проблема в памяти (факты не сохраняются/не извлекаются)
 
-## Validation-Specific Configuration
+### 3. Model Unloading для локальной финальной LLM
 
-### Command Line Overrides
-
-These settings are specific to the validation script and passed via CLI:
-
-#### Dataset Selection
-
-```bash
-# Process a specific range of examples
---start-index 0      # Start from first relevant example
---num-items 50       # Process 50 examples
+В `run_config.json`:
+```json
+{
+  "shared": {
+    "llm_mode": "local",
+    "llm_model": "meta-llama/Llama-3.1-70B-Instruct",
+    "unload_models_before_final_llm": true
+  }
+}
 ```
 
-The script automatically filters to relevant question types:
-- `single-session-user` (70 examples)
-- `single-session-preference` (30 examples)
-- `multi-session` (133 examples)
-- `knowledge-update` (78 examples)
-
-#### Judge Configuration
-
-**OpenRouter Mode** (recommended for accuracy):
+Или через CLI:
 ```bash
---judge-mode openrouter
---judge-model "openai/gpt-oss-120b:free"
---judge-api-key "${OPENROUTER_API_KEY}"
+--gm-unload-models-before-final-llm true
 ```
 
-**Local Mode** (for offline operation):
+**Когда срабатывает:**
+- Только при `llm_mode=local`
+- Перед обработкой батча финальной LLM выгружаются:
+  - Slot serving model
+  - Classifier
+  - Другие локальные модели
+- После батча модели перезагружаются автоматически
+
+## Полная CLI конфигурация GigaMemory
+
+Все параметры имеют префикс `--gm-` и переопределяют значения из `run_config.json`.
+
+### Model Paths
+
+| Parameter | Type | Example |
+|-----------|------|---------|
+| `--gm-importance-model-path` | string | `"./best_model"` |
+| `--gm-slot-model-path` | string | `"Qwen/Qwen3-0.6B"` |
+
+### Thresholds and Numbers
+
+| Parameter | Type | Example |
+|-----------|------|---------|
+| `--gm-importance-threshold` | float | `0.25` |
+| `--gm-graph-top-k-records` | int | `20` |
+| `--gm-retrieval-top-k` | int | `5` |
+| `--gm-recent-history-pairs` | int | `5` |
+| `--gm-slot-max-slots-per-message` | int | `5` |
+| `--gm-slot-context-max-facts` | int | `10` |
+
+### Memory Strategy
+
+| Parameter | Choices | Example |
+|-----------|---------|---------|
+| `--gm-memory-strategy` | `full_graph_json`, `relevant_slots_full`, `topk_graph_records` | `topk_graph_records` |
+
+### LLM Settings
+
+| Parameter | Type/Choices | Example |
+|-----------|--------------|---------|
+| `--gm-llm-mode` | `stub`, `local`, `openrouter`, `api` | `openrouter` |
+| `--gm-llm-model` | string | `openai/gpt-oss-120b:free` |
+| `--gm-llm-api-key` | string | `sk-or-v1-...` |
+| `--gm-llm-api-url` | string | `https://openrouter.ai/api/v1` |
+| `--gm-llm-temperature` | float | `0.0` |
+| `--gm-llm-max-tokens` | int | `1024` |
+
+### RAGU Settings
+
+| Parameter | Type | Example |
+|-----------|------|---------|
+| `--gm-ragu-storage-path` | string | `./ragu_storage` |
+| `--gm-ragu-embedder-model` | string | `deepvk/USER-bge-m3` |
+
+### Slot and Deletion Settings
+
+| Parameter | Type/Choices | Example |
+|-----------|--------------|---------|
+| `--gm-slot-use-stub` | `true`, `false` | `false` |
+| `--gm-slot-context-enabled` | `true`, `false` | `true` |
+| `--gm-triplet-deletion-mode` | `none`, `heuristic`, `llm_inline`, `llm_separate` | `llm_inline` |
+| `--gm-deletion-use-pymorphy` | `true`, `false` | `false` |
+| `--gm-slot-model-enable-thinking` | `true`, `false` | `false` |
+
+### TTL Settings
+
+| Parameter | Type | Example |
+|-----------|------|---------|
+| `--gm-ttl-mode` | `mode1`, `mode2`, `mode3` | `mode2` |
+| `--gm-ttl-semantic-dedup-enabled` | `true`, `false` | `true` |
+| `--gm-ttl-semantic-dedup-threshold` | float | `0.9` |
+
+### Other Settings
+
+| Parameter | Type/Choices | Example |
+|-----------|--------------|---------|
+| `--gm-prompt-language` | `ru`, `en` | `en` |
+| `--gm-disable-memory-gate` | `true`, `false` | `false` |
+| `--gm-memory-gate-use-stub` | `true`, `false` | `false` |
+| `--gm-conflict-allow-multi-relation-same-object` | `true`, `false` | `true` |
+| `--gm-slot-fallback-on-no-slots` | `true`, `false` | `true` |
+| `--gm-triplet-fallback-on-empty` | `true`, `false` | `true` |
+| `--gm-unload-models-before-final-llm` | `true`, `false` | `true` |
+
+## Примеры конфигураций
+
+### Пример 1: Тестирование разных стратегий памяти
+
 ```bash
---judge-mode local
---judge-local-model-path "meta-llama/Llama-3.2-1B-Instruct"
---unload-judge-between-items  # Save memory between items
+# Strategy A: Full graph
+python validate_longmemeval_v2.py ... \
+    --gm-memory-strategy full_graph_json \
+    --output-dir ./results_strategy_a
+
+# Strategy B: Top-K records
+python validate_longmemeval_v2.py ... \
+    --gm-memory-strategy topk_graph_records \
+    --gm-graph-top-k-records 30 \
+    --output-dir ./results_strategy_b
+
+# Strategy C: Relevant slots
+python validate_longmemeval_v2.py ... \
+    --gm-memory-strategy relevant_slots_full \
+    --gm-disable-memory-gate false \
+    --output-dir ./results_strategy_c
 ```
 
-**No Judge** (memory testing only):
+### Пример 2: Сравнение удаления фактов
+
 ```bash
---judge-mode none
---no-final-llm
+# No deletion
+python validate_longmemeval_v2.py ... \
+    --gm-triplet-deletion-mode none \
+    --output-dir ./results_del_none
+
+# Heuristic deletion
+python validate_longmemeval_v2.py ... \
+    --gm-triplet-deletion-mode heuristic \
+    --gm-deletion-use-pymorphy true \
+    --output-dir ./results_del_heuristic
+
+# LLM inline deletion
+python validate_longmemeval_v2.py ... \
+    --gm-triplet-deletion-mode llm_inline \
+    --gm-slot-context-enabled true \
+    --output-dir ./results_del_inline
 ```
 
-#### Memory State Persistence
+### Пример 3: Оптимизация для большого датасета
 
 ```bash
---save-memory-state        # Save DST + RAGU state after each item (default)
---no-save-memory-state     # Disable state saving
---save-intermediate        # Save individual result files (default)
+python validate_longmemeval_v2.py \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results_optimized \
+    --start-index 0 \
+    --num-items 311 \
+    --final-llm-batch-size 20 \
+    --judge-batch-size 40 \
+    --calculate-memory-hit-rate \
+    --judge-mode openrouter \
+    --config ../../DST_memory/run_config.json \
+    \
+    # GigaMemory optimizations
+    --gm-memory-strategy topk_graph_records \
+    --gm-graph-top-k-records 20 \
+    --gm-retrieval-top-k 5 \
+    --gm-slot-use-stub false \
+    --gm-prompt-language en
+```
+
+### Пример 4: Локальная финальная LLM с выгрузкой
+
+```bash
+# run_config.json
+# {
+#   "shared": {
+#     "llm_mode": "local",
+#     "llm_model": "meta-llama/Llama-3.1-70B-Instruct",
+#     "unload_models_before_final_llm": true,
+#     "slot_model_path": "Qwen/Qwen3-0.6B",
+#     "slot_use_stub": false
+#   }
+# }
+
+python validate_longmemeval_v2.py \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results_local_70b \
+    --start-index 0 \
+    --num-items 10 \
+    --final-llm-batch-size 10 \
+    --judge-mode local \
+    --judge-local-model-path "meta-llama/Llama-3.2-1B-Instruct" \
+    --config ../../DST_memory/run_config.json
+```
+
+**Flow:**
+1. Загружаются: classifier, Qwen3-0.6B (slot model)
+2. Обрабатываются 10 диалогов через memory pipeline
+3. **Выгружаются** classifier, Qwen3-0.6B
+4. Загружается Llama-3.1-70B
+5. Генерируются 10 ответов
+6. Выгружается Llama-3.1-70B
+7. Загружается judge model (Llama-3.2-1B)
+8. Оцениваются 10 ответов
+
+### Пример 5: Smoke test с stub режимом
+
+```bash
+python validate_longmemeval_v2.py \
+    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
+    --output-dir ./results_stub \
+    --start-index 0 \
+    --num-items 5 \
+    --final-llm-batch-size 5 \
+    --judge-mode none \
+    --config ../../DST_memory/run_config.json \
+    --gm-slot-use-stub true \
+    --gm-llm-mode stub \
+    --gm-memory-gate-use-stub true
 ```
 
 ## Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `OPENROUTER_API_KEY` | API key for OpenRouter (final LLM and judge) |
-| `DST_MEMORY_CONFIG` | Path to DST_memory config file |
+| `OPENROUTER_API_KEY` | API key для OpenRouter (final LLM и judge) |
+| `DST_MEMORY_CONFIG` | Путь к конфигурации DST_memory |
+| `HF_HOME` | HuggingFace cache directory |
+| `TRANSFORMERS_CACHE` | Transformers cache directory |
+| `CUDA_VISIBLE_DEVICES` | Выбор GPU для локальных моделей |
 
-## Complete Configuration Examples
+## Output Structure
 
-### Full Test with OpenRouter
-
-```bash
-export OPENROUTER_API_KEY="sk-or-v1-..."
-
-python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_full \
-    --start-index 0 \
-    --num-items 311 \
-    --judge-mode openrouter \
-    --judge-model "openai/gpt-oss-120b:free" \
-    --config ../../DST_memory/run_config.json \
-    --log-level INFO
+```
+output-dir/
+├── validation.log              # Полный лог выполнения
+├── validation_results.json     # Итоговые метрики
+│   {
+│     "metadata": {
+│       "final_llm_batch_size": 5,
+│       "judge_batch_size": 10,
+│       "calculate_memory_hit_rate": true
+│     },
+│     "statistics": {
+│       "total": 50,
+│       "correct": 42,
+│       "incorrect": 8,
+│       "accuracy": 0.84,
+│       "memory_hit": 48,
+│       "memory_miss": 2,
+│       "memory_hit_rate": 0.96
+│     },
+│     "results": [
+│       {
+│         "global_index": 0,
+│         "question_id": "...",
+│         "correct": true,
+│         "memory_hit": true,
+│         "judge_evaluation": {...},
+│         "memory_hit_evaluation": {...}
+│       }
+│     ]
+│   }
+└── chunk_0000/                 # Состояние памяти после каждого диалога
+    ├── dst_state.json
+    └── ragu_storage/
 ```
 
-### Memory-Only Test (No LLM)
+## Метрики и их интерпретация
 
-```bash
-python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_memory \
-    --start-index 0 \
-    --num-items 50 \
-    --no-final-llm \
-    --judge-mode none \
-    --config ../../DST_memory/run_config.json
+### Основная метрика: Accuracy
+
+```
+Accuracy = correct / total
 ```
 
-### Local Testing (All Local Models)
+### Дополнительная метрика: Memory Hit Rate
 
-```bash
-python validate_longmemeval.py \
-    --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
-    --output-dir ./results_local \
-    --start-index 0 \
-    --num-items 10 \
-    --judge-mode local \
-    --judge-local-model-path "meta-llama/Llama-3.2-1B-Instruct" \
-    --config ../../DST_memory/run_config.json \
-    --unload-judge-between-items
+```
+Memory Hit Rate = memory_hit / (memory_hit + memory_miss)
 ```
 
-With `run_config.json`:
-```json
-{
-  "shared": {
-    "llm_mode": "local",
-    "slot_use_stub": false,
-    "slot_model_path": "local/path/to/slot-model",
-    "prompt_language": "en"
-  }
-}
+### Анализ разрыва (Gap)
+
+```
+Gap = Accuracy - Memory Hit Rate
 ```
 
-## Batch Processing Configuration
-
-For processing the full dataset in batches:
-
-```bash
-# Batch 1: Items 0-50
-python validate_longmemeval.py ... --start-index 0 --num-items 50 --output-dir ./batch_1
-
-# Batch 2: Items 50-100
-python validate_longmemeval.py ... --start-index 50 --num-items 50 --output-dir ./batch_2
-
-# Batch 3: Items 100-150
-python validate_longmemeval.py ... --start-index 100 --num-items 50 --output-dir ./batch_3
-
-# ... and so on
-```
+| Gap | Интерпретация |
+|-----|--------------|
+| Gap ≈ 0 | Финальная LLM использует память эффективно |
+| Gap > 0.1 | Проблема в финальной LLM (не использует контекст) |
+| Gap < 0 | Редкий случай - LLM отвечает правильно даже без факта в памяти |
 
 ## Performance Tuning
 
-### Memory Optimization
+### Баланс скорости и точности
 
-For systems with limited RAM:
+| Config | Speed | Accuracy | Use Case |
+|--------|-------|----------|----------|
+| `slot_use_stub=true`, `llm_mode=stub` | Мгновенно | Низкая | Smoke test |
+| `slot_use_stub=false`, `llm_mode=openrouter` | Средне | Высокая | Production eval |
+| `slot_use_stub=false`, `llm_mode=local` | Медленно | Высокая | Offline eval |
+| `final_llm_batch_size=20` | Быстрее | Та же | Local LLM оптимизация |
 
-```bash
-# Process in very small batches
---num-items 5
+### API Cost Optimization (OpenRouter)
 
-# Unload models between items
---unload-judge-between-items
+| Approach | Calls per item | Total for 311 items |
+|----------|---------------|---------------------|
+| Basic | 2 (LLM + Judge) | 622 |
+| With MHR | 3 (LLM + Judge + MHR) | 933 |
+| Batch judge (size=20) | ~2.05 | ~637 |
 
-# Disable intermediate saves to reduce I/O
---no-save-intermediate
-```
+## Troubleshooting
 
-### Speed Optimization
-
-For faster validation (trading accuracy):
-
-```bash
-# Use stub mode for slot operations (if implemented)
---config stub_config.json
-
-# Skip judge evaluation
---judge-mode none
-
-# Reduce retrieval top-k
-# (in run_config.json: "retrieval_top_k": 3)
-```
-
-## Debugging Configuration
-
-Enable detailed logging:
+### Out of Memory (OOM)
 
 ```bash
---log-level DEBUG
-```
+# Уменьшить батч
+--final-llm-batch-size 1
 
-This will log:
-- Full prompts sent to LLMs
-- Detailed extraction results
-- RAGU operations
-- Memory state changes
+# Использовать stub для слотов
+--gm-slot-use-stub true
 
-## Integration Testing
-
-Test specific components:
-
-### Importance Classifier Only
-```bash
-# Check DST_memory classifier directly
-python ../../DST_memory/run.py module classifier --text "I have a dog named Max"
-```
-
-### Slot Selection Only
-```bash
-# Check slot selection
-python ../../DST_memory/run.py module dst --dialogue-id test --text "My wife is a doctor"
-```
-
-### Full Pipeline on Single Example
-```bash
-# Create a single-example JSONL file
-python ../../DST_memory/run.py pipeline test \
-    --dataset-path single_example.jsonl \
-    --output-path test_output.json
-```
-
-## Troubleshooting Configuration
-
-### Path Issues
-
-If imports fail, verify directory structure:
-```
-GigaMemory/
-├── DST_memory/          # Pipeline code
-├── RAGU/                # RAGU storage
-├── LongMemEval/         # Dataset
-└── validation/
-    └── full_pipeline/   # This directory
-```
-
-### Model Loading Issues
-
-For local models, ensure HuggingFace cache is accessible:
-```bash
-export HF_HOME="/path/to/huggingface/cache"
-export TRANSFORMERS_CACHE="/path/to/transformers/cache"
-```
-
-### API Timeout Issues
-
-Increase timeout in code if needed (in `validate_longmemeval.py`):
-```python
-# Increase from default 120 seconds
-with urllib.request.urlopen(req, timeout=300) as resp:
-```
-
-## Output Configuration
-
-The script produces:
-
-1. **Console output** - Real-time progress
-2. **validation.log** - Detailed execution log
-3. **validation_results.json** - Aggregated results
-4. **result_*.json** - Individual item results
-5. **chunk_*/dst_state.json** - DST memory state
-6. **chunk_*/ragu_storage/** - RAGU graph storage
-
-Configure retention:
-```bash
-# Keep only final results (smaller output)
---no-save-intermediate
+# Отключить сохранение состояния
 --no-save-memory-state
+```
 
-# Keep everything (full audit trail, larger output)
---save-intermediate
---save-memory-state
+### Slow processing
+
+```bash
+# Увеличить батчи
+--final-llm-batch-size 20
+--judge-batch-size 40
+
+# Использовать более быструю judge model
+--judge-model "openai/gpt-4o-mini"
+```
+
+### API rate limiting
+
+```bash
+# Увеличить батч judge (меньше вызовов)
+--judge-batch-size 50
+
+# Или использовать local judge
+--judge-mode local
 ```
