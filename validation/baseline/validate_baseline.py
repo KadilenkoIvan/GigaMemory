@@ -569,9 +569,13 @@ def run_validation(config: Dict[str, Any]) -> None:
     final_llm_cfg = config["final_llm"]
     judge_cfg = config["judge"]
 
-    # Setup logging
+    # Create output directory first (before logging setup)
+    output_path = Path(shared["output_dir"])
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Setup logging (now directory exists)
     log_file = (
-        Path(shared["output_dir"]) / "validation.log"
+        output_path / "validation.log"
         if shared.get("log_file", True)
         else None
     )
@@ -657,10 +661,7 @@ def run_validation(config: Dict[str, Any]) -> None:
     if stats["total"] > 0:
         logger.info("Accuracy: %.2f%%", (stats["correct"] / stats["total"]) * 100)
 
-    # Save results
-    output_path = Path(shared["output_dir"])
-    output_path.mkdir(parents=True, exist_ok=True)
-
+    # Save results (directory already created at start)
     results_file = output_path / "validation_results.json"
     with open(results_file, "w", encoding="utf-8") as f:
         json.dump(
