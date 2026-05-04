@@ -897,19 +897,16 @@ def normalize_question_specs(item: Dict[str, Any]) -> List[Dict[str, str]]:
 # Pipeline Building
 # ============================================================================
 
-def build_pipeline_from_config(config_path: str, cli_overrides: Optional[Dict] = None):
-    """Build DSTMemoryPipeline from config file with optional CLI overrides."""
+def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, Any]] = None):
+    """Build PipelineConfig from DST run_config + overrides. Does not load any PyTorch models."""
     from dst_memory import PipelineConfig
-    from dst_memory.core.pipeline import DSTMemoryPipeline
-    from dst_memory.storage.ragu_graph_processor import build_ragu_processor
 
     file_cfg = load_run_config(config_path)
     shared = shared_section(file_cfg)
-
     if cli_overrides:
         shared.update(cli_overrides)
 
-    cfg = PipelineConfig(
+    return PipelineConfig(
         importance_model_path=shared.get("importance_model_path", ""),
         importance_threshold=float(shared.get("importance_threshold", 0.5)),
         retrieval_top_k=int(shared.get("retrieval_top_k", 5)),
@@ -950,6 +947,78 @@ def build_pipeline_from_config(config_path: str, cli_overrides: Optional[Dict] =
         prompt_language=shared.get("prompt_language", "ru"),
         unload_models_before_final_llm=shared.get("unload_models_before_final_llm", True),
     )
+
+
+class FinalLLMOnlyPipelineFacade:
+    """
+    Minimal stand-in for ``DSTMemoryPipeline`` in ``final_llm_only`` validation mode.
+
+    Avoids loading slot/triplet models, importance classifier, RAGU graph, and DST —
+    those already ran in ``memory_only``. Only ``FinalLLMClient`` touches the GPU
+    (on first ``generate`` for local mode).
+    """
+
+    def __init__(self, config: Any, final_llm: Any):
+        self.config = config
+        self.final_llm = final_llm
+        self.ragu_processor = None
+
+    def unload_local_models(self) -> None:
+        """Release local final LLM weights; nothing else was loaded on this facade."""
+        import gc
+
+        logger.info(
+            "[FinalLLMOnly] unload_local_models: releasing final LLM only "
+            "(slot/triplet/classifier were not loaded in this process)"
+        )
+        if hasattr(self.final_llm, "release_local_serving"):
+            self.final_llm.release_local_serving()
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
+    def reload_local_models(self) -> None:
+        """No-op: memory subsystem is absent in final_llm_only facade."""
+        logger.info(
+            "[FinalLLMOnly] reload_local_models: skipped (no slot model to restore in this mode)"
+        )
+
+
+def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[str, Any]] = None):
+    """Lightweight pipeline for final_llm_only — FinalLLMClient + config only."""
+    from dst_memory.clients.llm_client import FinalLLMClient
+
+    cfg = build_pipeline_config(config_path, cli_overrides)
+    final_llm = FinalLLMClient(
+        mode=cfg.llm_mode,
+        api_url=cfg.llm_api_url,
+        api_key=cfg.llm_api_key,
+        model=cfg.llm_model,
+        temperature=cfg.llm_temperature,
+        max_tokens=cfg.llm_max_tokens,
+        http_referer=cfg.openrouter_http_referer,
+        x_title=cfg.openrouter_x_title,
+        prompt_language=cfg.prompt_language,
+        load_dtype=cfg.llm_load_dtype,
+    )
+    logger.info(
+        "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
+        "or importance models in this process (memory was built in memory_only)."
+    )
+    return FinalLLMOnlyPipelineFacade(cfg, final_llm)
+
+
+def build_pipeline_from_config(config_path: str, cli_overrides: Optional[Dict[str, Any]] = None):
+    """Build full DSTMemoryPipeline from config file with optional CLI overrides."""
+    from dst_memory.core.pipeline import DSTMemoryPipeline
+    from dst_memory.storage.ragu_graph_processor import build_ragu_processor
+
+    cfg = build_pipeline_config(config_path, cli_overrides)
 
     logger.info("Initializing RAGU backend...")
     _kg, ragu_processor = build_ragu_processor(
@@ -2020,6 +2089,11 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("=" * 70)
     logger.info("LongMemEval Validation v3 - Starting")
     logger.info("Validation mode: %s", args.validation_mode)
+    if args.validation_mode == "final_llm_only":
+        logger.info(
+            "final_llm_only: this run does not execute write_to_memory — no triplet/slot/importance "
+            "work in this process; only the final LLM is loaded (see FinalLLMOnlyPipelineFacade in logs)."
+        )
     logger.info("=" * 70)
     logger.info("Configuration:")
     logger.info("  Dataset: %s", args.dataset_path)
@@ -2084,15 +2158,22 @@ def run_validation(args: argparse.Namespace) -> None:
             local_model_path=args.judge_local_model_path,
         )
 
-    # Build pipeline (only for modes that need it)
+    # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
     pipeline = None
     if args.validation_mode in ("full", "memory_only", "final_llm_only"):
         cli_overrides = build_cli_overrides(args)
-        pipeline = build_pipeline_from_config(args.config, cli_overrides)
+        if args.validation_mode == "final_llm_only":
+            pipeline = build_final_llm_only_facade(args.config, cli_overrides)
+        else:
+            pipeline = build_pipeline_from_config(args.config, cli_overrides)
         validation_metadata["giga_memory_memory_strategy"] = getattr(
             pipeline.config, "memory_strategy", ""
         )
         validation_metadata["giga_memory_llm_mode"] = getattr(pipeline.config, "llm_mode", "")
+        if args.validation_mode == "final_llm_only":
+            validation_metadata["pipeline_backend"] = "FinalLLMOnlyPipelineFacade"
+        else:
+            validation_metadata["pipeline_backend"] = "DSTMemoryPipeline"
 
     # Initialize batch processor
     batch_processor = BatchProcessor(
