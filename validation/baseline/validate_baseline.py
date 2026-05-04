@@ -233,6 +233,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "local_model_path": "",
             "load_dtype": "float16",
             "load_quantization": "none",
+            "max_context_tokens": 131072,
         },
         "judge": {
             "mode": "openrouter",
@@ -408,6 +409,7 @@ class FinalLLMClient:
         local_model_path: str = "",
         load_dtype: str = "float16",
         load_quantization: str = "none",
+        max_context_tokens: int = 131072,
     ):
         self.mode = mode
         self.api_url = api_url or "https://openrouter.ai/api/v1"
@@ -418,16 +420,19 @@ class FinalLLMClient:
         self.local_model_path = local_model_path or ""
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
+        self.max_context_tokens = int(max_context_tokens)
         self._hf_serving = None
+        self._tok_limit: Any = None  # AutoTokenizer or False
 
         # local: from_pretrained(local_model_path or model) — HF repo id or disk path
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
-            "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s",
+            "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s max_context_tokens=%s",
             mode,
             _resolved or "(empty)",
             self.load_dtype,
             self.load_quantization,
+            self.max_context_tokens,
         )
 
     def build_messages(self, question: str, context: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -493,9 +498,41 @@ class FinalLLMClient:
                 )
             return text
 
+    def _get_limit_tokenizer(self):
+        if self._tok_limit is False:
+            return None
+        if self._tok_limit is not None:
+            return self._tok_limit
+        pid = self._local_pretrained_id()
+        if not pid:
+            self._tok_limit = False
+            return None
+        try:
+            from transformers import AutoTokenizer
+
+            self._tok_limit = AutoTokenizer.from_pretrained(pid, trust_remote_code=True)
+            return self._tok_limit
+        except Exception as e:
+            logger.warning("Tokenizer for max_context_tokens unavailable: %s", e)
+            self._tok_limit = False
+            return None
+
     def generate(self, question: str, context: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
         """Generate answer. Returns (answer, error)."""
-        messages = self.build_messages(question, context)
+        ctx: List[Dict[str, str]] = list(context)
+        if self.max_context_tokens > 0 and self.mode != "stub":
+            tok = self._get_limit_tokenizer()
+            if tok is not None:
+                from dst_memory.clients.context_limit import truncate_baseline_dialogue_turns
+
+                ctx = truncate_baseline_dialogue_turns(
+                    question,
+                    ctx,
+                    self.build_messages,
+                    tok,
+                    self.max_context_tokens,
+                )
+        messages = self.build_messages(question, ctx)
 
         if self.mode == "stub":
             return f"[STUB] Answer to: {question[:50]}...", None
@@ -555,6 +592,7 @@ class FinalLLMClient:
                     enable_thinking=False,
                     load_quantization=self.load_quantization,
                 )
+                self._tok_limit = self._hf_serving.tokenizer
 
             gen_cfg = GenerationConfig(
                 max_new_tokens=int(self.max_tokens),
@@ -1057,6 +1095,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         local_model_path=final_llm_cfg.get("local_model_path", ""),
         load_dtype=final_llm_cfg.get("load_dtype", "float16"),
         load_quantization=final_llm_cfg.get("load_quantization", "none"),
+        max_context_tokens=int(final_llm_cfg.get("max_context_tokens", 131072)),
     )
 
     judge = JudgeClient(

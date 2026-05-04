@@ -67,6 +67,8 @@ class PipelineConfig:
     llm_load_dtype: str = "float16"
     # When llm_mode == "local": none | 8bit | 4bit (BitsAndBytes; reduces VRAM).
     llm_load_quantization: str = "none"
+    # Max prompt tokens (chat template) before generate; default 128k. Set 0 to disable clamp.
+    llm_max_context_tokens: int = 128 * 1024
     llm_max_tokens: int = 1024
     openrouter_http_referer: str = ""
     openrouter_x_title: str = ""

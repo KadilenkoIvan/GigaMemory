@@ -9,6 +9,10 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 from ..prompts.loader import normalize_prompt_language
+from .context_limit import (
+    DEFAULT_MAX_CONTEXT_TOKENS,
+    clamp_chat_messages_to_max_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +80,7 @@ class FinalLLMClient:
         load_dtype: str = "float16",
         enable_thinking: bool = True,
         load_quantization: str = "none",
+        max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -89,7 +94,9 @@ class FinalLLMClient:
         self.x_title = x_title or ""
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
+        self.max_context_tokens = int(max_context_tokens)
         self.enable_thinking = bool(enable_thinking)
+        self._tokenizer_limit: Any = None  # lazy AutoTokenizer, or False if unavailable
         self._prompt_lang = normalize_prompt_language(prompt_language)
         self._final_llm_prompts = importlib.import_module(
             f"dst_memory.prompts.{self._prompt_lang}.final_llm_messages"
@@ -100,13 +107,14 @@ class FinalLLMClient:
         self._local_serving: Any = None
         logger.info(
             "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s "
-            "load_dtype=%s load_quantization=%s enable_thinking=%s",
+            "load_dtype=%s load_quantization=%s max_context_tokens=%s enable_thinking=%s",
             self.mode,
             self.model or "(none)",
             temperature,
             self._prompt_lang,
             self.load_dtype,
             self.load_quantization,
+            self.max_context_tokens,
             self.enable_thinking,
         )
 
@@ -131,6 +139,30 @@ class FinalLLMClient:
                 torch.cuda.empty_cache()
         except ImportError:
             pass
+
+    def _tokenizer_for_prompt_limit(self):
+        """Tokenizer used only to measure/clamp prompt length (lighter than full model load)."""
+        if self._local_serving is not None and getattr(self._local_serving, "tokenizer", None):
+            return self._local_serving.tokenizer
+        if self._tokenizer_limit is False:
+            return None
+        if self._tokenizer_limit is not None:
+            return self._tokenizer_limit
+        if not (self.model or "").strip():
+            self._tokenizer_limit = False
+            return None
+        try:
+            from transformers import AutoTokenizer
+
+            self._tokenizer_limit = AutoTokenizer.from_pretrained(
+                self.model.strip(),
+                trust_remote_code=True,
+            )
+            return self._tokenizer_limit
+        except Exception as e:
+            logger.warning("Could not load tokenizer for max_context_tokens: %s", e)
+            self._tokenizer_limit = False
+            return None
 
     def build_messages(
         self,
@@ -172,6 +204,15 @@ class FinalLLMClient:
         messages = self.build_messages(
             question, memory_context, recent_pairs or [], clock_display=clock_display
         )
+        if self.mode != "stub" and self.max_context_tokens > 0:
+            tok = self._tokenizer_for_prompt_limit()
+            if tok is not None:
+                messages = clamp_chat_messages_to_max_tokens(
+                    tok,
+                    messages,
+                    self.max_context_tokens,
+                    enable_thinking=self.enable_thinking,
+                )
         self._last_prompt_messages = messages
 
         logger.info(

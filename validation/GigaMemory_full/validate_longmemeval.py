@@ -346,7 +346,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "importance_model_path", "importance_threshold", "retrieval_top_k",
         "graph_top_k_records", "recent_history_pairs", "disable_memory_gate",
         "memory_gate_use_stub", "memory_strategy", "llm_mode", "llm_model",
-        "llm_load_dtype", "llm_load_quantization", "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
+        "llm_load_dtype", "llm_load_quantization", "llm_max_context_tokens",
+        "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
         "openrouter_http_referer", "openrouter_x_title", "slot_use_stub",
         "slot_model_path", "slot_max_slots_per_message", "ragu_storage_path",
         "ragu_embedder_model", "ttl_mode", "ttl_semantic_dedup_enabled",
@@ -955,6 +956,7 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         llm_model=shared.get("llm_model", "openai/gpt-oss-120b:free"),
         llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
         llm_load_quantization=str(shared.get("llm_load_quantization", "none")),
+        llm_max_context_tokens=int(shared.get("llm_max_context_tokens", 128 * 1024)),
         llm_max_tokens=int(shared.get("llm_max_tokens", 1024)),
         llm_temperature=float(shared.get("llm_temperature", 0.0)),
         llm_enable_thinking=bool(shared.get("llm_enable_thinking", True)),
@@ -1045,6 +1047,7 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         load_dtype=cfg.llm_load_dtype,
         enable_thinking=getattr(cfg, "llm_enable_thinking", True),
         load_quantization=getattr(cfg, "llm_load_quantization", "none"),
+        max_context_tokens=getattr(cfg, "llm_max_context_tokens", 128 * 1024),
     )
     logger.info(
         "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
@@ -2623,6 +2626,8 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["llm_load_dtype"] = args.gm_llm_load_dtype
     if getattr(args, "gm_llm_load_quantization", None):
         overrides["llm_load_quantization"] = args.gm_llm_load_quantization
+    if getattr(args, "gm_llm_max_context_tokens", None) is not None:
+        overrides["llm_max_context_tokens"] = int(args.gm_llm_max_context_tokens)
 
     # RAGU settings
     if args.gm_ragu_storage_path:
@@ -2847,6 +2852,12 @@ Examples:
         default="",
         help="For llm_mode=local: none | 8bit | 4bit (BitsAndBytes; reduces VRAM)",
     )
+    gm_group.add_argument(
+        "--gm-llm-max-context-tokens",
+        type=int,
+        default=None,
+        help="Max final-LLM prompt tokens (default 131072 from config). 0 = disable truncation.",
+    )
 
     # RAGU settings
     gm_group.add_argument("--gm-ragu-storage-path", type=str, default="",
@@ -2935,6 +2946,10 @@ Examples:
         config.setdefault("giga_memory", {})
         if isinstance(config["giga_memory"], dict):
             config["giga_memory"]["llm_load_quantization"] = args.gm_llm_load_quantization
+    if getattr(args, "gm_llm_max_context_tokens", None) is not None:
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["llm_max_context_tokens"] = int(args.gm_llm_max_context_tokens)
 
     # Handle validation mode args (only explicit CLI overrides; first-parse defaults must not erase JSON)
     if args.validation_mode is not None:
