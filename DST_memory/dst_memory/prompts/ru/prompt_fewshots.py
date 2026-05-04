@@ -902,7 +902,8 @@ TRIPLET_SINGLE_PASS_BASE: List[Tuple[str, List[dict]]] = [
             {"slot": "СЕМЬЯ", "subject": "пользователь", "relation": "ребёнок", "object": "сын пользователя", "ttl": "inf"},
             {"slot": "СЕМЬЯ", "subject": "сын пользователя", "relation": "учится в", "object": "школа", "ttl": "1y"},
             {"slot": "РАБОТА", "subject": "пользователь", "relation": "специальность", "object": "инженер", "ttl": "1y"},
-            {"slot": "РАБОТА", "subject": "пользователь", "relation": "часто задерживается", "object": "на работе", "ttl": "1y"},
+            {"slot": "РАБОТА", "subject": "пользователь", "relation": "часто задерживается", "object": "работа", "ttl": "1y"},
+            {"slot": "РАСПИСАНИЕ", "subject": "пользователь", "relation": "часто задерживается", "object": "работа", "ttl": "1y"},
         ],
     ),
     (

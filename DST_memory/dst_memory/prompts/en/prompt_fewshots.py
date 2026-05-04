@@ -888,63 +888,75 @@ def triplet_per_slot_few_shot_messages(
 
 TRIPLET_SINGLE_PASS_BASE: List[Tuple[str, List[dict]]] = [
     (
-        "Married, son is in school, I work as an engineer",
+        "Recently my wife and I went for a walk before picking up our son from school. Glad I even made it after work. I work as an engineer, so I often stay late.",
         [
-            {"slot": "FAMILY", "subject": "user", "relation": "marital status", "object": "married", "ttl": "inf"},
-            {"slot": "FAMILY", "subject": "user", "relation": "has son", "object": "user's son", "ttl": "inf"},
+            {"slot": "FAMILY", "subject": "user", "relation": "married", "object": "user's wife", "ttl": "inf"},
+            {"slot": "FAMILY", "subject": "user", "relation": "child", "object": "user's son", "ttl": "inf"},
             {"slot": "FAMILY", "subject": "user's son", "relation": "studies at", "object": "school", "ttl": "1y"},
-            {"slot": "WORK", "subject": "user", "relation": "works as", "object": "engineer", "ttl": "1y"},
+            {"slot": "WORK", "subject": "user", "relation": "profession", "object": "engineer", "ttl": "1y"},
+            {"slot": "WORK", "subject": "user", "relation": "often stays late", "object": "work", "ttl": "1y"},
+            {"slot": "SCHEDULE", "subject": "user", "relation": "often stays late", "object": "work", "ttl": "1y"},
         ],
     ),
     (
-        "I have a cat Murzik, I don't eat sugar",
+        "Recently I took my cat Murzik for surgery because he has kidney problems. It only took 2 hours. While waiting, I went to a coffee shop, and they added sugar, but I can’t have it — I have diabetes.",
         [
             {"slot": "PETS", "subject": "user", "relation": "has cat", "object": "user's cat", "ttl": "inf"},
-            {"slot": "PETS", "subject": "user's cat", "relation": "name", "object": "murzik", "ttl": "inf"},
+            {"slot": "PETS", "subject": "user's cat", "relation": "name", "object": "Murzik", "ttl": "inf"},
+            {"slot": "PETS", "subject": "user's cat", "relation": "ill", "object": "kidney problems", "ttl": "inf"},
+            {"slot": "PETS", "subject": "user's cat", "relation": "had", "object": "surgery", "ttl": "1y"},
+            {"slot": "PETS", "subject": "surgery", "relation": "duration", "object": "2 hours", "ttl": "1y"},
             {"slot": "FOOD", "subject": "user", "relation": "avoids", "object": "sugar", "ttl": "inf"},
+            {"slot": "EVENTS", "subject": "user", "relation": "went to", "object": "coffee shop", "ttl": "1y"},
+            {"slot": "EVENTS", "subject": "coffee shop", "relation": "added", "object": "sugar", "ttl": "1y"},
         ],
     ),
     (
-        "Weather is great today",
+        "The weather is great today, sunny and bright.",
         [],
     ),
     (
-        "Moved to Yekaterinburg, mortgage at VTB",
+        "Recently I traveled to Yekaterinburg. I liked the city, but it’s small.",
         [
-            {"slot": "LOCATION", "subject": "user", "relation": "lives in", "object": "yekaterinburg", "ttl": "1y"},
-            {"slot": "FINANCE", "subject": "user", "relation": "mortgage at", "object": "vtb", "ttl": "1y"},
+            {"slot": "TRAVEL", "subject": "user", "relation": "trip", "object": "Yekaterinburg", "ttl": "1y"},
+            {"slot": "TRAVEL", "subject": "Yekaterinburg", "relation": "impression", "object": "liked it", "ttl": "1y"},
+            {"slot": "TRAVEL", "subject": "Yekaterinburg", "relation": "impression", "object": "small", "ttl": "1y"},
         ],
     ),
     (
-        "I run marathons and don't drink alcohol",
+        "I’m generally into a healthy lifestyle: I run marathons, practice yoga, and don’t drink alcohol.",
         [
-            {"slot": "SPORTS", "subject": "user", "relation": "does", "object": "marathons", "ttl": "6m"},
+            {"slot": "PREFERENCES", "subject": "user", "relation": "prefers", "object": "healthy lifestyle", "ttl": "6m"},
+            {"slot": "SPORTS", "subject": "user", "relation": "runs", "object": "marathons", "ttl": "6m"},
+            {"slot": "SPORTS", "subject": "user", "relation": "practices", "object": "yoga", "ttl": "6m"},
             {"slot": "HABITS", "subject": "user", "relation": "does not consume", "object": "alcohol", "ttl": "inf"},
         ],
     ),
     (
-        "Just got back from the bar, I'm a bit tipsy",
+        "Just got back from a bar, I’m a bit tipsy.",
         [
             {"slot": "EVENTS", "subject": "user", "relation": "returned from", "object": "bar", "ttl": "1d"},
             {"slot": "EVENTS", "subject": "user", "relation": "state", "object": "tipsy", "ttl": "1d"},
         ],
     ),
     (
-        "Caught a cold, staying home with temperature 37.8",
+        "Caught a cold, sitting at home with a temperature of 37.8. I wanted to go to my dacha in Lebedevka, I’ve been meaning to fix the roof for a while.",
         [
-            {"slot": "HEALTH", "subject": "user", "relation": "sick with", "object": "cold", "ttl": "10d"},
+            {"slot": "HEALTH", "subject": "user", "relation": "ill", "object": "cold", "ttl": "10d"},
             {"slot": "HEALTH", "subject": "user", "relation": "temperature", "object": "37.8", "ttl": "3d"},
+            {"slot": "HOME", "subject": "user", "relation": "has", "object": "user's dacha", "ttl": "inf"},
+            {"slot": "HOME", "subject": "user's dacha", "relation": "location", "object": "Lebedevka", "ttl": "inf"},
+            {"slot": "GOALS", "subject": "user", "relation": "wanted", "object": "fix the roof", "ttl": "inf"},
         ],
     ),
     (
-        "Always wanted to learn guitar since I was a kid",
+        "I’ve always wanted to learn to play the guitar, since childhood.",
         [
-            {"slot": "GOALS", "subject": "user", "relation": "longtime dream", "object": "learn guitar", "ttl": "inf"},
+            {"slot": "GOALS", "subject": "user", "relation": "lifelong dream", "object": "learn to play the guitar", "ttl": "inf"},
         ],
     ),
     (
-        "Before my shift job I went hunting with my dad every weekend, then for almost two years we couldn't, "
-        "but this spring we started again",
+        "Before working shifts, I used to go hunting with my father every weekend. Then for almost two years I couldn’t, but this spring we started going again.",
         [
             {"slot": "HOBBIES", "subject": "user", "relation": "used to do", "object": "hunting", "ttl": "inf"},
             {"slot": "HOBBIES", "subject": "user", "relation": "enjoys", "object": "hunting", "ttl": "6m"},
