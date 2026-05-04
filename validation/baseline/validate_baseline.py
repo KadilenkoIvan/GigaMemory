@@ -11,6 +11,7 @@ Features:
 - Judge scoring 0-1 scale with detailed criteria
 - Per-question-type metrics
 - Balanced sampling across question types
+- Несколько вопросов на строку: непустой список ``questions`` (как в validate_longmemeval)
 
 Usage:
     python validate_baseline.py --config ./run_config.json
@@ -292,6 +293,42 @@ def load_dataset_balanced(dataset_path: str, question_types: List[str],
     return result
 
 
+def normalize_question_specs(item: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Список вопросов для одной строки датасета (как в validate_longmemeval).
+
+    Если ``questions`` — непустой список dict, у каждого ожидаются ``question_id``,
+    ``question`` и ``answer`` или ``reference_answer``. Поле ``question_type`` в
+    элементе при наличии переопределяет тип строки для judge. Иначе используются
+    поля строки ``question_id`` / ``question`` / ``answer`` / ``question_type``.
+    """
+    row_qt = str(item.get("question_type", "") or "")
+    raw = item.get("questions")
+    if isinstance(raw, list) and len(raw) > 0:
+        specs: List[Dict[str, str]] = []
+        for i, q in enumerate(raw):
+            if not isinstance(q, dict):
+                continue
+            qid = str(q.get("question_id", "") or "").strip() or f"q_{i}"
+            qtext = str(q.get("question", "") or "")
+            ref = q.get("answer", q.get("reference_answer", ""))
+            sub_qt = str(q.get("question_type", "") or "").strip() or row_qt
+            specs.append({
+                "question_id": qid,
+                "question": qtext,
+                "reference_answer": str(ref if ref is not None else ""),
+                "question_type": sub_qt,
+            })
+        if specs:
+            return specs
+    return [{
+        "question_id": str(item.get("question_id", "") or ""),
+        "question": str(item.get("question", "") or ""),
+        "reference_answer": str(item.get("answer", "") or ""),
+        "question_type": row_qt,
+    }]
+
+
 def extract_context_full(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
     """Extract ALL user and assistant messages from sessions."""
     context = []
@@ -372,9 +409,11 @@ class FinalLLMClient:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.local_model_path = local_model_path
+        self.local_model_path = local_model_path or ""
 
-        logger.info("FinalLLM mode=%s model=%s", mode, model if mode != "local" else local_model_path)
+        # local: from_pretrained(local_model_path or model) — HF repo id or disk path
+        _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
+        logger.info("FinalLLM mode=%s pretrained=%s", mode, _resolved or "(empty)")
 
     def build_messages(self, question: str, context: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Build messages with full context (no truncation)."""
@@ -458,16 +497,26 @@ class FinalLLMClient:
 
         return "", f"Unknown mode: {self.mode}"
 
+    def _local_pretrained_id(self) -> str:
+        return (self.local_model_path or "").strip() or (self.model or "").strip()
+
     def _call_local(self, messages: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
             import torch
 
+            pretrained = self._local_pretrained_id()
+            if not pretrained:
+                return "", (
+                    "local mode: set final_llm.model (HF repo id) or final_llm.local_model_path "
+                    "(directory); both were empty"
+                )
+
             if not hasattr(self, '_model'):
-                logger.info("Loading local model: %s", self.local_model_path)
-                tokenizer = AutoTokenizer.from_pretrained(self.local_model_path)
+                logger.info("Loading local final LLM: %s", pretrained)
+                tokenizer = AutoTokenizer.from_pretrained(pretrained)
                 model = AutoModelForCausalLM.from_pretrained(
-                    self.local_model_path,
+                    pretrained,
                     torch_dtype=torch.float16,
                     device_map="auto",
                 )
@@ -510,6 +559,13 @@ class JudgeClient:
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.local_model_path = local_model_path or ""
+
+        _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
+        logger.info("Judge mode=%s pretrained=%s", mode, _resolved or "(empty)")
+
+    def _local_pretrained_id(self) -> str:
+        return (self.local_model_path or "").strip() or (self.model or "").strip()
 
     def _get_system_prompt(self, question_type: str) -> str:
         """Get system prompt with scoring criteria."""
@@ -584,6 +640,56 @@ Respond ONLY with JSON:
                 "reasoning": str(result.get("reasoning", "No reasoning")),
             }
 
+    def _call_judge_local(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
+
+        pretrained = self._local_pretrained_id()
+        if not pretrained:
+            raise RuntimeError(
+                "local mode: set judge.model (HF repo id) or judge.local_model_path; both were empty"
+            )
+
+        if not hasattr(self, "_judge_model"):
+            logger.info("Loading local judge model: %s", pretrained)
+            self._judge_tokenizer = AutoTokenizer.from_pretrained(pretrained)
+            self._judge_model = AutoModelForCausalLM.from_pretrained(
+                pretrained,
+                torch_dtype=torch.float16,
+                device_map="auto",
+            )
+
+        tok = self._judge_tokenizer
+        mdl = self._judge_model
+        prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = tok(prompt, return_tensors="pt").to(mdl.device)
+
+        with torch.no_grad():
+            outputs = mdl.generate(
+                **inputs,
+                max_new_tokens=self.max_tokens,
+                temperature=self.temperature,
+            )
+
+        content = tok.decode(
+            outputs[0][inputs["input_ids"].shape[1] :],
+            skip_special_tokens=True,
+        ).strip()
+        if not content:
+            raise RuntimeError("Judge (local) returned empty text")
+
+        json_str = content
+        if "```json" in content:
+            json_str = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            json_str = content.split("```")[1].split("```")[0].strip()
+
+        result = json.loads(json_str)
+        return {
+            "score": float(result.get("score", 0)),
+            "reasoning": str(result.get("reasoning", "No reasoning")),
+        }
+
     def evaluate(self, question: str, predicted: str, reference: str,
                  question_type: str) -> Tuple[float, str, Optional[str]]:
         """
@@ -610,7 +716,10 @@ Respond ONLY with JSON:
         ]
 
         try:
-            result = self._call_judge_api(messages)
+            if self.mode == "local":
+                result = self._call_judge_local(messages)
+            else:
+                result = self._call_judge_api(messages)
             return result["score"], result["reasoning"], None
         except Exception as e:
             logger.error("Judge failed after retries: %s", e)
@@ -631,7 +740,10 @@ def _atomic_write_validation_json(path: Path, payload: Dict[str, Any]) -> None:
 
 @dataclass
 class AccumulatedItem:
+    """Один прогон final LLM + judge; при нескольких вопросах в строке их несколько."""
     global_index: int
+    dialogue_row_index: int
+    question_sub_index: int
     question_id: str
     question: str
     reference_answer: str
@@ -671,16 +783,26 @@ class BatchProcessor:
                         for qt in QUESTION_TYPES.keys()},
         }
 
-    def add_item(self, item: Dict[str, Any], global_idx: int,
-                 context: List[Dict[str, str]], num_messages: int) -> None:
+    def add_item(
+        self,
+        item: Dict[str, Any],
+        global_idx: int,
+        context: List[Dict[str, str]],
+        num_messages: int,
+        *,
+        dialogue_row_index: int,
+        question_sub_index: int,
+    ) -> None:
         start_time = time.time()
 
         acc = AccumulatedItem(
             global_index=global_idx,
-            question_id=item.get("question_id", ""),
-            question=item.get("question", ""),
-            reference_answer=item.get("answer", ""),
-            question_type=item.get("question_type", ""),
+            dialogue_row_index=dialogue_row_index,
+            question_sub_index=question_sub_index,
+            question_id=str(item.get("question_id", "") or ""),
+            question=str(item.get("question", "") or ""),
+            reference_answer=str(item.get("answer", "") or ""),
+            question_type=str(item.get("question_type", "") or ""),
             context=context,
             num_messages=num_messages,
         )
@@ -739,6 +861,8 @@ class BatchProcessor:
 
             self.results.append({
                 "global_index": item.global_index,
+                "dialogue_row_index": item.dialogue_row_index,
+                "question_sub_index": item.question_sub_index,
                 "question_id": item.question_id,
                 "question": item.question,
                 "reference_answer": item.reference_answer,
@@ -876,6 +1000,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         api_key=judge_cfg.get("api_key", ""),
         temperature=judge_cfg.get("temperature", 0.0),
         max_tokens=judge_cfg.get("max_tokens", 1024),
+        local_model_path=judge_cfg.get("local_model_path", ""),
     )
 
     # Initialize processor
@@ -896,22 +1021,41 @@ def run_validation(config: Dict[str, Any]) -> None:
         else extract_context_recent_10_plus_user
     )
 
-    # Process items
+    # Process items (one row may yield several questions via ``questions``[])
+    eval_seq = 0
     for idx, item in enumerate(dataset):
-        global_idx = idx  # In balanced loading, global index is sequential
         sessions = item.get("haystack_sessions", [])
         num_messages = sum(len(s) for s in sessions)
+        specs = normalize_question_specs(item)
 
         logger.info("-" * 70)
-        logger.info("Processing item %d/%d (global: %d)", idx + 1, len(dataset), global_idx)
+        logger.info("Processing row %d/%d (%d question(s))", idx + 1, len(dataset), len(specs))
         logger.info("Question type: %s", item.get("question_type", "unknown"))
-        logger.info("Question: %s", item.get("question", ""))
+        if len(specs) == 1:
+            logger.info("Question: %s", specs[0].get("question", ""))
+        else:
+            for si, sp in enumerate(specs):
+                logger.info("  [%d] id=%s q=%s", si, sp.get("question_id", ""), sp.get("question", "")[:120])
 
         context = extract_fn(sessions)
         logger.info("Extracted %d context turns from %d messages",
                     len(context), num_messages)
 
-        processor.add_item(item, global_idx, context, num_messages)
+        for sub_i, spec in enumerate(specs):
+            row_item = dict(item)
+            row_item["question_id"] = spec["question_id"]
+            row_item["question"] = spec["question"]
+            row_item["answer"] = spec["reference_answer"]
+            row_item["question_type"] = spec.get("question_type", item.get("question_type", ""))
+            processor.add_item(
+                row_item,
+                eval_seq,
+                context,
+                num_messages,
+                dialogue_row_index=idx,
+                question_sub_index=sub_i,
+            )
+            eval_seq += 1
 
     # Finalize
     timing.end_total()
