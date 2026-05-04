@@ -10,10 +10,10 @@
   },
 
   "shared": {
-    "dataset_path": "test_data/minimal_test.json",
-    "output_dir": "pipeline_test_runs/stage1_memory",
-    "num_items_per_type": 10,
-    "question_types": ["single-session-user", "knowledge-update"],
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
+    "output_dir": "./pipeline_test_runs/stage1_memory",
+    "num_items_per_type": 1,
+    "question_types": ["single-session-user"],
     "log_level": "INFO",
     "log_file": true,
     "save_memory_state": true,
@@ -32,13 +32,13 @@
     "api_url": "https://openrouter.ai/api/v1",
     "api_key": "",
     "temperature": 0.0,
-    "max_tokens": 1024,
+    "max_tokens": 4096,
     "local_model_path": "",
     "unload_between_items": false
   },
 
   "giga_memory": {
-    "importance_model_path": "",
+    "importance_model_path": "../../message_important_learning/best_model",
     "importance_threshold": 0.25,
     "retrieval_top_k": 5,
     "graph_top_k_records": 20,
@@ -52,9 +52,9 @@
     "llm_model": "",
     "llm_load_dtype": "float16",
     "llm_temperature": 0.0,
-    "llm_max_tokens": 512,
+    "llm_max_tokens": 2048,
     "slot_use_stub": false,
-    "slot_model_path": "DST_memory/models/Meno-Lite-0.1",
+    "slot_model_path": "../../DST_memory/models/Meno-Lite-0.1",
     "slot_max_slots_per_message": 5,
     "use_ragu": true,
     "ragu_embedder_model": "deepvk/USER-bge-m3",
@@ -71,7 +71,7 @@
     "slot_model_enable_thinking": false,
     "slot_fallback_on_no_slots": true,
     "triplet_fallback_on_empty": true,
-    "prompt_language": "ru",
+    "prompt_language": "en",
     "unload_models_before_final_llm": true
   },
 

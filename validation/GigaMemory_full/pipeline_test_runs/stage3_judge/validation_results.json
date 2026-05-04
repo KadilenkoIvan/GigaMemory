@@ -1,0 +1,111 @@
+{
+  "metadata": {
+    "validation_mode": "judge_only",
+    "dataset_path": "test_data/minimal_test.json",
+    "num_items_per_type": 10,
+    "question_types": [
+      "single-session-user",
+      "knowledge-update"
+    ],
+    "final_llm_batch_size": 10,
+    "judge_batch_size": 10,
+    "calculate_memory_hit_rate": true,
+    "judge_mode": "local",
+    "judge_model": "Qwen/Qwen3.5-9B",
+    "config_path": "config_pipeline_testdata_stage3_judge.json",
+    "timestamp": "2026-05-04 12:59:16",
+    "input_state_dir": "./pipeline_test_runs/stage1_memory",
+    "input_answers_path": "./pipeline_test_runs/stage2_final_llm/intermediate_answers.json"
+  },
+  "statistics": {
+    "answer_evaluation": {
+      "total": 1,
+      "total_score": 1.0,
+      "average_score": 1.0,
+      "errors_judge": 0,
+      "by_type": {
+        "single-session-user": {
+          "count": 1,
+          "total_score": 1.0,
+          "errors": 0,
+          "average_score": 1.0
+        },
+        "single-session-preference": {
+          "count": 0,
+          "total_score": 0.0,
+          "errors": 0,
+          "average_score": 0.0
+        },
+        "multi-session": {
+          "count": 0,
+          "total_score": 0.0,
+          "errors": 0,
+          "average_score": 0.0
+        },
+        "knowledge-update": {
+          "count": 0,
+          "total_score": 0.0,
+          "errors": 0,
+          "average_score": 0.0
+        }
+      }
+    },
+    "memory_hit_evaluation": {
+      "enabled": true,
+      "total": 1,
+      "hits": 1,
+      "misses": 0,
+      "hit_rate": 1.0,
+      "by_type": {
+        "single-session-user": {
+          "count": 1,
+          "hits": 1,
+          "misses": 0,
+          "hit_rate": 1.0
+        },
+        "single-session-preference": {
+          "count": 0,
+          "hits": 0,
+          "misses": 0
+        },
+        "multi-session": {
+          "count": 0,
+          "hits": 0,
+          "misses": 0
+        },
+        "knowledge-update": {
+          "count": 0,
+          "hits": 0,
+          "misses": 0
+        }
+      }
+    }
+  },
+  "timing": {
+    "total_time": 0.0011165142059326172,
+    "total_items": 0,
+    "total_messages": 0,
+    "total_user_message_writes": 0
+  },
+  "results": [
+    {
+      "global_index": 0,
+      "question_id": "e47becba",
+      "question": "What degree did I graduate with?",
+      "reference_answer": "Business Administration",
+      "predicted_answer": "You graduated with a degree in Business Administration.",
+      "question_type": "single-session-user",
+      "score": 1.0,
+      "reasoning": "The predicted answer perfectly matches the reference answer, correctly identifying the degree as Business Administration.",
+      "judge_error": null,
+      "memory_hit_evaluation": {
+        "fact_present": true,
+        "reasoning": "The memory context explicitly contains a record in the EDUCATION slot stating that the user graduated with a degree in 'business administration'.",
+        "location": "EDUCATION slot, record_id 126"
+      },
+      "memory_hit": true,
+      "_validation_dataset_ordinal": 0,
+      "_validation_dialogue_row_index": 0
+    }
+  ]
+}

@@ -1,29 +1,28 @@
 {
-  "_description": "Stage 2/3: final_llm_only — локальная финальная LLM Qwen2.5-7B-Instruct (FP16), читает stage1_memory.",
+  "_description": "Stage 1/3: memory_only on test_data/minimal_test.json (incl. multi-question row). Run from directory validation/GigaMemory_full.",
   "_pipeline": {
-    "prev_output": "pipeline_test_runs/stage1_memory",
-    "next_config": "config_pipeline_testdata_stage3_judge.json",
+    "next_config": "config_pipeline_testdata_stage2_final_llm.json",
     "notes": [
-      "Один state на каждый вопрос; multi-question → несколько state с одним chunk_*.",
-      "final_llm_batch_size=1: перед генерацией выгружаются слот-модели (unload_models_before_final_llm).",
-      "На удалённой машине: HF_HOME / кэш моделей, CUDA_VISIBLE_DEVICES, достаточно VRAM под 7B FP16."
+      "memory_strategy applies ONLY here — it shapes memory_context saved into memory_only_states.json.",
+      "After changing memory_strategy (or graph_top_k_records, retrieval_top_k), re-run stage 1, then 2, then 3.",
+      "minimal_test.json: 2 dataset rows → 3 evaluation questions (2 + 1)."
     ]
   },
 
   "shared": {
     "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
-    "output_dir": "pipeline_test_runs/stage2_final_llm",
-    "num_items_per_type": 10,
-    "question_types": ["single-session-user", "single-session-preference", "multi-session", "knowledge-update"],
+    "output_dir": "./pipeline_test_runs/stage1_memory",
+    "num_items_per_type": 1,
+    "question_types": ["single-session-user"],
     "log_level": "INFO",
     "log_file": true,
-    "save_memory_state": false,
+    "save_memory_state": true,
     "save_intermediate": true
   },
 
   "batch_processing": {
-    "final_llm_batch_size": 10,
-    "judge_batch_size": 10,
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1,
     "calculate_memory_hit_rate": false
   },
 
@@ -43,17 +42,17 @@
     "importance_threshold": 0.25,
     "retrieval_top_k": 5,
     "graph_top_k_records": 20,
-    "recent_history_pairs": 5,
+    "recent_history_pairs": 10,
     "disable_memory_gate": false,
     "memory_gate_use_stub": false,
     "memory_strategy": "relevant_slots_full",
-    "llm_mode": "local",
+    "llm_mode": "stub",
     "llm_api_url": "",
     "llm_api_key": "",
-    "llm_model": "Qwen/Qwen2.5-7B-Instruct",
+    "llm_model": "",
     "llm_load_dtype": "float16",
     "llm_temperature": 0.0,
-    "llm_max_tokens": 4096,
+    "llm_max_tokens": 512,
     "slot_use_stub": false,
     "slot_model_path": "../../DST_memory/models/Meno-Lite-0.1",
     "slot_max_slots_per_message": 5,
@@ -65,7 +64,7 @@
     "ttl_semantic_dedup_threshold": 0.9,
     "ttl_slot_overrides": {},
     "slot_context_enabled": false,
-    "slot_context_max_facts": 10,
+    "slot_context_max_facts": 25,
     "triplet_deletion_mode": "none",
     "deletion_use_pymorphy": false,
     "conflict_allow_multi_relation_same_object": true,
@@ -73,12 +72,14 @@
     "slot_fallback_on_no_slots": true,
     "triplet_fallback_on_empty": true,
     "prompt_language": "en",
-    "unload_models_before_final_llm": true
+    "unload_models_before_final_llm": true,
+    "use_dataset_datetime": true,
+    "force_infinite_ttl": true
   },
 
   "validation_mode": {
-    "mode": "final_llm_only",
-    "input_state_dir": "./pipeline_test_runs/stage1_memory",
+    "mode": "memory_only",
+    "input_state_dir": "",
     "input_answers_path": ""
   }
 }

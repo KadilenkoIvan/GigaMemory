@@ -15,7 +15,7 @@
   },
 
   "shared": {
-    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
+    "dataset_path": "test_data/minimal_test.json",
     "output_dir": "pipeline_test_runs/stage3_judge",
     "num_items_per_type": 10,
     "question_types": ["single-session-user", "knowledge-update"],

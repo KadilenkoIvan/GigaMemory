@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "validation_mode": "full",
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
+    "num_items_per_type": 1,
+    "question_types": [
+      "single-session-user"
+    ],
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1,
+    "calculate_memory_hit_rate": true,
+    "judge_mode": "none",
+    "judge_model": "openai/gpt-oss-120b:free",
+    "config_path": "config_memory_only.json",
+    "timestamp": "2026-05-03 17:02:25"
+  },
+  "statistics": {
+    "total": 0,
+    "total_score": 0.0,
+    "errors_final_llm": 0,
+    "errors_judge": 0,
+    "memory_hit": 0,
+    "memory_miss": 0,
+    "by_type": {
+      "single-session-user": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      },
+      "single-session-preference": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      },
+      "multi-session": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      },
+      "knowledge-update": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      }
+    }
+  },
+  "timing": {
+    "total_time": 494.416437625885,
+    "total_items": 1,
+    "total_messages": 550,
+    "total_user_message_writes": 273,
+    "time_per_dialogue": {
+      "min": 440.6175181865692,
+      "max": 440.6175181865692,
+      "p50": 440.6175181865692,
+      "p95": 440.6175181865692,
+      "p99": 440.6175181865692,
+      "mean": 440.6175181865692
+    },
+    "time_per_item": {
+      "min": 440.6175181865692,
+      "max": 440.6175181865692,
+      "p50": 440.6175181865692,
+      "p95": 440.6175181865692,
+      "p99": 440.6175181865692,
+      "mean": 440.6175181865692
+    },
+    "time_per_user_message": {
+      "min": 0.010718107223510742,
+      "max": 13.042781352996826,
+      "p50": 0.016730546951293945,
+      "p95": 6.3060373783111565,
+      "p99": 8.705385179519613,
+      "mean": 1.6106017867287437
+    },
+    "time_per_message": {
+      "min": 0.8011227603392167,
+      "max": 0.8011227603392167,
+      "p50": 0.8011227603392167,
+      "p95": 0.8011227603392167,
+      "p99": 0.8011227603392167,
+      "mean": 0.8011227603392167
+    }
+  },
+  "results": []
+}

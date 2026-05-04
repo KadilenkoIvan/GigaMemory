@@ -1,0 +1,202 @@
+{
+  "metadata": {
+    "validation_mode": "full",
+    "dataset_path": "test_data/minimal_test.json",
+    "num_items_per_type": 10,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ],
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1,
+    "calculate_memory_hit_rate": true,
+    "judge_mode": "none",
+    "judge_model": "openai/gpt-oss-120b:free",
+    "config_path": "config_memory_only.json",
+    "timestamp": "2026-05-04 09:00:49"
+  },
+  "answers": [
+    {
+      "global_index": 0,
+      "question_id": "test_001a",
+      "question": "What is my dog's name?",
+      "reference_answer": "Max",
+      "question_type": "single-session-user",
+      "predicted_answer": "[error: llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY.]",
+      "memory_context": {
+        "slots": [
+          {
+            "slot": "PETS",
+            "slot_label": "PETS",
+            "messages": [
+              {
+                "record_id": 1,
+                "message_text": "user | has pet | dog",
+                "source_text": "I have a dog named Max. He is 3 years old.",
+                "subject": "user",
+                "relation": "has pet",
+                "object": "dog",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:47.117189"
+              },
+              {
+                "record_id": 2,
+                "message_text": "user's dog | name | max",
+                "source_text": "I have a dog named Max. He is 3 years old.",
+                "subject": "user's dog",
+                "relation": "name",
+                "object": "max",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:47.117401"
+              },
+              {
+                "record_id": 3,
+                "message_text": "user's dog | age | 3 years",
+                "source_text": "I have a dog named Max. He is 3 years old.",
+                "subject": "user's dog",
+                "relation": "age",
+                "object": "3 years",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:47.117467"
+              }
+            ]
+          }
+        ]
+      },
+      "memory_state_path": "",
+      "_validation_dataset_ordinal": 0,
+      "_validation_dialogue_row_index": 0
+    },
+    {
+      "global_index": 1,
+      "question_id": "test_001b",
+      "question": "How old is my dog?",
+      "reference_answer": "3",
+      "question_type": "single-session-user",
+      "predicted_answer": "[error: llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY.]",
+      "memory_context": {
+        "slots": [
+          {
+            "slot": "PETS",
+            "slot_label": "PETS",
+            "messages": [
+              {
+                "record_id": 1,
+                "message_text": "user | has pet | dog",
+                "source_text": "I have a dog named Max. He is 3 years old.",
+                "subject": "user",
+                "relation": "has pet",
+                "object": "dog",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:47.117189"
+              },
+              {
+                "record_id": 2,
+                "message_text": "user's dog | name | max",
+                "source_text": "I have a dog named Max. He is 3 years old.",
+                "subject": "user's dog",
+                "relation": "name",
+                "object": "max",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:47.117401"
+              },
+              {
+                "record_id": 3,
+                "message_text": "user's dog | age | 3 years",
+                "source_text": "I have a dog named Max. He is 3 years old.",
+                "subject": "user's dog",
+                "relation": "age",
+                "object": "3 years",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:47.117467"
+              }
+            ]
+          }
+        ]
+      },
+      "memory_state_path": "",
+      "_validation_dataset_ordinal": 0,
+      "_validation_dialogue_row_index": 0
+    },
+    {
+      "global_index": 2,
+      "question_id": "test_002",
+      "question": "Where do I work now?",
+      "reference_answer": "Google",
+      "question_type": "knowledge-update",
+      "predicted_answer": "[error: llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY.]",
+      "memory_context": {
+        "slots": [
+          {
+            "slot": "WORK",
+            "slot_label": "WORK",
+            "messages": [
+              {
+                "record_id": 2,
+                "message_text": "user | role | software engineer",
+                "source_text": "I work at Microsoft as a software engineer.",
+                "subject": "user",
+                "relation": "role",
+                "object": "software engineer",
+                "created_at_step": 1,
+                "updated_at_step": 1,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:01:54.327027"
+              },
+              {
+                "record_id": 3,
+                "message_text": "user | works at | google",
+                "source_text": "I got a new job at Google! I'm excited to start next month.",
+                "subject": "user",
+                "relation": "works at",
+                "object": "google",
+                "created_at_step": 3,
+                "updated_at_step": 3,
+                "is_active": true,
+                "ttl": "1y",
+                "created_at_datetime": "2026-05-04T09:02:00.771643"
+              },
+              {
+                "record_id": 4,
+                "message_text": "user | start date | next month",
+                "source_text": "I got a new job at Google! I'm excited to start next month.",
+                "subject": "user",
+                "relation": "start date",
+                "object": "next month",
+                "created_at_step": 3,
+                "updated_at_step": 3,
+                "is_active": true,
+                "ttl": "1d",
+                "created_at_datetime": "2026-05-04T09:02:00.772034"
+              }
+            ]
+          }
+        ]
+      },
+      "memory_state_path": "",
+      "_validation_dataset_ordinal": 1,
+      "_validation_dialogue_row_index": 1
+    }
+  ]
+}

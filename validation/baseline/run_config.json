@@ -3,11 +3,11 @@
   "_note": "Tests simple context-passing strategies against GigaMemory DST",
 
   "shared": {
-    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
-    "output_dir": "./results",
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
+    "output_dir": "./baseline_full-context_Qwen25-7b-instruct_10-per-categoru_new-dataset",
 
     "_comment": "Balanced sampling: N items per question type",
-    "num_items_per_type": 10,
+    "num_items_per_type": 100,
     "question_types": [
       "single-session-user",
       "single-session-preference",
@@ -26,32 +26,39 @@
       "recent_10_plus_user": "Pass last 10 user/assistant pairs + remaining user messages"
     },
 
-    "strategy": "full_context",
+    "strategy": "recent_10_plus_user",
 
-    "final_llm_batch_size": 1,
-    "judge_batch_size": 1
+    "final_llm_batch_size": 50,
+    "judge_batch_size": 50
   },
 
   "final_llm": {
     "_description": "Final LLM configuration (must match GigaMemory for fair comparison)",
 
-    "mode": "openrouter",
-    "model": "openai/gpt-oss-120b:free",
-    "api_url": "https://openrouter.ai/api/v1",
+    "mode": "local",
+    "model": "Qwen/Qwen3.5-9B",
+    "api_url": "",
     "api_key": "",
     "temperature": 0.0,
     "max_tokens": 1024,
-    "local_model_path": ""
+    "local_model_path": "",
+    "load_dtype": "float16",    
+    "load_quantization": "4bit",
+    "max_context_tokens": 8000,
+    "attn_implementation": "sdpa",
+    "use_sliding_window": true,
+    "sliding_window": 4096
   },
 
   "judge": {
     "_description": "LLM-as-Judge with 0-1 scoring scale",
 
-    "mode": "openrouter",
-    "model": "openai/gpt-oss-120b:free",
-    "api_url": "https://openrouter.ai/api/v1",
+    "mode": "local",
+    "model": "Skywork/Skywork-Critic-Llama-3.1-8B",
+    "api_url": "",
     "api_key": "",
     "temperature": 0.0,
-    "max_tokens": 1024
+    "max_tokens": 4096,
+    "load_dtype": "float16"
   }
 }
