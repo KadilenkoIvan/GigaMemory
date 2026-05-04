@@ -10,6 +10,8 @@ from ..slots.slot_model_path import resolve_slot_model_path
 
 logger = logging.getLogger(__name__)
 
+def _patched_update_causal_mask(self, attention_mask, *args, **kwargs):
+    return None
 
 def _normalize_attn_implementation(raw: Optional[str]) -> str:
     """HF ``attn_implementation`` for ``AutoModelForCausalLM.from_pretrained`` (e.g. eager, sdpa, flash_attention_2)."""
@@ -141,7 +143,13 @@ class LocalHFServing:
                 torch_dtype=torch_dtype,
                 attn_implementation=self._attn,
             ).to(self.device)
+            
         self.model.eval()
+        import types
+        self.model._update_causal_mask = types.MethodType(
+            _patched_update_causal_mask, self.model
+        )
+        
         try:
             first_param = next(self.model.parameters())
             model_device = first_param.device
