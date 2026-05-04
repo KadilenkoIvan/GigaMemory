@@ -62,7 +62,19 @@ def build_pipeline(args: argparse.Namespace):
         slot_model_path=args.slot_model_path,
         slot_max_slots_per_message=args.slot_max_slots_per_message,
         llm_attn_implementation=str(getattr(args, "llm_attn_implementation", "eager")),
+        llm_use_sliding_window=str(getattr(args, "llm_use_sliding_window", "false")).lower() == "true",
+        llm_sliding_window=(
+            None
+            if getattr(args, "llm_sliding_window", None) is None
+            else int(args.llm_sliding_window)
+        ),
         slot_attn_implementation=str(getattr(args, "slot_attn_implementation", "eager")),
+        slot_use_sliding_window=str(getattr(args, "slot_use_sliding_window", "false")).lower() == "true",
+        slot_sliding_window=(
+            None
+            if getattr(args, "slot_sliding_window", None) is None
+            else int(args.slot_sliding_window)
+        ),
         use_ragu=True,
         ragu_embedder_model=getattr(args, "ragu_embedder_model", "deepvk/USER-bge-m3"),
         ragu_storage_path=getattr(args, "ragu_storage_path", ""),
@@ -163,6 +175,36 @@ def create_parser(
         type=str,
         default=str(s.get("slot_attn_implementation", "eager")),
         help="HF attn_implementation for local slot model",
+    )
+    parser.add_argument(
+        "--llm-use-sliding-window",
+        dest="llm_use_sliding_window",
+        type=str,
+        default="true" if bool(s.get("llm_use_sliding_window", False)) else "false",
+        choices=["true", "false"],
+        help="model.config.use_sliding_window for local final LLM (default false unless set in run_config)",
+    )
+    parser.add_argument(
+        "--llm-sliding-window",
+        dest="llm_sliding_window",
+        type=int,
+        default=(int(s["llm_sliding_window"]) if s.get("llm_sliding_window", None) is not None else None),
+        help="model.config.sliding_window for local final LLM (optional)",
+    )
+    parser.add_argument(
+        "--slot-use-sliding-window",
+        dest="slot_use_sliding_window",
+        type=str,
+        default="true" if bool(s.get("slot_use_sliding_window", False)) else "false",
+        choices=["true", "false"],
+        help="model.config.use_sliding_window for local slot model",
+    )
+    parser.add_argument(
+        "--slot-sliding-window",
+        dest="slot_sliding_window",
+        type=int,
+        default=(int(s["slot_sliding_window"]) if s.get("slot_sliding_window", None) is not None else None),
+        help="model.config.sliding_window for local slot model (optional)",
     )
     parser.add_argument("--openrouter-http-referer", dest="openrouter_http_referer", type=str, default=str(s.get("openrouter_http_referer", "")))
     parser.add_argument("--openrouter-x-title", dest="openrouter_x_title", type=str, default=str(s.get("openrouter_x_title", "")))

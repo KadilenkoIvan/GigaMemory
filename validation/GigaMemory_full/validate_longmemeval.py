@@ -253,6 +253,8 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "load_dtype": "float16",
             "load_quantization": "none",
             "attn_implementation": "eager",
+            "use_sliding_window": False,
+            "sliding_window": None,
             "unload_between_items": False,
         },
         "giga_memory": {},  # Will be merged with DST_memory defaults
@@ -327,6 +329,9 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_load_dtype = judge.get("load_dtype", "float16")
     args.judge_load_quantization = judge.get("load_quantization", "none")
     args.judge_attn_implementation = judge.get("attn_implementation", "eager")
+    args.judge_use_sliding_window = bool(judge.get("use_sliding_window", False))
+    _jw = judge.get("sliding_window", None)
+    args.judge_sliding_window = None if _jw is None else int(_jw)
     args.unload_judge_between_items = judge.get("unload_between_items", False)
     args.judge_enable_thinking = bool(judge.get("judge_enable_thinking", True))
 
@@ -349,7 +354,9 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "graph_top_k_records", "recent_history_pairs", "disable_memory_gate",
         "memory_gate_use_stub", "memory_strategy", "llm_mode", "llm_model",
         "llm_load_dtype", "llm_load_quantization", "llm_attn_implementation",
+        "llm_use_sliding_window", "llm_sliding_window",
         "llm_max_context_tokens", "slot_attn_implementation",
+        "slot_use_sliding_window", "slot_sliding_window",
         "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
         "openrouter_http_referer", "openrouter_x_title", "slot_use_stub",
         "slot_model_path", "slot_max_slots_per_message", "ragu_storage_path",
@@ -461,6 +468,8 @@ class JudgeClient:
         load_dtype: str = "float16",
         load_quantization: str = "none",
         attn_implementation: str = "eager",
+        use_sliding_window: bool = False,
+        sliding_window: Optional[int] = None,
     ):
         self.mode = mode
         self.model = model
@@ -473,17 +482,21 @@ class JudgeClient:
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
         self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
+        self.use_sliding_window = bool(use_sliding_window)
+        self.sliding_window = int(sliding_window) if sliding_window is not None else None
         self._local_serving = None
 
         logger.info(
             "JudgeClient initialized mode=%s model=%s enable_thinking=%s load_dtype=%s "
-            "load_quantization=%s attn_implementation=%s",
+            "load_quantization=%s attn_implementation=%s use_sliding_window=%s sliding_window=%s",
             mode,
             model if mode == "openrouter" else local_model_path,
             self.enable_thinking,
             self.load_dtype,
             self.load_quantization,
             self.attn_implementation,
+            self.use_sliding_window,
+            self.sliding_window,
         )
 
     def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
@@ -658,11 +671,14 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
                 )
             td = _torch_dtype_from_string(self.load_dtype)
             logger.info(
-                "Loading local judge model: %s torch_dtype=%s load_quantization=%s attn_implementation=%s",
+                "Loading local judge model: %s torch_dtype=%s load_quantization=%s attn_implementation=%s "
+                "use_sliding_window=%s sliding_window=%s",
                 resolved,
                 td,
                 self.load_quantization,
                 self.attn_implementation,
+                self.use_sliding_window,
+                self.sliding_window,
             )
             self._local_serving = LocalHFServing(
                 resolved,
@@ -670,6 +686,8 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
                 enable_thinking=self.enable_thinking,
                 load_quantization=self.load_quantization,
                 attn_implementation=self.attn_implementation,
+                use_sliding_window=self.use_sliding_window,
+                sliding_window=self.sliding_window,
             )
 
         messages = [
@@ -966,6 +984,12 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
         llm_load_quantization=str(shared.get("llm_load_quantization", "none")),
         llm_attn_implementation=str(shared.get("llm_attn_implementation", "eager")),
+        llm_use_sliding_window=bool(shared.get("llm_use_sliding_window", False)),
+        llm_sliding_window=(
+            None
+            if shared.get("llm_sliding_window", None) is None
+            else int(shared["llm_sliding_window"])
+        ),
         llm_max_context_tokens=int(shared.get("llm_max_context_tokens", 128 * 1024)),
         llm_max_tokens=int(shared.get("llm_max_tokens", 1024)),
         llm_temperature=float(shared.get("llm_temperature", 0.0)),
@@ -976,6 +1000,12 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         slot_model_path=shared.get("slot_model_path", "Qwen/Qwen3-0.6B"),
         slot_max_slots_per_message=int(shared.get("slot_max_slots_per_message", 5)),
         slot_attn_implementation=str(shared.get("slot_attn_implementation", "eager")),
+        slot_use_sliding_window=bool(shared.get("slot_use_sliding_window", False)),
+        slot_sliding_window=(
+            None
+            if shared.get("slot_sliding_window", None) is None
+            else int(shared["slot_sliding_window"])
+        ),
         use_ragu=True,
         ragu_embedder_model=shared.get("ragu_embedder_model", "deepvk/USER-bge-m3"),
         ragu_storage_path=shared.get("ragu_storage_path", ""),
@@ -1060,6 +1090,8 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         load_quantization=getattr(cfg, "llm_load_quantization", "none"),
         max_context_tokens=getattr(cfg, "llm_max_context_tokens", 128 * 1024),
         attn_implementation=getattr(cfg, "llm_attn_implementation", "eager"),
+        use_sliding_window=getattr(cfg, "llm_use_sliding_window", False),
+        sliding_window=getattr(cfg, "llm_sliding_window", None),
     )
     logger.info(
         "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
@@ -2439,6 +2471,8 @@ def run_validation(args: argparse.Namespace) -> None:
             load_dtype=getattr(args, "judge_load_dtype", "float16"),
             load_quantization=getattr(args, "judge_load_quantization", "none"),
             attn_implementation=getattr(args, "judge_attn_implementation", "eager"),
+            use_sliding_window=getattr(args, "judge_use_sliding_window", False),
+            sliding_window=getattr(args, "judge_sliding_window", None),
         )
 
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
@@ -2645,6 +2679,24 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["llm_attn_implementation"] = str(args.gm_llm_attn_implementation).strip()
     if getattr(args, "gm_slot_attn_implementation", None):
         overrides["slot_attn_implementation"] = str(args.gm_slot_attn_implementation).strip()
+
+    v_llm_sw = getattr(args, "gm_llm_use_sliding_window", None)
+    if v_llm_sw is not None and v_llm_sw != "":
+        if isinstance(v_llm_sw, bool):
+            overrides["llm_use_sliding_window"] = v_llm_sw
+        elif isinstance(v_llm_sw, str) and v_llm_sw.lower() in ("true", "false"):
+            overrides["llm_use_sliding_window"] = v_llm_sw.lower() == "true"
+    if getattr(args, "gm_llm_sliding_window", None) is not None:
+        overrides["llm_sliding_window"] = int(args.gm_llm_sliding_window)
+
+    v_slot_sw = getattr(args, "gm_slot_use_sliding_window", None)
+    if v_slot_sw is not None and v_slot_sw != "":
+        if isinstance(v_slot_sw, bool):
+            overrides["slot_use_sliding_window"] = v_slot_sw
+        elif isinstance(v_slot_sw, str) and v_slot_sw.lower() in ("true", "false"):
+            overrides["slot_use_sliding_window"] = v_slot_sw.lower() == "true"
+    if getattr(args, "gm_slot_sliding_window", None) is not None:
+        overrides["slot_sliding_window"] = int(args.gm_slot_sliding_window)
 
     # RAGU settings
     if args.gm_ragu_storage_path:
@@ -2887,6 +2939,32 @@ Examples:
         default="",
         help="For local slot model: HF attn_implementation (default eager)",
     )
+    gm_group.add_argument(
+        "--gm-llm-use-sliding-window",
+        type=str,
+        default="",
+        choices=["", "true", "false"],
+        help="model.config.use_sliding_window for final LLM (empty = use JSON/default false)",
+    )
+    gm_group.add_argument(
+        "--gm-llm-sliding-window",
+        type=int,
+        default=None,
+        help="model.config.sliding_window for final LLM (optional)",
+    )
+    gm_group.add_argument(
+        "--gm-slot-use-sliding-window",
+        type=str,
+        default="",
+        choices=["", "true", "false"],
+        help="model.config.use_sliding_window for slot model",
+    )
+    gm_group.add_argument(
+        "--gm-slot-sliding-window",
+        type=int,
+        default=None,
+        help="model.config.sliding_window for slot model (optional)",
+    )
 
     # RAGU settings
     gm_group.add_argument("--gm-ragu-storage-path", type=str, default="",
@@ -2991,6 +3069,25 @@ Examples:
             config["giga_memory"]["slot_attn_implementation"] = str(
                 args.gm_slot_attn_implementation
             ).strip()
+
+    _sw = getattr(args, "gm_llm_use_sliding_window", "")
+    if _sw in ("true", "false"):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["llm_use_sliding_window"] = _sw == "true"
+    if getattr(args, "gm_llm_sliding_window", None) is not None:
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["llm_sliding_window"] = int(args.gm_llm_sliding_window)
+    _ssw = getattr(args, "gm_slot_use_sliding_window", "")
+    if _ssw in ("true", "false"):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["slot_use_sliding_window"] = _ssw == "true"
+    if getattr(args, "gm_slot_sliding_window", None) is not None:
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["slot_sliding_window"] = int(args.gm_slot_sliding_window)
 
     # Handle validation mode args (only explicit CLI overrides; first-parse defaults must not erase JSON)
     if args.validation_mode is not None:

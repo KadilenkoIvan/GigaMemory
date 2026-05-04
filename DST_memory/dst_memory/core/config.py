@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
 # Default TTL values per slot (used for Mode 1 and as fallback in Mode 2/3).
@@ -71,6 +71,9 @@ class PipelineConfig:
     llm_max_context_tokens: int = 128 * 1024
     # HF attention implementation when llm_mode == "local": eager | sdpa | flash_attention_2 | ...
     llm_attn_implementation: str = "eager"
+    # Mistral-style sliding-window attention (model.config); default off.
+    llm_use_sliding_window: bool = False
+    llm_sliding_window: Optional[int] = None
     llm_max_tokens: int = 1024
     openrouter_http_referer: str = ""
     openrouter_x_title: str = ""
@@ -81,6 +84,8 @@ class PipelineConfig:
     slot_max_slots_per_message: int = 5
     # HF attention for local slot model (when slot_use_stub=False).
     slot_attn_implementation: str = "eager"
+    slot_use_sliding_window: bool = False
+    slot_sliding_window: Optional[int] = None
 
     # Финальная LLM temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0

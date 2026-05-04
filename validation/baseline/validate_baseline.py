@@ -234,6 +234,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "load_dtype": "float16",
             "load_quantization": "none",
             "attn_implementation": "eager",
+            "use_sliding_window": False,
+            "sliding_window": None,
             "max_context_tokens": 131072,
         },
         "judge": {
@@ -247,6 +249,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "load_dtype": "float16",
             "load_quantization": "none",
             "attn_implementation": "eager",
+            "use_sliding_window": False,
+            "sliding_window": None,
         },
     }
 
@@ -413,6 +417,8 @@ class FinalLLMClient:
         load_quantization: str = "none",
         max_context_tokens: int = 131072,
         attn_implementation: str = "eager",
+        use_sliding_window: bool = False,
+        sliding_window: Optional[int] = None,
     ):
         self.mode = mode
         self.api_url = api_url or "https://openrouter.ai/api/v1"
@@ -425,6 +431,8 @@ class FinalLLMClient:
         self.load_quantization = (load_quantization or "none").strip().lower()
         self.max_context_tokens = int(max_context_tokens)
         self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
+        self.use_sliding_window = bool(use_sliding_window)
+        self.sliding_window = int(sliding_window) if sliding_window is not None else None
         self._hf_serving = None
         self._tok_limit: Any = None  # AutoTokenizer or False
 
@@ -432,12 +440,14 @@ class FinalLLMClient:
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
             "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s "
-            "attn_implementation=%s max_context_tokens=%s",
+            "attn_implementation=%s use_sliding_window=%s sliding_window=%s max_context_tokens=%s",
             mode,
             _resolved or "(empty)",
             self.load_dtype,
             self.load_quantization,
             self.attn_implementation,
+            self.use_sliding_window,
+            self.sliding_window,
             self.max_context_tokens,
         )
 
@@ -598,6 +608,8 @@ class FinalLLMClient:
                     enable_thinking=False,
                     load_quantization=self.load_quantization,
                     attn_implementation=self.attn_implementation,
+                    use_sliding_window=self.use_sliding_window,
+                    sliding_window=self.sliding_window,
                 )
                 self._tok_limit = self._hf_serving.tokenizer
 
@@ -632,6 +644,8 @@ class JudgeClient:
         load_dtype: str = "float16",
         load_quantization: str = "none",
         attn_implementation: str = "eager",
+        use_sliding_window: bool = False,
+        sliding_window: Optional[int] = None,
     ):
         self.mode = mode
         self.model = model
@@ -643,16 +657,21 @@ class JudgeClient:
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
         self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
+        self.use_sliding_window = bool(use_sliding_window)
+        self.sliding_window = int(sliding_window) if sliding_window is not None else None
         self._hf_serving = None
 
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
-            "Judge mode=%s pretrained=%s load_dtype=%s load_quantization=%s attn_implementation=%s",
+            "Judge mode=%s pretrained=%s load_dtype=%s load_quantization=%s "
+            "attn_implementation=%s use_sliding_window=%s sliding_window=%s",
             mode,
             _resolved or "(empty)",
             self.load_dtype,
             self.load_quantization,
             self.attn_implementation,
+            self.use_sliding_window,
+            self.sliding_window,
         )
 
     def _local_pretrained_id(self) -> str:
@@ -762,11 +781,13 @@ Respond ONLY with JSON:
         if self._hf_serving is None:
             td = _torch_dtype_from_string(self.load_dtype)
             logger.info(
-                "Loading local judge model: %s dtype=%s quant=%s attn=%s",
+                "Loading local judge model: %s dtype=%s quant=%s attn=%s use_sliding_window=%s sliding_window=%s",
                 pretrained,
                 td,
                 self.load_quantization,
                 self.attn_implementation,
+                self.use_sliding_window,
+                self.sliding_window,
             )
             self._hf_serving = LocalHFServing(
                 pretrained,
@@ -774,6 +795,8 @@ Respond ONLY with JSON:
                 enable_thinking=False,
                 load_quantization=self.load_quantization,
                 attn_implementation=self.attn_implementation,
+                use_sliding_window=self.use_sliding_window,
+                sliding_window=self.sliding_window,
             )
 
         gen_cfg = GenerationConfig(
@@ -1114,6 +1137,12 @@ def run_validation(config: Dict[str, Any]) -> None:
         load_quantization=final_llm_cfg.get("load_quantization", "none"),
         max_context_tokens=int(final_llm_cfg.get("max_context_tokens", 131072)),
         attn_implementation=final_llm_cfg.get("attn_implementation", "eager"),
+        use_sliding_window=bool(final_llm_cfg.get("use_sliding_window", False)),
+        sliding_window=(
+            None
+            if final_llm_cfg.get("sliding_window", None) is None
+            else int(final_llm_cfg["sliding_window"])
+        ),
     )
 
     judge = JudgeClient(
@@ -1127,6 +1156,12 @@ def run_validation(config: Dict[str, Any]) -> None:
         load_dtype=judge_cfg.get("load_dtype", "float16"),
         load_quantization=judge_cfg.get("load_quantization", "none"),
         attn_implementation=judge_cfg.get("attn_implementation", "eager"),
+        use_sliding_window=bool(judge_cfg.get("use_sliding_window", False)),
+        sliding_window=(
+            None
+            if judge_cfg.get("sliding_window", None) is None
+            else int(judge_cfg["sliding_window"])
+        ),
     )
 
     # Initialize processor

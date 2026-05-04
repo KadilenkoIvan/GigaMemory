@@ -10,8 +10,6 @@ from ..slots.slot_model_path import resolve_slot_model_path
 
 logger = logging.getLogger(__name__)
 
-def _patched_update_causal_mask(self, attention_mask, *args, **kwargs):
-    return None
 
 def _normalize_attn_implementation(raw: Optional[str]) -> str:
     """HF ``attn_implementation`` for ``AutoModelForCausalLM.from_pretrained`` (e.g. eager, sdpa, flash_attention_2)."""
@@ -63,6 +61,26 @@ def _normalize_load_quantization(raw: Optional[str]) -> str:
     )
 
 
+def _apply_sliding_window_config(
+    model,
+    *,
+    use_sliding_window: bool,
+    sliding_window: Optional[int],
+) -> None:
+    """Set ``use_sliding_window`` / ``sliding_window`` on HF ``model.config`` (e.g. Mistral-style)."""
+    cfg = getattr(model, "config", None)
+    if cfg is None:
+        return
+    setattr(cfg, "use_sliding_window", bool(use_sliding_window))
+    if sliding_window is not None:
+        setattr(cfg, "sliding_window", int(sliding_window))
+    logger.info(
+        "model.config sliding window: use_sliding_window=%s sliding_window=%s",
+        getattr(cfg, "use_sliding_window", None),
+        getattr(cfg, "sliding_window", None),
+    )
+
+
 @dataclass
 class GenerationConfig:
     max_new_tokens: int = 300
@@ -94,20 +112,27 @@ class LocalHFServing:
         enable_thinking: bool = False,
         load_quantization: str = "none",
         attn_implementation: str = "eager",
+        use_sliding_window: bool = False,
+        sliding_window: Optional[int] = None,
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_thinking = enable_thinking
         self._quant = _normalize_load_quantization(load_quantization)
         self._attn = _normalize_attn_implementation(attn_implementation)
+        self._use_sliding_window = bool(use_sliding_window)
+        self._sliding_window = int(sliding_window) if sliding_window is not None else None
         resolved = resolve_slot_model_path(model_path_or_id)
         logger.info(
-            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s attn=%s enable_thinking=%s",
+            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s attn=%s "
+            "use_sliding_window=%s sliding_window=%s enable_thinking=%s",
             model_path_or_id,
             resolved,
             self.device,
             torch_dtype,
             self._quant,
             self._attn,
+            self._use_sliding_window,
+            self._sliding_window,
             enable_thinking,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
@@ -143,6 +168,12 @@ class LocalHFServing:
                 torch_dtype=torch_dtype,
                 attn_implementation=self._attn,
             ).to(self.device)
+
+        _apply_sliding_window_config(
+            self.model,
+            use_sliding_window=self._use_sliding_window,
+            sliding_window=self._sliding_window,
+        )
 
         self.model.eval()
 
