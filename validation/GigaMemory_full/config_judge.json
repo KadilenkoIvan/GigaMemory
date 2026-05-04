@@ -96,8 +96,10 @@
     "_description": "Judge-only mode configuration",
     "mode": "judge_only",
     "input_answers_path": "./results_final_llm/intermediate_answers.json",
+    "input_state_dir": "./results_memory_only",
     "_input_files": {
-      "intermediate_answers.json": "Required - contains answers from final_llm_only mode"
+      "intermediate_answers.json": "Required - contains answers from final_llm_only mode",
+      "input_state_dir": "Same directory as memory_only output — used only if memory_context is missing in answers (MHR); otherwise snapshot from intermediate_answers is used"
     },
     "_output_files": {
       "validation_results.json": "Final evaluation results with scores and Memory Hit Rate"

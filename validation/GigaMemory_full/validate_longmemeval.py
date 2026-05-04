@@ -337,7 +337,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "importance_model_path", "importance_threshold", "retrieval_top_k",
         "graph_top_k_records", "recent_history_pairs", "disable_memory_gate",
         "memory_gate_use_stub", "memory_strategy", "llm_mode", "llm_model",
-        "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
+        "llm_load_dtype", "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
         "openrouter_http_referer", "openrouter_x_title", "slot_use_stub",
         "slot_model_path", "slot_max_slots_per_message", "ragu_storage_path",
         "ragu_embedder_model", "ttl_mode", "ttl_semantic_dedup_enabled",
@@ -519,7 +519,7 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
         self, question: str, predicted_answer: str, reference_answer: str,
         question_type: str
     ) -> Tuple[float, str, Optional[str]]:
-        """Evaluate answer. Returns (score, reasoning, error). Score: 0.0 to 1.0"""
+        """One dedicated LLM call: predicted vs reference (correctness score 0..1). Not combined with memory_hit."""
         if not predicted_answer or not predicted_answer.strip():
             return 0.0, "Empty predicted answer", None
         if not reference_answer or not reference_answer.strip():
@@ -538,7 +538,7 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
     def evaluate_memory_hit(
         self, question: str, reference_answer: str, memory_context: Dict
     ) -> Dict[str, Any]:
-        """Evaluate if the needed fact was present in memory context."""
+        """One dedicated LLM call: whether reference fact appears in memory_context. Not combined with correctness."""
         if not reference_answer or not reference_answer.strip():
             return {"fact_present": False, "reasoning": "Empty reference answer"}
 
@@ -548,7 +548,14 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
         return self._call_judge(system_msg, user_msg, mode="memory_hit")
 
     def _call_judge(self, system_msg: str, user_msg: str, mode: str = "correctness") -> Dict[str, Any]:
-        """Call judge LLM (openrouter or local)."""
+        """Single chat completion: one metric per invocation (correctness OR memory_hit)."""
+        task = "answer_correctness" if mode == "correctness" else "memory_presence_in_context"
+        logger.info(
+            "[Judge] Separate LLM invocation: task=%s (mode=%s backend=%s)",
+            task,
+            mode,
+            self.mode,
+        )
         if self.mode == "openrouter":
             return self._call_openrouter(system_msg, user_msg, mode)
         elif self.mode == "local":
@@ -612,14 +619,19 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
             return self._error_result(mode, f"Parse error: {e}")
 
     def _call_local(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
-        """Call local model."""
-        from dst_memory.clients.serving import LocalHFServing
+        """Call local model (HF causal LM, FP16 weights by default)."""
+        import torch
+        from dst_memory.clients.serving import GenerationConfig, LocalHFServing
 
         if self._local_serving is None:
             if not self.local_model_path:
                 raise ValueError("local_model_path required for local judge mode")
-            logger.info("Loading local judge model: %s", self.local_model_path)
-            self._local_serving = LocalHFServing(self.local_model_path)
+            logger.info("Loading local judge model: %s (torch_dtype=float16)", self.local_model_path)
+            self._local_serving = LocalHFServing(
+                self.local_model_path,
+                torch_dtype=torch.float16,
+                enable_thinking=False,
+            )
 
         messages = [
             {"role": "system", "content": system_msg},
@@ -627,7 +639,12 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
         ]
 
         try:
-            response = self._local_serving.generate(messages, max_new_tokens=self.max_tokens)
+            gen_cfg = GenerationConfig(
+                max_new_tokens=int(self.max_tokens),
+                do_sample=float(self.temperature) > 0.0,
+                temperature=float(self.temperature) if float(self.temperature) > 0.0 else 1.0,
+            )
+            response = self._local_serving.generate_chat(messages, generation_config=gen_cfg)
             return self._parse_judge_response(response, mode)
         except Exception as e:
             logger.error("Local judge evaluation error: %s", e)
@@ -905,6 +922,7 @@ def build_pipeline_from_config(config_path: str, cli_overrides: Optional[Dict] =
         llm_api_url=shared.get("llm_api_url", "https://openrouter.ai/api/v1"),
         llm_api_key=shared.get("llm_api_key", ""),
         llm_model=shared.get("llm_model", "openai/gpt-oss-120b:free"),
+        llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
         llm_max_tokens=int(shared.get("llm_max_tokens", 1024)),
         llm_temperature=float(shared.get("llm_temperature", 0.0)),
         openrouter_http_referer=shared.get("openrouter_http_referer", ""),
@@ -1648,30 +1666,50 @@ class BatchProcessor:
         # Clear answer buffer
         self.answer_buffer.clear()
 
-    def _evaluate_single_answer(self, acc: AccumulatedAnswer, memory_state_path: str = ""):
-        """Evaluate a single answer with judge."""
-        # Evaluate answer correctness (0-1 score)
-        score, reasoning, judge_error = self.judge_client.evaluate_answer(
+    def _judge_one_answer_correctness(self, acc: AccumulatedAnswer) -> Tuple[float, str, Optional[str]]:
+        """Exactly one judge LLM call: score predicted answer vs reference."""
+        return self.judge_client.evaluate_answer(
             question=acc.question,
             predicted_answer=acc.predicted_answer,
             reference_answer=acc.reference_answer,
             question_type=acc.question_type,
         )
 
-        # Evaluate memory hit rate if requested
+    def _judge_one_memory_presence(
+        self,
+        acc: AccumulatedAnswer,
+        memory_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Exactly one judge LLM call: is reference fact present in memory_context (no predicted answer in prompt)."""
+        return self.judge_client.evaluate_memory_hit(
+            question=acc.question,
+            reference_answer=acc.reference_answer,
+            memory_context=memory_context,
+        )
+
+    def _evaluate_single_answer(self, acc: AccumulatedAnswer, memory_state_path: str = ""):
+        """Evaluate one item: answer correctness is always one LLM call; MHR is a second separate LLM call when enabled."""
+        n_calls = 2 if self.calculate_memory_hit_rate else 1
+        logger.info(
+            "[Judge] global_index=%d question_id=%s — LLM call 1/%d: answer correctness (predicted vs reference)",
+            acc.global_index,
+            acc.question_id,
+            n_calls,
+        )
+        score, reasoning, judge_error = self._judge_one_answer_correctness(acc)
+
         memory_hit_result = None
         if self.calculate_memory_hit_rate:
-            # For judge_only mode, we need to load memory context from saved state
             memory_context = acc.memory_context
             if memory_state_path and not memory_context:
-                # Try to load memory context from saved state
                 memory_context = self._load_memory_context_from_state(memory_state_path)
 
-            memory_hit_result = self.judge_client.evaluate_memory_hit(
-                question=acc.question,
-                reference_answer=acc.reference_answer,
-                memory_context=memory_context,
+            logger.info(
+                "[Judge] global_index=%d question_id=%s — LLM call 2/2: memory presence (reference fact in context; no predicted answer in prompt)",
+                acc.global_index,
+                acc.question_id,
             )
+            memory_hit_result = self._judge_one_memory_presence(acc, memory_context)
 
         # Build result
         result = {
@@ -1831,17 +1869,24 @@ class BatchProcessor:
 
             for ans_data in batch:
                 global_index = ans_data["global_index"]
-                
-                # Get memory context - prefer memory_states_map if available
-                memory_context = ans_data.get("memory_context", {})
+
+                # Prefer snapshot from intermediate_answers (exactly what final LLM saw).
+                # input_state_dir only fills gaps — avoids mismatched runs overwriting context.
+                memory_context = ans_data.get("memory_context") or {}
                 memory_state_path = ans_data.get("memory_state_path", "")
-                
-                # If input_state_dir provided, use memory from there
-                if global_index in memory_states_map:
-                    map_data = memory_states_map[global_index]
-                    memory_context = map_data.get("memory_context", memory_context)
-                    memory_state_path = map_data.get("memory_state_path", memory_state_path)
-                    logger.debug("[JudgeOnly] Using memory from input_state_dir for item %d", global_index)
+
+                if self.input_state_dir and self.calculate_memory_hit_rate:
+                    map_data = memory_states_map.get(global_index)
+                    if map_data:
+                        if not memory_context:
+                            memory_context = map_data.get("memory_context", {})
+                            logger.info(
+                                "[JudgeOnly] memory_context empty in answers; filled from "
+                                "input_state_dir for flat index %d",
+                                global_index,
+                            )
+                        if not memory_state_path:
+                            memory_state_path = map_data.get("memory_state_path", "") or memory_state_path
                 
                 acc = AccumulatedAnswer(
                     global_index=global_index,
@@ -1927,6 +1972,12 @@ class BatchProcessor:
             # Process all answers if not already processed
             if not self.results:
                 self._process_judge_only()
+            for qt in self.stats["by_type"]:
+                count = self.stats["by_type"][qt]["count"]
+                if count > 0:
+                    self.stats["by_type"][qt]["average_score"] = (
+                        self.stats["by_type"][qt]["total_score"] / count
+                    )
             logger.info("[JudgeOnly] Evaluated %d answers", len(self.results))
             return self.results, self.stats
 
@@ -2013,6 +2064,8 @@ def run_validation(args: argparse.Namespace) -> None:
         "judge_model": args.judge_model,
         "config_path": args.config,
         "timestamp": run_timestamp,
+        "input_state_dir": args.input_state_dir or "",
+        "input_answers_path": args.input_answers_path or "",
     }
 
     # Initialize persistence
@@ -2036,6 +2089,10 @@ def run_validation(args: argparse.Namespace) -> None:
     if args.validation_mode in ("full", "memory_only", "final_llm_only"):
         cli_overrides = build_cli_overrides(args)
         pipeline = build_pipeline_from_config(args.config, cli_overrides)
+        validation_metadata["giga_memory_memory_strategy"] = getattr(
+            pipeline.config, "memory_strategy", ""
+        )
+        validation_metadata["giga_memory_llm_mode"] = getattr(pipeline.config, "llm_mode", "")
 
     # Initialize batch processor
     batch_processor = BatchProcessor(
@@ -2205,6 +2262,8 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["llm_model"] = args.gm_llm_model
     if args.gm_llm_api_key:
         overrides["llm_api_key"] = args.gm_llm_api_key
+    if args.gm_llm_load_dtype:
+        overrides["llm_load_dtype"] = args.gm_llm_load_dtype
 
     # RAGU settings
     if args.gm_ragu_storage_path:
@@ -2407,6 +2466,12 @@ Examples:
                           help="Final LLM model name")
     gm_group.add_argument("--gm-llm-api-key", type=str, default="",
                           help="Final LLM API key")
+    gm_group.add_argument(
+        "--gm-llm-load-dtype",
+        type=str,
+        default="",
+        help="For llm_mode=local: HF load dtype (float16 default in config, or bfloat16 / float32)",
+    )
 
     # RAGU settings
     gm_group.add_argument("--gm-ragu-storage-path", type=str, default="",

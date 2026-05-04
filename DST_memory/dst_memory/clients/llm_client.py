@@ -49,6 +49,18 @@ def _normalize_assistant_message_text(message: Any) -> str:
     return ""
 
 
+def _torch_dtype_from_string(name: str):
+    """Map config string to torch.dtype for local HF loading."""
+    import torch
+
+    n = (name or "float16").lower().strip()
+    if n in ("float16", "fp16", "half"):
+        return torch.float16
+    if n in ("bfloat16", "bf16"):
+        return torch.bfloat16
+    return torch.float32
+
+
 class FinalLLMClient:
     def __init__(
         self,
@@ -61,6 +73,7 @@ class FinalLLMClient:
         http_referer: str = "",
         x_title: str = "",
         prompt_language: str = "ru",
+        load_dtype: str = "float16",
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -72,6 +85,7 @@ class FinalLLMClient:
         self.max_tokens = max_tokens
         self.http_referer = http_referer or ""
         self.x_title = x_title or ""
+        self.load_dtype = load_dtype or "float16"
         self._prompt_lang = normalize_prompt_language(prompt_language)
         self._final_llm_prompts = importlib.import_module(
             f"dst_memory.prompts.{self._prompt_lang}.final_llm_messages"
@@ -79,13 +93,32 @@ class FinalLLMClient:
         # Last sent messages (system + user) — populated on every generate() call.
         # Used for logging to *_logs.json.
         self._last_prompt_messages: List[Dict[str, str]] = []
+        self._local_serving: Any = None
         logger.info(
-            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s",
+            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s load_dtype=%s",
             self.mode,
             self.model or "(none)",
             temperature,
             self._prompt_lang,
+            self.load_dtype,
         )
+
+    def release_local_serving(self) -> None:
+        """Drop local HF model to free VRAM (called when unloading/reloading pipeline locals)."""
+        if self._local_serving is None:
+            return
+        import gc
+
+        logger.info("Releasing local final LLM (HF) from memory")
+        self._local_serving = None
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     def build_messages(
         self,
@@ -140,7 +173,31 @@ class FinalLLMClient:
             return f"[STUB_ANSWER] q='{question}' | memory='{compact}'"
 
         if self.mode == "local":
-            raise NotImplementedError("TODO: local LLM backend is not implemented yet.")
+            from .serving import GenerationConfig, LocalHFServing
+
+            if not self.model.strip():
+                raise ValueError(
+                    "llm_model is empty; for llm_mode=local set llm_model to a HuggingFace model id "
+                    "or a local directory path (e.g. Qwen/Qwen2.5-7B-Instruct)."
+                )
+            if self._local_serving is None:
+                td = _torch_dtype_from_string(self.load_dtype)
+                logger.info(
+                    "Loading local final LLM: path_or_id=%s torch_dtype=%s",
+                    self.model.strip(),
+                    td,
+                )
+                self._local_serving = LocalHFServing(
+                    self.model.strip(),
+                    torch_dtype=td,
+                    enable_thinking=False,
+                )
+            gen_cfg = GenerationConfig(
+                max_new_tokens=int(self.max_tokens),
+                do_sample=float(self.temperature) > 0.0,
+                temperature=float(self.temperature) if float(self.temperature) > 0.0 else 1.0,
+            )
+            return self._local_serving.generate_chat(messages, generation_config=gen_cfg)
 
         if self.mode in ("api", "openrouter"):
             return self._openai_compatible_chat(messages)

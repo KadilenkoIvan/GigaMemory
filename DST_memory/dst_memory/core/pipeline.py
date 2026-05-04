@@ -151,6 +151,7 @@ class DSTMemoryPipeline:
             http_referer=config.openrouter_http_referer,
             x_title=config.openrouter_x_title,
             prompt_language=config.prompt_language,
+            load_dtype=config.llm_load_dtype,
         )
 
     def write_to_memory(self, dialogue_id: str, message: Message) -> Dict:
@@ -333,6 +334,9 @@ class DSTMemoryPipeline:
         import gc
         logger.info("Unloading local models from memory...")
 
+        if hasattr(self.final_llm, "release_local_serving"):
+            self.final_llm.release_local_serving()
+
         # Unload slot serving (the main memory consumer)
         if self._slot_serving is not None:
             logger.info("Unloading slot serving model...")
@@ -374,6 +378,9 @@ class DSTMemoryPipeline:
         Called after final LLM processing is complete.
         """
         logger.info("Reloading local models...")
+
+        if hasattr(self.final_llm, "release_local_serving"):
+            self.final_llm.release_local_serving()
 
         if not self.config.slot_use_stub and self._slot_serving is None:
             from ..clients.serving import LocalHFServing

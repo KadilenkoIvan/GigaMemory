@@ -57,12 +57,14 @@ class PipelineConfig:
 
     # LLM mode:
     # - "stub": no external LLM call, returns template response
-    # - "local": TODO implement local LLM backend
+    # - "local": HuggingFace causal LM via LocalHFServing (llm_model = path or HF id)
     # - "openrouter" / "api": OpenAI-compatible chat completions (OpenRouter default URL)
     llm_mode: str = "stub"
     llm_api_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "openai/gpt-oss-120b:free"
+    # Weight dtype when llm_mode == "local" (torch_dtype in from_pretrained). Default FP16.
+    llm_load_dtype: str = "float16"
     llm_max_tokens: int = 1024
     openrouter_http_referer: str = ""
     openrouter_x_title: str = ""

@@ -1,6 +1,7 @@
 {
   "_description": "Memory-only configuration - processes dialogues and saves memory states without calling final LLM or judge",
   "_note": "Use this mode to process dialogues and save memory states for later final LLM processing",
+  "_three_stage_testdata": "Ready-made chain for test_data/minimal_test.json: config_pipeline_testdata_stage1_memory.json → stage2_final_llm → stage3_judge (run from validation/GigaMemory_full)",
 
   "shared": {
     "_description": "Core validation parameters",
