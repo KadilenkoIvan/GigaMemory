@@ -2415,19 +2415,20 @@ Examples:
 
     # Validation mode (NEW in v3)
     mode_group = parser.add_argument_group("Validation Mode (v3)")
+    # default=None: do not clobber validation_mode.mode from JSON on first parse (default "full" did that).
     mode_group.add_argument("--validation-mode", type=str,
                            choices=["full", "memory_only", "final_llm_only", "judge_only"],
-                           default="full",
-                           help="Validation mode: full (default), memory_only, final_llm_only, judge_only")
+                           default=None,
+                           help="Validation mode (omit to use config file; default in JSON/run is full)")
     mode_group.add_argument("--input-state-dir", type=str,
-                           default="",
-                           help="Input directory with saved memory states (for final_llm_only mode)")
+                           default=None,
+                           help="Input directory with saved memory states (for final_llm_only mode); omit = from config")
     mode_group.add_argument("--input-answers-path", type=str,
-                           default="",
-                           help="Path to intermediate answers JSON (for judge_only mode)")
+                           default=None,
+                           help="Path to intermediate answers JSON (for judge_only mode); omit = from config")
     mode_group.add_argument("--memory-only-output-suffix", type=str,
-                           default="_memory_only",
-                           help="Suffix for memory_only output directories")
+                           default=None,
+                           help="Suffix for memory_only output dirs; omit = from config")
 
     # Validation parameters (override config file)
     val_group = parser.add_argument_group("Validation Config Overrides (--val-*)")
@@ -2624,14 +2625,14 @@ Examples:
     if args.val_judge_local_model_path:
         config["judge"]["local_model_path"] = args.val_judge_local_model_path
 
-    # Handle validation mode args
-    if args.validation_mode:
+    # Handle validation mode args (only explicit CLI overrides; first-parse defaults must not erase JSON)
+    if args.validation_mode is not None:
         config["validation_mode"]["mode"] = args.validation_mode
-    if args.input_state_dir:
+    if args.input_state_dir is not None:
         config["validation_mode"]["input_state_dir"] = args.input_state_dir
-    if args.input_answers_path:
+    if args.input_answers_path is not None:
         config["validation_mode"]["input_answers_path"] = args.input_answers_path
-    if args.memory_only_output_suffix:
+    if args.memory_only_output_suffix is not None:
         config["validation_mode"]["memory_only_output_suffix"] = args.memory_only_output_suffix
 
     # Handle legacy args
