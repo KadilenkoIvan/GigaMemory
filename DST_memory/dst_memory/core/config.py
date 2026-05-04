@@ -77,6 +77,9 @@ class PipelineConfig:
     # Финальная LLM temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0
 
+    # Hybrid thinking (Qwen3 / Qwen3.5) for local final LLM only; ignored for API modes.
+    llm_enable_thinking: bool = True
+
     # RAGU knowledge-graph backend (required in this project).
     use_ragu: bool = True
     ragu_embedder_model: str = "deepvk/USER-bge-m3"

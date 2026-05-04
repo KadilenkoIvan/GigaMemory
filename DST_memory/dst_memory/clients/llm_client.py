@@ -74,6 +74,7 @@ class FinalLLMClient:
         x_title: str = "",
         prompt_language: str = "ru",
         load_dtype: str = "float16",
+        enable_thinking: bool = True,
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -86,6 +87,7 @@ class FinalLLMClient:
         self.http_referer = http_referer or ""
         self.x_title = x_title or ""
         self.load_dtype = load_dtype or "float16"
+        self.enable_thinking = bool(enable_thinking)
         self._prompt_lang = normalize_prompt_language(prompt_language)
         self._final_llm_prompts = importlib.import_module(
             f"dst_memory.prompts.{self._prompt_lang}.final_llm_messages"
@@ -95,12 +97,13 @@ class FinalLLMClient:
         self._last_prompt_messages: List[Dict[str, str]] = []
         self._local_serving: Any = None
         logger.info(
-            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s load_dtype=%s",
+            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s load_dtype=%s enable_thinking=%s",
             self.mode,
             self.model or "(none)",
             temperature,
             self._prompt_lang,
             self.load_dtype,
+            self.enable_thinking,
         )
 
     def release_local_serving(self) -> None:
@@ -198,7 +201,7 @@ class FinalLLMClient:
                 self._local_serving = LocalHFServing(
                     self.model.strip(),
                     torch_dtype=td,
-                    enable_thinking=False,
+                    enable_thinking=self.enable_thinking,
                 )
             gen_cfg = GenerationConfig(
                 max_new_tokens=int(self.max_tokens),

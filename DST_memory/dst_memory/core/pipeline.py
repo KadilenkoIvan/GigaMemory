@@ -155,6 +155,7 @@ class DSTMemoryPipeline:
             x_title=config.openrouter_x_title,
             prompt_language=config.prompt_language,
             load_dtype=config.llm_load_dtype,
+            enable_thinking=getattr(config, "llm_enable_thinking", True),
         )
 
     def set_dialogue_dataset_clock(self, dialogue_id: str, question_date_raw: Any) -> None:

@@ -322,6 +322,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_max_tokens = judge.get("max_tokens", 1024)
     args.judge_local_model_path = judge.get("local_model_path", "")
     args.unload_judge_between_items = judge.get("unload_between_items", False)
+    args.judge_enable_thinking = bool(judge.get("judge_enable_thinking", True))
 
     # Validation mode params
     args.validation_mode = val_mode.get("mode", "full")
@@ -350,6 +351,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "conflict_allow_multi_relation_same_object", "slot_model_enable_thinking",
         "slot_fallback_on_no_slots", "triplet_fallback_on_empty", "prompt_language",
         "unload_models_before_final_llm", "use_dataset_datetime", "force_infinite_ttl",
+        "llm_enable_thinking",
     ]
     for attr in gm_defaults:
         if not hasattr(args, f"gm_{attr}"):
@@ -447,6 +449,7 @@ class JudgeClient:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         local_model_path: Optional[str] = None,
+        enable_thinking: bool = True,
     ):
         self.mode = mode
         self.model = model
@@ -455,12 +458,14 @@ class JudgeClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path
+        self.enable_thinking = bool(enable_thinking)
         self._local_serving = None
 
         logger.info(
-            "JudgeClient initialized mode=%s model=%s",
+            "JudgeClient initialized mode=%s model=%s enable_thinking=%s",
             mode,
             model if mode == "openrouter" else local_model_path,
+            self.enable_thinking,
         )
 
     def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
@@ -634,7 +639,7 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
             self._local_serving = LocalHFServing(
                 self.local_model_path,
                 torch_dtype=torch.float16,
-                enable_thinking=False,
+                enable_thinking=self.enable_thinking,
             )
 
         messages = [
@@ -926,6 +931,7 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
         llm_max_tokens=int(shared.get("llm_max_tokens", 1024)),
         llm_temperature=float(shared.get("llm_temperature", 0.0)),
+        llm_enable_thinking=bool(shared.get("llm_enable_thinking", True)),
         openrouter_http_referer=shared.get("openrouter_http_referer", ""),
         openrouter_x_title=shared.get("openrouter_x_title", ""),
         slot_use_stub=shared.get("slot_use_stub", False),
@@ -1011,6 +1017,7 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         x_title=cfg.openrouter_x_title,
         prompt_language=cfg.prompt_language,
         load_dtype=cfg.llm_load_dtype,
+        enable_thinking=getattr(cfg, "llm_enable_thinking", True),
     )
     logger.info(
         "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
@@ -2317,6 +2324,7 @@ def run_validation(args: argparse.Namespace) -> None:
             temperature=args.judge_temperature,
             max_tokens=args.judge_max_tokens,
             local_model_path=args.judge_local_model_path,
+            enable_thinking=getattr(args, "judge_enable_thinking", True),
         )
 
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
@@ -2543,6 +2551,9 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
 
     if getattr(args, "gm_force_infinite_ttl", None) is not None:
         overrides["force_infinite_ttl"] = bool(args.gm_force_infinite_ttl)
+
+    if getattr(args, "gm_llm_enable_thinking", None) is not None:
+        overrides["llm_enable_thinking"] = bool(args.gm_llm_enable_thinking)
 
     return overrides
 
