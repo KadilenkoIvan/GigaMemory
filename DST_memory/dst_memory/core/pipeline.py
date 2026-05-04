@@ -156,6 +156,7 @@ class DSTMemoryPipeline:
             prompt_language=config.prompt_language,
             load_dtype=config.llm_load_dtype,
             enable_thinking=getattr(config, "llm_enable_thinking", True),
+            load_quantization=getattr(config, "llm_load_quantization", "none"),
         )
 
     def set_dialogue_dataset_clock(self, dialogue_id: str, question_date_raw: Any) -> None:

@@ -231,6 +231,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "temperature": 0.0,
             "max_tokens": 1024,
             "local_model_path": "",
+            "load_dtype": "float16",
+            "load_quantization": "none",
         },
         "judge": {
             "mode": "openrouter",
@@ -240,6 +242,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "temperature": 0.0,
             "max_tokens": 1024,
             "local_model_path": "",
+            "load_dtype": "float16",
+            "load_quantization": "none",
         },
     }
 
@@ -387,21 +391,6 @@ def extract_context_recent_10_plus_user(sessions: List[List[Dict]]) -> List[Dict
 
 
 # ============================================================================
-# Local HF generation (transformers)
-# ============================================================================
-
-def _hf_generate_kwargs(max_new_tokens: int, temperature: float) -> Dict[str, Any]:
-    """Greedy decode when temperature is 0; sampling only when temperature > 0."""
-    out: Dict[str, Any] = {"max_new_tokens": max_new_tokens}
-    if temperature is not None and temperature > 0:
-        out["do_sample"] = True
-        out["temperature"] = temperature
-    else:
-        out["do_sample"] = False
-    return out
-
-
-# ============================================================================
 # Final LLM Client with Retry
 # ============================================================================
 
@@ -417,6 +406,8 @@ class FinalLLMClient:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         local_model_path: str = "",
+        load_dtype: str = "float16",
+        load_quantization: str = "none",
     ):
         self.mode = mode
         self.api_url = api_url or "https://openrouter.ai/api/v1"
@@ -425,10 +416,19 @@ class FinalLLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path or ""
+        self.load_dtype = load_dtype or "float16"
+        self.load_quantization = (load_quantization or "none").strip().lower()
+        self._hf_serving = None
 
         # local: from_pretrained(local_model_path or model) — HF repo id or disk path
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
-        logger.info("FinalLLM mode=%s pretrained=%s", mode, _resolved or "(empty)")
+        logger.info(
+            "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s",
+            mode,
+            _resolved or "(empty)",
+            self.load_dtype,
+            self.load_quantization,
+        )
 
     def build_messages(self, question: str, context: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Build messages with full context (no truncation)."""
@@ -515,10 +515,29 @@ class FinalLLMClient:
     def _local_pretrained_id(self) -> str:
         return (self.local_model_path or "").strip() or (self.model or "").strip()
 
+    def release_local_model(self) -> None:
+        """Drop local HF weights (call before loading judge on the same GPU)."""
+        if self._hf_serving is not None:
+            try:
+                self._hf_serving.release()
+            except Exception as e:
+                logger.warning("FinalLLM LocalHFServing.release failed: %s", e)
+            self._hf_serving = None
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def _call_local(self, messages: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
         try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            import torch
+            from dst_memory.clients.llm_client import _torch_dtype_from_string
+            from dst_memory.clients.serving import GenerationConfig, LocalHFServing
 
             pretrained = self._local_pretrained_id()
             if not pretrained:
@@ -527,28 +546,23 @@ class FinalLLMClient:
                     "(directory); both were empty"
                 )
 
-            if not hasattr(self, '_model'):
-                logger.info("Loading local final LLM: %s", pretrained)
-                tokenizer = AutoTokenizer.from_pretrained(pretrained)
-                model = AutoModelForCausalLM.from_pretrained(
+            if self._hf_serving is None:
+                td = _torch_dtype_from_string(self.load_dtype)
+                logger.info("Loading local final LLM: %s dtype=%s quant=%s", pretrained, td, self.load_quantization)
+                self._hf_serving = LocalHFServing(
                     pretrained,
-                    torch_dtype=torch.float16,
-                    device_map="auto",
-                )
-                self._tokenizer = tokenizer
-                self._model = model
-
-            prompt = self._tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = self._tokenizer(prompt, return_tensors="pt").to(self._model.device)
-
-            with torch.no_grad():
-                outputs = self._model.generate(
-                    **inputs,
-                    **_hf_generate_kwargs(self.max_tokens, self.temperature),
+                    torch_dtype=td,
+                    enable_thinking=False,
+                    load_quantization=self.load_quantization,
                 )
 
-            response = self._tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
-            return (response or "").strip(), None
+            gen_cfg = GenerationConfig(
+                max_new_tokens=int(self.max_tokens),
+                do_sample=float(self.temperature) > 0.0,
+                temperature=float(self.temperature) if float(self.temperature) > 0.0 else 1.0,
+            )
+            text = self._hf_serving.generate_chat(messages, generation_config=gen_cfg)
+            return (text or "").strip(), None
 
         except Exception as e:
             return "", str(e)
@@ -570,6 +584,8 @@ class JudgeClient:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         local_model_path: str = "",
+        load_dtype: str = "float16",
+        load_quantization: str = "none",
     ):
         self.mode = mode
         self.model = model
@@ -578,9 +594,18 @@ class JudgeClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path or ""
+        self.load_dtype = load_dtype or "float16"
+        self.load_quantization = (load_quantization or "none").strip().lower()
+        self._hf_serving = None
 
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
-        logger.info("Judge mode=%s pretrained=%s", mode, _resolved or "(empty)")
+        logger.info(
+            "Judge mode=%s pretrained=%s load_dtype=%s load_quantization=%s",
+            mode,
+            _resolved or "(empty)",
+            self.load_dtype,
+            self.load_quantization,
+        )
 
     def _local_pretrained_id(self) -> str:
         return (self.local_model_path or "").strip() or (self.model or "").strip()
@@ -658,9 +683,27 @@ Respond ONLY with JSON:
                 "reasoning": str(result.get("reasoning", "No reasoning")),
             }
 
+    def release_local_model(self) -> None:
+        if self._hf_serving is not None:
+            try:
+                self._hf_serving.release()
+            except Exception as e:
+                logger.warning("Judge LocalHFServing.release failed: %s", e)
+            self._hf_serving = None
+        import gc
+
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def _call_judge_local(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-        import torch
+        from dst_memory.clients.llm_client import _torch_dtype_from_string
+        from dst_memory.clients.serving import GenerationConfig, LocalHFServing
 
         pretrained = self._local_pretrained_id()
         if not pretrained:
@@ -668,30 +711,22 @@ Respond ONLY with JSON:
                 "local mode: set judge.model (HF repo id) or judge.local_model_path; both were empty"
             )
 
-        if not hasattr(self, "_judge_model"):
-            logger.info("Loading local judge model: %s", pretrained)
-            self._judge_tokenizer = AutoTokenizer.from_pretrained(pretrained)
-            self._judge_model = AutoModelForCausalLM.from_pretrained(
+        if self._hf_serving is None:
+            td = _torch_dtype_from_string(self.load_dtype)
+            logger.info("Loading local judge model: %s dtype=%s quant=%s", pretrained, td, self.load_quantization)
+            self._hf_serving = LocalHFServing(
                 pretrained,
-                torch_dtype=torch.float16,
-                device_map="auto",
+                torch_dtype=td,
+                enable_thinking=False,
+                load_quantization=self.load_quantization,
             )
 
-        tok = self._judge_tokenizer
-        mdl = self._judge_model
-        prompt = tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = tok(prompt, return_tensors="pt").to(mdl.device)
-
-        with torch.no_grad():
-            outputs = mdl.generate(
-                **inputs,
-                **_hf_generate_kwargs(self.max_tokens, self.temperature),
-            )
-
-        content = tok.decode(
-            outputs[0][inputs["input_ids"].shape[1] :],
-            skip_special_tokens=True,
-        ).strip()
+        gen_cfg = GenerationConfig(
+            max_new_tokens=int(self.max_tokens),
+            do_sample=float(self.temperature) > 0.0,
+            temperature=float(self.temperature) if float(self.temperature) > 0.0 else 1.0,
+        )
+        content = self._hf_serving.generate_chat(messages, generation_config=gen_cfg).strip()
         if not content:
             raise RuntimeError("Judge (local) returned empty text")
 
@@ -849,6 +884,14 @@ class BatchProcessor:
 
         self.item_buffer.clear()
 
+        if (
+            self.final_llm.mode == "local"
+            and self.judge.mode == "local"
+            and hasattr(self.final_llm, "release_local_model")
+        ):
+            logger.info("[Batch] Releasing local final LLM before local judge (VRAM)")
+            self.final_llm.release_local_model()
+
         if len(self.answer_buffer) >= self.judge_batch_size:
             self._flush_judge_batch()
 
@@ -896,6 +939,10 @@ class BatchProcessor:
             self._write_results_json_snapshot()
 
         self.answer_buffer.clear()
+
+        if self.judge.mode == "local" and hasattr(self.judge, "release_local_model"):
+            logger.info("[Batch] Releasing local judge model after judge batch")
+            self.judge.release_local_model()
 
     def _write_results_json_snapshot(self) -> None:
         if self._results_json_path is None or self._validation_metadata is None:
@@ -1008,6 +1055,8 @@ def run_validation(config: Dict[str, Any]) -> None:
         temperature=final_llm_cfg.get("temperature", 0.0),
         max_tokens=final_llm_cfg.get("max_tokens", 1024),
         local_model_path=final_llm_cfg.get("local_model_path", ""),
+        load_dtype=final_llm_cfg.get("load_dtype", "float16"),
+        load_quantization=final_llm_cfg.get("load_quantization", "none"),
     )
 
     judge = JudgeClient(
@@ -1018,6 +1067,8 @@ def run_validation(config: Dict[str, Any]) -> None:
         temperature=judge_cfg.get("temperature", 0.0),
         max_tokens=judge_cfg.get("max_tokens", 1024),
         local_model_path=judge_cfg.get("local_model_path", ""),
+        load_dtype=judge_cfg.get("load_dtype", "float16"),
+        load_quantization=judge_cfg.get("load_quantization", "none"),
     )
 
     # Initialize processor

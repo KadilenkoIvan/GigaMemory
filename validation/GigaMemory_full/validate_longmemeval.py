@@ -250,6 +250,8 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "temperature": 0.0,
             "max_tokens": 1024,
             "local_model_path": "",
+            "load_dtype": "float16",
+            "load_quantization": "none",
             "unload_between_items": False,
         },
         "giga_memory": {},  # Will be merged with DST_memory defaults
@@ -321,6 +323,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_temperature = judge.get("temperature", 0.0)
     args.judge_max_tokens = judge.get("max_tokens", 1024)
     args.judge_local_model_path = judge.get("local_model_path", "")
+    args.judge_load_dtype = judge.get("load_dtype", "float16")
+    args.judge_load_quantization = judge.get("load_quantization", "none")
     args.unload_judge_between_items = judge.get("unload_between_items", False)
     args.judge_enable_thinking = bool(judge.get("judge_enable_thinking", True))
 
@@ -342,7 +346,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "importance_model_path", "importance_threshold", "retrieval_top_k",
         "graph_top_k_records", "recent_history_pairs", "disable_memory_gate",
         "memory_gate_use_stub", "memory_strategy", "llm_mode", "llm_model",
-        "llm_load_dtype", "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
+        "llm_load_dtype", "llm_load_quantization", "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
         "openrouter_http_referer", "openrouter_x_title", "slot_use_stub",
         "slot_model_path", "slot_max_slots_per_message", "ragu_storage_path",
         "ragu_embedder_model", "ttl_mode", "ttl_semantic_dedup_enabled",
@@ -450,6 +454,8 @@ class JudgeClient:
         max_tokens: int = 1024,
         local_model_path: Optional[str] = None,
         enable_thinking: bool = True,
+        load_dtype: str = "float16",
+        load_quantization: str = "none",
     ):
         self.mode = mode
         self.model = model
@@ -459,13 +465,17 @@ class JudgeClient:
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path
         self.enable_thinking = bool(enable_thinking)
+        self.load_dtype = load_dtype or "float16"
+        self.load_quantization = (load_quantization or "none").strip().lower()
         self._local_serving = None
 
         logger.info(
-            "JudgeClient initialized mode=%s model=%s enable_thinking=%s",
+            "JudgeClient initialized mode=%s model=%s enable_thinking=%s load_dtype=%s load_quantization=%s",
             mode,
             model if mode == "openrouter" else local_model_path,
             self.enable_thinking,
+            self.load_dtype,
+            self.load_quantization,
         )
 
     def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
@@ -628,18 +638,28 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
             return self._error_result(mode, f"Parse error: {e}")
 
     def _call_local(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
-        """Call local model (HF causal LM, FP16 weights by default)."""
-        import torch
+        """Call local model (HF causal LM via LocalHFServing; dtype / BitsAndBytes from config)."""
+        from dst_memory.clients.llm_client import _torch_dtype_from_string
         from dst_memory.clients.serving import GenerationConfig, LocalHFServing
 
         if self._local_serving is None:
-            if not self.local_model_path:
-                raise ValueError("local_model_path required for local judge mode")
-            logger.info("Loading local judge model: %s (torch_dtype=float16)", self.local_model_path)
+            resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
+            if not resolved:
+                raise ValueError(
+                    "local judge mode: set judge.local_model_path or judge.model (HF id / directory)"
+                )
+            td = _torch_dtype_from_string(self.load_dtype)
+            logger.info(
+                "Loading local judge model: %s torch_dtype=%s load_quantization=%s",
+                resolved,
+                td,
+                self.load_quantization,
+            )
             self._local_serving = LocalHFServing(
-                self.local_model_path,
-                torch_dtype=torch.float16,
+                resolved,
+                torch_dtype=td,
                 enable_thinking=self.enable_thinking,
+                load_quantization=self.load_quantization,
             )
 
         messages = [
@@ -696,6 +716,11 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
         if self._local_serving is not None:
             logger.info("Unloading local judge model")
             import gc
+
+            try:
+                self._local_serving.release()
+            except Exception as e:
+                logger.warning("Judge LocalHFServing.release failed: %s", e)
             self._local_serving = None
             gc.collect()
             try:
@@ -929,6 +954,7 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         llm_api_key=shared.get("llm_api_key", ""),
         llm_model=shared.get("llm_model", "openai/gpt-oss-120b:free"),
         llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
+        llm_load_quantization=str(shared.get("llm_load_quantization", "none")),
         llm_max_tokens=int(shared.get("llm_max_tokens", 1024)),
         llm_temperature=float(shared.get("llm_temperature", 0.0)),
         llm_enable_thinking=bool(shared.get("llm_enable_thinking", True)),
@@ -1018,6 +1044,7 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         prompt_language=cfg.prompt_language,
         load_dtype=cfg.llm_load_dtype,
         enable_thinking=getattr(cfg, "llm_enable_thinking", True),
+        load_quantization=getattr(cfg, "llm_load_quantization", "none"),
     )
     logger.info(
         "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
@@ -1270,6 +1297,17 @@ def build_judge_statistics_export(
     }
 
 
+def _is_full_dst_pipeline(pipeline: Any) -> bool:
+    if pipeline is None:
+        return False
+    try:
+        from dst_memory.core.pipeline import DSTMemoryPipeline
+
+        return isinstance(pipeline, DSTMemoryPipeline)
+    except Exception:
+        return False
+
+
 class BatchProcessor:
     """
     Handles batch processing for final LLM and judge.
@@ -1312,6 +1350,8 @@ class BatchProcessor:
         self.input_state_dir = input_state_dir
         self.input_answers_path = input_answers_path
         self.save_giga_memory_logs = save_giga_memory_logs
+        # When local judge follows local final LLM on full DST pipeline, defer slot reload until judge finishes.
+        self._pending_slot_reload_after_judge = False
 
         # Accumulators
         self.dialogue_buffer: List[AccumulatedDialogue] = []
@@ -1693,13 +1733,35 @@ class BatchProcessor:
         # Clear dialogue buffer
         self.dialogue_buffer.clear()
 
-        # Reload models if they were unloaded
+        judge_local = (
+            self.judge_client is not None
+            and getattr(self.judge_client, "mode", "") == "local"
+        )
+        if judge_local and self.pipeline is not None and hasattr(self.pipeline, "final_llm"):
+            if hasattr(self.pipeline.final_llm, "release_local_serving"):
+                logger.info("[Batch] Releasing local final LLM before local judge (save VRAM)")
+                self.pipeline.final_llm.release_local_serving()
+
+        defer_slot = (
+            judge_local
+            and _is_full_dst_pipeline(self.pipeline)
+            and self.pipeline.config.llm_mode == "local"
+            and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
+        )
+        self._pending_slot_reload_after_judge = bool(defer_slot)
+
         if (
             self.pipeline.config.llm_mode == "local"
             and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
         ):
-            logger.info("[Batch] Reloading models after final LLM processing...")
-            self.pipeline.reload_local_models()
+            if defer_slot:
+                logger.info(
+                    "[Batch] Deferring slot model reload until after local judge "
+                    "(avoid slot + final LLM + judge on VRAM at once)"
+                )
+            else:
+                logger.info("[Batch] Reloading models after final LLM processing...")
+                self.pipeline.reload_local_models()
 
         # Check if we should flush judge batch
         if len(self.answer_buffer) >= self.judge_batch_size:
@@ -1816,10 +1878,19 @@ class BatchProcessor:
             # Write intermediate answers after each batch
             self._write_intermediate_answers()
 
-            # Reload models if they were unloaded
+            judge_local = (
+                self.judge_client is not None
+                and getattr(self.judge_client, "mode", "") == "local"
+            )
+            if judge_local and hasattr(self.pipeline, "final_llm"):
+                if hasattr(self.pipeline.final_llm, "release_local_serving"):
+                    logger.info("[FinalLLMOnly] Releasing local final LLM before judge")
+                    self.pipeline.final_llm.release_local_serving()
+
             if (
                 self.pipeline.config.llm_mode == "local"
                 and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
+                and not judge_local
             ):
                 logger.info("[FinalLLMOnly] Reloading models after final LLM processing...")
                 self.pipeline.reload_local_models()
@@ -1877,6 +1948,18 @@ class BatchProcessor:
 
         # Clear answer buffer
         self.answer_buffer.clear()
+
+        if self.judge_client is not None and getattr(self.judge_client, "mode", "") == "local":
+            self.judge_client.unload()
+
+        if self._pending_slot_reload_after_judge and self.pipeline is not None:
+            self._pending_slot_reload_after_judge = False
+            if (
+                getattr(self.pipeline.config, "llm_mode", "") == "local"
+                and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
+            ):
+                logger.info("[Batch] Reloading slot models after local judge batch")
+                self.pipeline.reload_local_models()
 
     def _judge_one_answer_correctness(self, acc: AccumulatedAnswer) -> Tuple[float, str, Optional[str]]:
         """Exactly one judge LLM call: score predicted answer vs reference."""
@@ -2122,6 +2205,9 @@ class BatchProcessor:
         # Clear any remaining buffer
         self.answer_buffer.clear()
 
+        if self.judge_client is not None and getattr(self.judge_client, "mode", "") == "local":
+            self.judge_client.unload()
+
     def _write_results_json_snapshot(self) -> None:
         if (
             self._results_json_path is None
@@ -2229,6 +2315,16 @@ class BatchProcessor:
 
         self._write_results_json_snapshot()
         self._write_giga_memory_dialogue_logs()
+
+        if getattr(self, "_pending_slot_reload_after_judge", False) and self.pipeline is not None:
+            self._pending_slot_reload_after_judge = False
+            if (
+                getattr(self.pipeline.config, "llm_mode", "") == "local"
+                and getattr(self.pipeline.config, "unload_models_before_final_llm", True)
+            ):
+                logger.info("[Batch] Finalize: restoring slot models after deferred judge reload")
+                self.pipeline.reload_local_models()
+
         return self.results, self.stats
 
 
@@ -2323,8 +2419,10 @@ def run_validation(args: argparse.Namespace) -> None:
             api_key=args.judge_api_key,
             temperature=args.judge_temperature,
             max_tokens=args.judge_max_tokens,
-            local_model_path=args.judge_local_model_path,
+            local_model_path=(args.judge_local_model_path or args.judge_model or "").strip() or None,
             enable_thinking=getattr(args, "judge_enable_thinking", True),
+            load_dtype=getattr(args, "judge_load_dtype", "float16"),
+            load_quantization=getattr(args, "judge_load_quantization", "none"),
         )
 
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
@@ -2523,6 +2621,8 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["llm_api_key"] = args.gm_llm_api_key
     if args.gm_llm_load_dtype:
         overrides["llm_load_dtype"] = args.gm_llm_load_dtype
+    if getattr(args, "gm_llm_load_quantization", None):
+        overrides["llm_load_quantization"] = args.gm_llm_load_quantization
 
     # RAGU settings
     if args.gm_ragu_storage_path:
@@ -2741,6 +2841,12 @@ Examples:
         default="",
         help="For llm_mode=local: HF load dtype (float16 default in config, or bfloat16 / float32)",
     )
+    gm_group.add_argument(
+        "--gm-llm-load-quantization",
+        type=str,
+        default="",
+        help="For llm_mode=local: none | 8bit | 4bit (BitsAndBytes; reduces VRAM)",
+    )
 
     # RAGU settings
     gm_group.add_argument("--gm-ragu-storage-path", type=str, default="",
@@ -2824,6 +2930,11 @@ Examples:
         config["judge"]["max_tokens"] = args.val_judge_max_tokens
     if args.val_judge_local_model_path:
         config["judge"]["local_model_path"] = args.val_judge_local_model_path
+
+    if getattr(args, "gm_llm_load_quantization", None):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["llm_load_quantization"] = args.gm_llm_load_quantization
 
     # Handle validation mode args (only explicit CLI overrides; first-parse defaults must not erase JSON)
     if args.validation_mode is not None:

@@ -65,6 +65,8 @@ class PipelineConfig:
     llm_model: str = "openai/gpt-oss-120b:free"
     # Weight dtype when llm_mode == "local" (torch_dtype in from_pretrained). Default FP16.
     llm_load_dtype: str = "float16"
+    # When llm_mode == "local": none | 8bit | 4bit (BitsAndBytes; reduces VRAM).
+    llm_load_quantization: str = "none"
     llm_max_tokens: int = 1024
     openrouter_http_referer: str = ""
     openrouter_x_title: str = ""

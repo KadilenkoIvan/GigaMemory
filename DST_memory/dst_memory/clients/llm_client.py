@@ -75,6 +75,7 @@ class FinalLLMClient:
         prompt_language: str = "ru",
         load_dtype: str = "float16",
         enable_thinking: bool = True,
+        load_quantization: str = "none",
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -87,6 +88,7 @@ class FinalLLMClient:
         self.http_referer = http_referer or ""
         self.x_title = x_title or ""
         self.load_dtype = load_dtype or "float16"
+        self.load_quantization = (load_quantization or "none").strip().lower()
         self.enable_thinking = bool(enable_thinking)
         self._prompt_lang = normalize_prompt_language(prompt_language)
         self._final_llm_prompts = importlib.import_module(
@@ -97,12 +99,14 @@ class FinalLLMClient:
         self._last_prompt_messages: List[Dict[str, str]] = []
         self._local_serving: Any = None
         logger.info(
-            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s load_dtype=%s enable_thinking=%s",
+            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s "
+            "load_dtype=%s load_quantization=%s enable_thinking=%s",
             self.mode,
             self.model or "(none)",
             temperature,
             self._prompt_lang,
             self.load_dtype,
+            self.load_quantization,
             self.enable_thinking,
         )
 
@@ -113,6 +117,11 @@ class FinalLLMClient:
         import gc
 
         logger.info("Releasing local final LLM (HF) from memory")
+        if self._local_serving is not None and hasattr(self._local_serving, "release"):
+            try:
+                self._local_serving.release()
+            except Exception as e:
+                logger.warning("release() on local serving failed: %s", e)
         self._local_serving = None
         gc.collect()
         try:
@@ -202,6 +211,7 @@ class FinalLLMClient:
                     self.model.strip(),
                     torch_dtype=td,
                     enable_thinking=self.enable_thinking,
+                    load_quantization=self.load_quantization,
                 )
             gen_cfg = GenerationConfig(
                 max_new_tokens=int(self.max_tokens),
