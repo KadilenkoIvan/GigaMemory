@@ -1192,6 +1192,65 @@ class IntermediateAnswer:
     dialogue_row_index: Optional[int] = None
 
 
+def build_judge_statistics_export(
+    stats: Dict[str, Any],
+    calculate_memory_hit_rate: bool,
+) -> Dict[str, Any]:
+    """Split final JSON statistics: answer correctness vs memory-hit evaluation (MHE)."""
+    total = int(stats.get("total", 0) or 0)
+    total_score = float(stats.get("total_score", 0.0) or 0.0)
+    by_type_raw = stats.get("by_type") or {}
+
+    answer_by_type: Dict[str, Any] = {}
+    for qt, st in by_type_raw.items():
+        if not isinstance(st, dict):
+            continue
+        c = int(st.get("count", 0) or 0)
+        ts = float(st.get("total_score", 0.0) or 0.0)
+        err = int(st.get("errors", 0) or 0)
+        entry: Dict[str, Any] = {
+            "count": c,
+            "total_score": ts,
+            "errors": err,
+            "average_score": (ts / c) if c > 0 else 0.0,
+        }
+        answer_by_type[qt] = entry
+
+    hits = int(stats.get("memory_hit", 0) or 0)
+    misses = int(stats.get("memory_miss", 0) or 0)
+    mhe_total = hits + misses
+
+    mhe_by_type: Dict[str, Any] = {}
+    for qt, st in by_type_raw.items():
+        if not isinstance(st, dict):
+            continue
+        mc = int(st.get("mhe_count", 0) or 0)
+        mh = int(st.get("mhe_hits", 0) or 0)
+        mm = int(st.get("mhe_misses", 0) or 0)
+        row: Dict[str, Any] = {"count": mc, "hits": mh, "misses": mm}
+        if mc > 0:
+            row["hit_rate"] = mh / mc
+        mhe_by_type[qt] = row
+
+    return {
+        "answer_evaluation": {
+            "total": total,
+            "total_score": total_score,
+            "average_score": (total_score / total) if total > 0 else 0.0,
+            "errors_judge": int(stats.get("errors_judge", 0) or 0),
+            "by_type": answer_by_type,
+        },
+        "memory_hit_evaluation": {
+            "enabled": bool(calculate_memory_hit_rate),
+            "total": mhe_total,
+            "hits": hits,
+            "misses": misses,
+            "hit_rate": (hits / mhe_total) if mhe_total > 0 else None,
+            "by_type": mhe_by_type,
+        },
+    }
+
+
 class BatchProcessor:
     """
     Handles batch processing for final LLM and judge.
@@ -1249,7 +1308,7 @@ class BatchProcessor:
         self.memory_only_states: List[MemoryOnlyState] = []  # For memory_only mode
         self.intermediate_answers: List[IntermediateAnswer] = []  # For final_llm_only output
 
-        # Statistics
+        # Statistics (MHE = memory hit evaluation: second judge call when calculate_memory_hit_rate)
         self.stats = {
             "total": 0,
             "total_score": 0.0,
@@ -1257,8 +1316,17 @@ class BatchProcessor:
             "errors_judge": 0,
             "memory_hit": 0,
             "memory_miss": 0,
-            "by_type": {qt: {"count": 0, "total_score": 0.0, "errors": 0}
-                        for qt in QUESTION_TYPES.keys()},
+            "by_type": {
+                qt: {
+                    "count": 0,
+                    "total_score": 0.0,
+                    "errors": 0,
+                    "mhe_count": 0,
+                    "mhe_hits": 0,
+                    "mhe_misses": 0,
+                }
+                for qt in QUESTION_TYPES.keys()
+            },
         }
 
     def process_single_item(
@@ -1815,11 +1883,17 @@ class BatchProcessor:
             if judge_error:
                 self.stats["by_type"][qt]["errors"] += 1
 
-        if memory_hit_result:
+        if memory_hit_result is not None:
             if memory_hit_result.get("fact_present", False):
                 self.stats["memory_hit"] += 1
             else:
                 self.stats["memory_miss"] += 1
+            if qt in self.stats["by_type"]:
+                self.stats["by_type"][qt]["mhe_count"] += 1
+                if memory_hit_result.get("fact_present", False):
+                    self.stats["by_type"][qt]["mhe_hits"] += 1
+                else:
+                    self.stats["by_type"][qt]["mhe_misses"] += 1
 
         self._write_results_json_snapshot()
 
@@ -1980,10 +2054,10 @@ class BatchProcessor:
             or self._timing is None
         ):
             return
-        stats_export = copy.deepcopy(self.stats)
-        for st in stats_export.get("by_type", {}).values():
-            if isinstance(st, dict) and st.get("count", 0) > 0:
-                st["average_score"] = st["total_score"] / st["count"]
+        stats_export = build_judge_statistics_export(
+            self.stats,
+            self.calculate_memory_hit_rate,
+        )
         timing_stats = self._timing.get_stats()
         if timing_stats.get("total_time", 0) == 0 and self._timing.total_start is not None:
             timing_stats = dict(timing_stats)
@@ -2047,6 +2121,12 @@ class BatchProcessor:
                     self.stats["by_type"][qt]["average_score"] = (
                         self.stats["by_type"][qt]["total_score"] / count
                     )
+                mc = self.stats["by_type"][qt].get("mhe_count", 0)
+                if mc > 0:
+                    self.stats["by_type"][qt]["mhe_hit_rate"] = (
+                        self.stats["by_type"][qt]["mhe_hits"] / mc
+                    )
+            self._write_results_json_snapshot()
             logger.info("[JudgeOnly] Evaluated %d answers", len(self.results))
             return self.results, self.stats
 
@@ -2065,6 +2145,11 @@ class BatchProcessor:
             if count > 0:
                 self.stats["by_type"][qt]["average_score"] = (
                     self.stats["by_type"][qt]["total_score"] / count
+                )
+            mc = self.stats["by_type"][qt].get("mhe_count", 0)
+            if mc > 0:
+                self.stats["by_type"][qt]["mhe_hit_rate"] = (
+                    self.stats["by_type"][qt]["mhe_hits"] / mc
                 )
 
         self._write_results_json_snapshot()
@@ -2286,12 +2371,21 @@ def _print_final_stats(stats: Dict, timing_stats: Dict, args: argparse.Namespace
                         qt, qt_stats["count"], avg, qt_stats["errors"])
 
     if args.calculate_memory_hit_rate:
-        logger.info("\nMemory Hit Rate:")
+        logger.info("\nMemory hit evaluation (MHE):")
         logger.info("  Hits: %d", stats["memory_hit"])
         logger.info("  Misses: %d", stats["memory_miss"])
         if stats["memory_hit"] + stats["memory_miss"] > 0:
             hit_rate = stats["memory_hit"] / (stats["memory_hit"] + stats["memory_miss"])
             logger.info("  Rate: %.2f%%", hit_rate * 100)
+        logger.info("  Per-question-type MHE:")
+        for qt, qt_stats in stats["by_type"].items():
+            mc = qt_stats.get("mhe_count", 0)
+            if mc > 0:
+                mhr = qt_stats.get("mhe_hit_rate", qt_stats.get("mhe_hits", 0) / mc)
+                logger.info(
+                    "    %s: %d judged, hits=%d misses=%d hit_rate=%.3f",
+                    qt, mc, qt_stats.get("mhe_hits", 0), qt_stats.get("mhe_misses", 0), mhr,
+                )
 
     # Timing summary
     logger.info("\nTiming statistics:")
