@@ -1415,7 +1415,7 @@ class BatchProcessor:
             fact_clock_iso = fact_clock_iso_for_haystack_session(
                 use_dataset_dt, haystack_dates, si, qdate,
             )
-            for turn in session:
+            for ti, turn in enumerate(session):
                 if not isinstance(turn, dict):
                     continue
                 if str(turn.get("role", "")).lower() != "user":
@@ -1445,6 +1445,13 @@ class BatchProcessor:
                 if self._timing is not None:
                     self._timing.add_user_message(time.time() - t0)
                 write_logs.append(log)
+                # Haystack user/assistant turns → final-LLM "recent pairs" (same dialogue_id).
+                if ti + 1 < len(session) and hasattr(self.pipeline, "add_recent_pair"):
+                    nxt = session[ti + 1]
+                    if isinstance(nxt, dict) and str(nxt.get("role", "")).lower() == "assistant":
+                        assist = str(nxt.get("content") or "").strip()
+                        if assist:
+                            self.pipeline.add_recent_pair(dialogue_id, msg, assist)
 
         chunk_id = f"{dialogue_row_index:04d}"
         saved_paths = self.persistence.save_chunk_state(chunk_id, self.pipeline, dialogue_id)
@@ -1509,6 +1516,9 @@ class BatchProcessor:
                     pipeline_state={
                         "write_logs": write_logs,
                         "memory_slots": answer_details.get("memory_slots", []),
+                        "memory_gate": answer_details.get("memory_gate", {}),
+                        "retrieved": answer_details.get("retrieved", []),
+                        "recent_pairs": answer_details.get("recent_pairs", []),
                         "expired_facts": answer_details.get("expired_facts", []),
                         "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
                         "use_memory": answer_details.get("use_memory", False),
@@ -1534,6 +1544,9 @@ class BatchProcessor:
                     pipeline_state={
                         "write_logs": write_logs,
                         "memory_slots": answer_details.get("memory_slots", []),
+                        "memory_gate": answer_details.get("memory_gate", {}),
+                        "retrieved": answer_details.get("retrieved", []),
+                        "recent_pairs": answer_details.get("recent_pairs", []),
                         "expired_facts": answer_details.get("expired_facts", []),
                         "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
                         "use_memory": answer_details.get("use_memory", False),
@@ -1616,7 +1629,7 @@ class BatchProcessor:
             if self.pipeline.config.llm_mode != "stub":
                 # Rebuild memory context
                 memory_context = acc.pipeline_state["memory_context"]
-                recent_pairs = []  # We don't have recent pairs in batch mode
+                recent_pairs = list(acc.pipeline_state.get("recent_pairs") or [])
 
                 # Call final LLM
                 try:
@@ -1734,7 +1747,7 @@ class BatchProcessor:
 
                 # Get memory context from saved state
                 memory_context = pipeline_state.get("memory_context", {})
-                recent_pairs = []
+                recent_pairs = list(pipeline_state.get("recent_pairs") or [])
 
                 predicted_answer = "[no_final_llm]"
 
