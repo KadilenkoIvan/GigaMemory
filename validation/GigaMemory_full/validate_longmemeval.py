@@ -265,11 +265,11 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
         with open(config_path, "r", encoding="utf-8") as f:
             user_config = json.load(f)
 
-        # Merge with defaults
-        merged = default_config.copy()
-        for section in ["shared", "batch_processing", "judge", "giga_memory"]:
+        # Merge with defaults (validation_mode must be included — otherwise mode stays "full")
+        merged = copy.deepcopy(default_config)
+        for section in ["shared", "batch_processing", "judge", "giga_memory", "validation_mode"]:
             if section in user_config:
-                if isinstance(merged.get(section), dict):
+                if isinstance(merged.get(section), dict) and isinstance(user_config[section], dict):
                     merged[section].update(user_config[section])
                 else:
                     merged[section] = user_config[section]
