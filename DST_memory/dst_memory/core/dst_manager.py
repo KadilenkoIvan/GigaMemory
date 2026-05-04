@@ -120,7 +120,12 @@ class DSTManager:
             return None
 
     @staticmethod
-    def _new_fact_created_at_iso(state: DialogueMemoryState) -> str:
+    def _new_fact_created_at_iso(
+        state: DialogueMemoryState,
+        override_iso: Optional[str] = None,
+    ) -> str:
+        if override_iso and str(override_iso).strip():
+            return str(override_iso).strip()
         raw = getattr(state, "dataset_clock_iso", None) or None
         if raw:
             return raw
@@ -349,7 +354,10 @@ class DSTManager:
         return self._states[dialogue_id]
 
     def upsert_from_message(
-        self, dialogue_id: str, user_text: str
+        self,
+        dialogue_id: str,
+        user_text: str,
+        fact_created_at_iso: Optional[str] = None,
     ) -> Tuple[List[MemoryFact], List[str]]:
         state = self.get_state(dialogue_id)
         state.step += 1
@@ -678,7 +686,9 @@ class DSTManager:
                     object=t.object,
                     is_active=True,
                     ttl=ttl,
-                    created_at_datetime=self._new_fact_created_at_iso(state),
+                    created_at_datetime=self._new_fact_created_at_iso(
+                        state, override_iso=fact_created_at_iso,
+                    ),
                 )
                 state.slots[slot].append(rec)
 

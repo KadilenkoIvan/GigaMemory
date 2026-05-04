@@ -117,5 +117,6 @@ class DialogueMemoryState:
     next_record_id: int = 1
     recent_pairs: List[Dict[str, str]] = field(default_factory=list)
     deleted_facts: List[DeletedFact] = field(default_factory=list)  # Track all soft-deleted facts with reasons
-    # When set (LongMemEval validation): new facts use this ISO time; TTL expiry uses it as "now".
+    # LongMemEval validation: ``question_date`` as ISO — TTL lazy expiry "as_of" + final-LLM clock.
+    # Per-fact insert times may differ (``haystack_dates[i]``) via ``upsert_from_message(..., fact_created_at_iso=)``.
     dataset_clock_iso: Optional[str] = None

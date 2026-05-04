@@ -159,8 +159,13 @@ class DSTMemoryPipeline:
 
     def set_dialogue_dataset_clock(self, dialogue_id: str, question_date_raw: Any) -> None:
         """
-        For LongMemEval rows: one ``question_date`` per dialogue; used for fact timestamps,
-        TTL ``as_of``, and final-LLM prompt clock when ``use_dataset_datetime`` is True.
+        For LongMemEval rows: parse ``question_date`` once per dialogue row.
+
+        Stored as ``DialogueMemoryState.dataset_clock_iso`` — used as **TTL as-of** time and
+        **final-LLM "current" clock**, not necessarily the same instant as each stored fact.
+
+        Per-fact ``created_at_datetime`` comes from ``write_to_memory(..., fact_created_at_iso=...)``
+        (e.g. ``haystack_dates[i]`` for messages in ``haystack_sessions[i]``).
         """
         if not getattr(self.config, "use_dataset_datetime", False):
             return
@@ -198,10 +203,18 @@ class DSTMemoryPipeline:
         except ValueError:
             return None
 
-    def write_to_memory(self, dialogue_id: str, message: Message) -> Dict:
+    def write_to_memory(
+        self,
+        dialogue_id: str,
+        message: Message,
+        fact_created_at_iso: Optional[str] = None,
+    ) -> Dict:
         logger.info(
-            "write_to_memory dialogue_id=%s role=%s content_len=%d",
-            dialogue_id, message.role, len(message.content),
+            "write_to_memory dialogue_id=%s role=%s content_len=%d fact_created_at_iso=%s",
+            dialogue_id,
+            message.role,
+            len(message.content),
+            fact_created_at_iso or "(default)",
         )
         if message.role != "user":
             return {"saved": False, "reason": "only_user_messages_supported"}
@@ -219,7 +232,11 @@ class DSTMemoryPipeline:
                 "classifier": cls,
             }
 
-        new_facts, selected_slots = self.dst.upsert_from_message(dialogue_id, message.content)
+        new_facts, selected_slots = self.dst.upsert_from_message(
+            dialogue_id,
+            message.content,
+            fact_created_at_iso=fact_created_at_iso,
+        )
         if not new_facts:
             return {
                 "slots": selected_slots,

@@ -66,7 +66,10 @@ if str(ragu_path) not in sys.path:
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
 from dst_memory.utils.run_config_loader import load_run_config, shared_section
 from dst_memory.clients.llm_client import CHAT_API_OUTPUT_POLICY, _normalize_assistant_message_text
-from dst_memory.core.dataset_time import optional_clock_display_for_validation
+from dst_memory.core.dataset_time import (
+    fact_clock_iso_for_haystack_session,
+    optional_clock_display_for_validation,
+)
 import random
 
 
@@ -1373,6 +1376,8 @@ class BatchProcessor:
 
         question_type = item.get("question_type", "")
         sessions = item.get("haystack_sessions", [])
+        haystack_dates = item.get("haystack_dates")
+        use_dataset_dt = bool(getattr(self.pipeline.config, "use_dataset_datetime", False))
 
         did = str(item.get("dialogue_id", "") or "").strip()
         if did:
@@ -1386,12 +1391,8 @@ class BatchProcessor:
         qdate = item.get("question_date")
         if hasattr(self.pipeline, "set_dialogue_dataset_clock"):
             self.pipeline.set_dialogue_dataset_clock(dialogue_id, qdate)
-        clock_disp = optional_clock_display_for_validation(
-            bool(getattr(self.pipeline.config, "use_dataset_datetime", False)),
-            qdate,
-        )
+        clock_disp = optional_clock_display_for_validation(use_dataset_dt, qdate)
 
-        # Extract and process user messages (once per row)
         user_messages = extract_user_messages_from_sessions(sessions)
 
         logger.info(
@@ -1407,23 +1408,43 @@ class BatchProcessor:
         from dst_memory.core.models import Message
 
         _msg_preview_len = 500
-        for mi, msg in enumerate(user_messages, start=1):
-            if len(msg) <= _msg_preview_len:
-                msg_for_log = msg
-            else:
-                msg_for_log = msg[:_msg_preview_len] + "…"
-            logger.info(
-                "[Batch] Row %d: write_to_memory message %d/%d — %s",
-                dialogue_row_index,
-                mi,
-                len(user_messages),
-                msg_for_log.replace("\n", "\\n"),
+        mi = 0
+        for si, session in enumerate(sessions):
+            if not isinstance(session, list):
+                continue
+            fact_clock_iso = fact_clock_iso_for_haystack_session(
+                use_dataset_dt, haystack_dates, si, qdate,
             )
-            t0 = time.time()
-            log = self.pipeline.write_to_memory(dialogue_id, Message(role="user", content=msg))
-            if self._timing is not None:
-                self._timing.add_user_message(time.time() - t0)
-            write_logs.append(log)
+            for turn in session:
+                if not isinstance(turn, dict):
+                    continue
+                if str(turn.get("role", "")).lower() != "user":
+                    continue
+                msg = str(turn.get("content") or "").strip()
+                if not msg:
+                    continue
+                mi += 1
+                if len(msg) <= _msg_preview_len:
+                    msg_for_log = msg
+                else:
+                    msg_for_log = msg[:_msg_preview_len] + "…"
+                logger.info(
+                    "[Batch] Row %d session %d write_to_memory message %d/%d — %s",
+                    dialogue_row_index,
+                    si,
+                    mi,
+                    len(user_messages),
+                    msg_for_log.replace("\n", "\\n"),
+                )
+                t0 = time.time()
+                log = self.pipeline.write_to_memory(
+                    dialogue_id,
+                    Message(role="user", content=msg),
+                    fact_created_at_iso=fact_clock_iso,
+                )
+                if self._timing is not None:
+                    self._timing.add_user_message(time.time() - t0)
+                write_logs.append(log)
 
         chunk_id = f"{dialogue_row_index:04d}"
         saved_paths = self.persistence.save_chunk_state(chunk_id, self.pipeline, dialogue_id)

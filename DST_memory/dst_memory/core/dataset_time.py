@@ -67,6 +67,29 @@ def format_clock_for_final_llm_prompt(iso_str: str) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def fact_clock_iso_for_haystack_session(
+    use_dataset_datetime: bool,
+    haystack_dates: Any,
+    session_index: int,
+    question_date_raw: Any,
+) -> Optional[str]:
+    """
+    ISO timestamp for facts extracted from ``haystack_sessions[session_index]``.
+
+    Uses ``haystack_dates[session_index]`` when present and parseable; otherwise
+    falls back to ``question_date_raw``. Returns None when ``use_dataset_datetime``
+    is False (caller should use wall clock in DST).
+    """
+    if not use_dataset_datetime:
+        return None
+    raw: Any = None
+    if isinstance(haystack_dates, list) and 0 <= session_index < len(haystack_dates):
+        raw = haystack_dates[session_index]
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        raw = question_date_raw
+    return parse_longmemeval_question_date_to_iso(raw)
+
+
 def optional_clock_display_for_validation(
     use_dataset_datetime: bool,
     question_date_raw: Any,
@@ -93,4 +116,15 @@ if __name__ == "__main__":
         assert _iso is not None, _s
         datetime.fromisoformat(_iso)
     assert parse_longmemeval_question_date_to_iso("nope") is None
-    print("dataset_time OK:", len(_samples), "samples")
+    _hds = ["2023/05/20 (Sat) 02:21", "2023/05/21 (Sun) 03:24"]
+    assert fact_clock_iso_for_haystack_session(True, _hds, 0, "2023/05/22 (Mon) 10:00").startswith(
+        "2023-05-20"
+    )
+    assert fact_clock_iso_for_haystack_session(True, _hds, 1, "2023/05/22 (Mon) 10:00").startswith(
+        "2023-05-21"
+    )
+    assert fact_clock_iso_for_haystack_session(True, _hds, 9, "2023/05/22 (Mon) 10:00").startswith(
+        "2023-05-22"
+    )
+    assert fact_clock_iso_for_haystack_session(False, _hds, 0, "x") is None
+    print("dataset_time OK:", len(_samples), "samples + haystack session clocks")
