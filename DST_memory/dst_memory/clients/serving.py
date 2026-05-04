@@ -142,6 +142,7 @@ class LocalHFServing:
                 attn_implementation=self._attn,
             ).to(self.device)
         self.model.eval()
+        logger.info(f"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n{model.config._attn_implementation}\n\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         try:
             first_param = next(self.model.parameters())
             model_device = first_param.device
