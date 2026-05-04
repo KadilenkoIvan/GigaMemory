@@ -233,6 +233,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "local_model_path": "",
             "load_dtype": "float16",
             "load_quantization": "none",
+            "attn_implementation": "eager",
             "max_context_tokens": 131072,
         },
         "judge": {
@@ -245,6 +246,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
             "local_model_path": "",
             "load_dtype": "float16",
             "load_quantization": "none",
+            "attn_implementation": "eager",
         },
     }
 
@@ -410,6 +412,7 @@ class FinalLLMClient:
         load_dtype: str = "float16",
         load_quantization: str = "none",
         max_context_tokens: int = 131072,
+        attn_implementation: str = "eager",
     ):
         self.mode = mode
         self.api_url = api_url or "https://openrouter.ai/api/v1"
@@ -421,17 +424,20 @@ class FinalLLMClient:
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
         self.max_context_tokens = int(max_context_tokens)
+        self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
         self._hf_serving = None
         self._tok_limit: Any = None  # AutoTokenizer or False
 
         # local: from_pretrained(local_model_path or model) — HF repo id or disk path
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
-            "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s max_context_tokens=%s",
+            "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s "
+            "attn_implementation=%s max_context_tokens=%s",
             mode,
             _resolved or "(empty)",
             self.load_dtype,
             self.load_quantization,
+            self.attn_implementation,
             self.max_context_tokens,
         )
 
@@ -591,6 +597,7 @@ class FinalLLMClient:
                     torch_dtype=td,
                     enable_thinking=False,
                     load_quantization=self.load_quantization,
+                    attn_implementation=self.attn_implementation,
                 )
                 self._tok_limit = self._hf_serving.tokenizer
 
@@ -624,6 +631,7 @@ class JudgeClient:
         local_model_path: str = "",
         load_dtype: str = "float16",
         load_quantization: str = "none",
+        attn_implementation: str = "eager",
     ):
         self.mode = mode
         self.model = model
@@ -634,15 +642,17 @@ class JudgeClient:
         self.local_model_path = local_model_path or ""
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
+        self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
         self._hf_serving = None
 
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
-            "Judge mode=%s pretrained=%s load_dtype=%s load_quantization=%s",
+            "Judge mode=%s pretrained=%s load_dtype=%s load_quantization=%s attn_implementation=%s",
             mode,
             _resolved or "(empty)",
             self.load_dtype,
             self.load_quantization,
+            self.attn_implementation,
         )
 
     def _local_pretrained_id(self) -> str:
@@ -751,12 +761,19 @@ Respond ONLY with JSON:
 
         if self._hf_serving is None:
             td = _torch_dtype_from_string(self.load_dtype)
-            logger.info("Loading local judge model: %s dtype=%s quant=%s", pretrained, td, self.load_quantization)
+            logger.info(
+                "Loading local judge model: %s dtype=%s quant=%s attn=%s",
+                pretrained,
+                td,
+                self.load_quantization,
+                self.attn_implementation,
+            )
             self._hf_serving = LocalHFServing(
                 pretrained,
                 torch_dtype=td,
                 enable_thinking=False,
                 load_quantization=self.load_quantization,
+                attn_implementation=self.attn_implementation,
             )
 
         gen_cfg = GenerationConfig(
@@ -1096,6 +1113,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         load_dtype=final_llm_cfg.get("load_dtype", "float16"),
         load_quantization=final_llm_cfg.get("load_quantization", "none"),
         max_context_tokens=int(final_llm_cfg.get("max_context_tokens", 131072)),
+        attn_implementation=final_llm_cfg.get("attn_implementation", "eager"),
     )
 
     judge = JudgeClient(
@@ -1108,6 +1126,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         local_model_path=judge_cfg.get("local_model_path", ""),
         load_dtype=judge_cfg.get("load_dtype", "float16"),
         load_quantization=judge_cfg.get("load_quantization", "none"),
+        attn_implementation=judge_cfg.get("attn_implementation", "eager"),
     )
 
     # Initialize processor

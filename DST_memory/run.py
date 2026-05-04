@@ -61,6 +61,8 @@ def build_pipeline(args: argparse.Namespace):
         slot_use_stub=args.slot_use_stub,
         slot_model_path=args.slot_model_path,
         slot_max_slots_per_message=args.slot_max_slots_per_message,
+        llm_attn_implementation=str(getattr(args, "llm_attn_implementation", "eager")),
+        slot_attn_implementation=str(getattr(args, "slot_attn_implementation", "eager")),
         use_ragu=True,
         ragu_embedder_model=getattr(args, "ragu_embedder_model", "deepvk/USER-bge-m3"),
         ragu_storage_path=getattr(args, "ragu_storage_path", ""),
@@ -148,6 +150,20 @@ def create_parser(
     parser.add_argument("--llm-model", type=str, default=str(s.get("llm_model", "openai/gpt-oss-120b:free")))
     parser.add_argument("--llm-temperature", type=float, default=float(s.get("llm_temperature", 0.0)))
     parser.add_argument("--llm-max-tokens", type=int, default=int(s.get("llm_max_tokens", 1024)))
+    parser.add_argument(
+        "--llm-attn-implementation",
+        dest="llm_attn_implementation",
+        type=str,
+        default=str(s.get("llm_attn_implementation", "eager")),
+        help="HF attn_implementation for local final LLM (eager, sdpa, flash_attention_2, ...)",
+    )
+    parser.add_argument(
+        "--slot-attn-implementation",
+        dest="slot_attn_implementation",
+        type=str,
+        default=str(s.get("slot_attn_implementation", "eager")),
+        help="HF attn_implementation for local slot model",
+    )
     parser.add_argument("--openrouter-http-referer", dest="openrouter_http_referer", type=str, default=str(s.get("openrouter_http_referer", "")))
     parser.add_argument("--openrouter-x-title", dest="openrouter_x_title", type=str, default=str(s.get("openrouter_x_title", "")))
     parser.add_argument("--no-final-llm", action="store_const", const=True, default=bool(s.get("no_final_llm", False)))

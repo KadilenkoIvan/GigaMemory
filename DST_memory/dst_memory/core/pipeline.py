@@ -72,6 +72,7 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 config.slot_model_path,
                 enable_thinking=config.slot_model_enable_thinking,
+                attn_implementation=getattr(config, "slot_attn_implementation", "eager"),
             )
         slot_serving = self._slot_serving
 
@@ -158,6 +159,7 @@ class DSTMemoryPipeline:
             enable_thinking=getattr(config, "llm_enable_thinking", True),
             load_quantization=getattr(config, "llm_load_quantization", "none"),
             max_context_tokens=getattr(config, "llm_max_context_tokens", 128 * 1024),
+            attn_implementation=getattr(config, "llm_attn_implementation", "eager"),
         )
 
     def set_dialogue_dataset_clock(self, dialogue_id: str, question_date_raw: Any) -> None:
@@ -453,6 +455,7 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 self.config.slot_model_path,
                 enable_thinking=self.config.slot_model_enable_thinking,
+                attn_implementation=getattr(self.config, "slot_attn_implementation", "eager"),
             )
 
         # Re-attach serving to clients

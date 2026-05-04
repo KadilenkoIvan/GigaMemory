@@ -69,6 +69,8 @@ class PipelineConfig:
     llm_load_quantization: str = "none"
     # Max prompt tokens (chat template) before generate; default 128k. Set 0 to disable clamp.
     llm_max_context_tokens: int = 128 * 1024
+    # HF attention implementation when llm_mode == "local": eager | sdpa | flash_attention_2 | ...
+    llm_attn_implementation: str = "eager"
     llm_max_tokens: int = 1024
     openrouter_http_referer: str = ""
     openrouter_x_title: str = ""
@@ -77,6 +79,8 @@ class PipelineConfig:
     slot_use_stub: bool = False
     slot_model_path: str = "models/Meno-Lite-0.1"
     slot_max_slots_per_message: int = 5
+    # HF attention for local slot model (when slot_use_stub=False).
+    slot_attn_implementation: str = "eager"
 
     # Финальная LLM temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0

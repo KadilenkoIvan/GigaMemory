@@ -252,6 +252,7 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "local_model_path": "",
             "load_dtype": "float16",
             "load_quantization": "none",
+            "attn_implementation": "eager",
             "unload_between_items": False,
         },
         "giga_memory": {},  # Will be merged with DST_memory defaults
@@ -325,6 +326,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_local_model_path = judge.get("local_model_path", "")
     args.judge_load_dtype = judge.get("load_dtype", "float16")
     args.judge_load_quantization = judge.get("load_quantization", "none")
+    args.judge_attn_implementation = judge.get("attn_implementation", "eager")
     args.unload_judge_between_items = judge.get("unload_between_items", False)
     args.judge_enable_thinking = bool(judge.get("judge_enable_thinking", True))
 
@@ -346,7 +348,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "importance_model_path", "importance_threshold", "retrieval_top_k",
         "graph_top_k_records", "recent_history_pairs", "disable_memory_gate",
         "memory_gate_use_stub", "memory_strategy", "llm_mode", "llm_model",
-        "llm_load_dtype", "llm_load_quantization", "llm_max_context_tokens",
+        "llm_load_dtype", "llm_load_quantization", "llm_attn_implementation",
+        "llm_max_context_tokens", "slot_attn_implementation",
         "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
         "openrouter_http_referer", "openrouter_x_title", "slot_use_stub",
         "slot_model_path", "slot_max_slots_per_message", "ragu_storage_path",
@@ -457,6 +460,7 @@ class JudgeClient:
         enable_thinking: bool = True,
         load_dtype: str = "float16",
         load_quantization: str = "none",
+        attn_implementation: str = "eager",
     ):
         self.mode = mode
         self.model = model
@@ -468,15 +472,18 @@ class JudgeClient:
         self.enable_thinking = bool(enable_thinking)
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
+        self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
         self._local_serving = None
 
         logger.info(
-            "JudgeClient initialized mode=%s model=%s enable_thinking=%s load_dtype=%s load_quantization=%s",
+            "JudgeClient initialized mode=%s model=%s enable_thinking=%s load_dtype=%s "
+            "load_quantization=%s attn_implementation=%s",
             mode,
             model if mode == "openrouter" else local_model_path,
             self.enable_thinking,
             self.load_dtype,
             self.load_quantization,
+            self.attn_implementation,
         )
 
     def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
@@ -651,16 +658,18 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
                 )
             td = _torch_dtype_from_string(self.load_dtype)
             logger.info(
-                "Loading local judge model: %s torch_dtype=%s load_quantization=%s",
+                "Loading local judge model: %s torch_dtype=%s load_quantization=%s attn_implementation=%s",
                 resolved,
                 td,
                 self.load_quantization,
+                self.attn_implementation,
             )
             self._local_serving = LocalHFServing(
                 resolved,
                 torch_dtype=td,
                 enable_thinking=self.enable_thinking,
                 load_quantization=self.load_quantization,
+                attn_implementation=self.attn_implementation,
             )
 
         messages = [
@@ -956,6 +965,7 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         llm_model=shared.get("llm_model", "openai/gpt-oss-120b:free"),
         llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
         llm_load_quantization=str(shared.get("llm_load_quantization", "none")),
+        llm_attn_implementation=str(shared.get("llm_attn_implementation", "eager")),
         llm_max_context_tokens=int(shared.get("llm_max_context_tokens", 128 * 1024)),
         llm_max_tokens=int(shared.get("llm_max_tokens", 1024)),
         llm_temperature=float(shared.get("llm_temperature", 0.0)),
@@ -965,6 +975,7 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         slot_use_stub=shared.get("slot_use_stub", False),
         slot_model_path=shared.get("slot_model_path", "Qwen/Qwen3-0.6B"),
         slot_max_slots_per_message=int(shared.get("slot_max_slots_per_message", 5)),
+        slot_attn_implementation=str(shared.get("slot_attn_implementation", "eager")),
         use_ragu=True,
         ragu_embedder_model=shared.get("ragu_embedder_model", "deepvk/USER-bge-m3"),
         ragu_storage_path=shared.get("ragu_storage_path", ""),
@@ -1048,6 +1059,7 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         enable_thinking=getattr(cfg, "llm_enable_thinking", True),
         load_quantization=getattr(cfg, "llm_load_quantization", "none"),
         max_context_tokens=getattr(cfg, "llm_max_context_tokens", 128 * 1024),
+        attn_implementation=getattr(cfg, "llm_attn_implementation", "eager"),
     )
     logger.info(
         "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
@@ -2426,6 +2438,7 @@ def run_validation(args: argparse.Namespace) -> None:
             enable_thinking=getattr(args, "judge_enable_thinking", True),
             load_dtype=getattr(args, "judge_load_dtype", "float16"),
             load_quantization=getattr(args, "judge_load_quantization", "none"),
+            attn_implementation=getattr(args, "judge_attn_implementation", "eager"),
         )
 
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
@@ -2628,6 +2641,10 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["llm_load_quantization"] = args.gm_llm_load_quantization
     if getattr(args, "gm_llm_max_context_tokens", None) is not None:
         overrides["llm_max_context_tokens"] = int(args.gm_llm_max_context_tokens)
+    if getattr(args, "gm_llm_attn_implementation", None):
+        overrides["llm_attn_implementation"] = str(args.gm_llm_attn_implementation).strip()
+    if getattr(args, "gm_slot_attn_implementation", None):
+        overrides["slot_attn_implementation"] = str(args.gm_slot_attn_implementation).strip()
 
     # RAGU settings
     if args.gm_ragu_storage_path:
@@ -2858,6 +2875,18 @@ Examples:
         default=None,
         help="Max final-LLM prompt tokens (default 131072 from config). 0 = disable truncation.",
     )
+    gm_group.add_argument(
+        "--gm-llm-attn-implementation",
+        type=str,
+        default="",
+        help="For llm_mode=local: HF attn_implementation (eager, sdpa, flash_attention_2, ...)",
+    )
+    gm_group.add_argument(
+        "--gm-slot-attn-implementation",
+        type=str,
+        default="",
+        help="For local slot model: HF attn_implementation (default eager)",
+    )
 
     # RAGU settings
     gm_group.add_argument("--gm-ragu-storage-path", type=str, default="",
@@ -2950,6 +2979,18 @@ Examples:
         config.setdefault("giga_memory", {})
         if isinstance(config["giga_memory"], dict):
             config["giga_memory"]["llm_max_context_tokens"] = int(args.gm_llm_max_context_tokens)
+    if getattr(args, "gm_llm_attn_implementation", None):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["llm_attn_implementation"] = str(
+                args.gm_llm_attn_implementation
+            ).strip()
+    if getattr(args, "gm_slot_attn_implementation", None):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["slot_attn_implementation"] = str(
+                args.gm_slot_attn_implementation
+            ).strip()
 
     # Handle validation mode args (only explicit CLI overrides; first-parse defaults must not erase JSON)
     if args.validation_mode is not None:

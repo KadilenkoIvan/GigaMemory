@@ -81,6 +81,7 @@ class FinalLLMClient:
         enable_thinking: bool = True,
         load_quantization: str = "none",
         max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+        attn_implementation: str = "eager",
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -95,6 +96,7 @@ class FinalLLMClient:
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
         self.max_context_tokens = int(max_context_tokens)
+        self.attn_implementation = (attn_implementation or "eager").strip() or "eager"
         self.enable_thinking = bool(enable_thinking)
         self._tokenizer_limit: Any = None  # lazy AutoTokenizer, or False if unavailable
         self._prompt_lang = normalize_prompt_language(prompt_language)
@@ -107,13 +109,14 @@ class FinalLLMClient:
         self._local_serving: Any = None
         logger.info(
             "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s "
-            "load_dtype=%s load_quantization=%s max_context_tokens=%s enable_thinking=%s",
+            "load_dtype=%s load_quantization=%s attn_implementation=%s max_context_tokens=%s enable_thinking=%s",
             self.mode,
             self.model or "(none)",
             temperature,
             self._prompt_lang,
             self.load_dtype,
             self.load_quantization,
+            self.attn_implementation,
             self.max_context_tokens,
             self.enable_thinking,
         )
@@ -253,6 +256,7 @@ class FinalLLMClient:
                     torch_dtype=td,
                     enable_thinking=self.enable_thinking,
                     load_quantization=self.load_quantization,
+                    attn_implementation=self.attn_implementation,
                 )
             gen_cfg = GenerationConfig(
                 max_new_tokens=int(self.max_tokens),

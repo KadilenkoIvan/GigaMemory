@@ -11,6 +11,42 @@ from ..slots.slot_model_path import resolve_slot_model_path
 logger = logging.getLogger(__name__)
 
 
+def _normalize_attn_implementation(raw: Optional[str]) -> str:
+    """HF ``attn_implementation`` for ``AutoModelForCausalLM.from_pretrained`` (e.g. eager, sdpa, flash_attention_2)."""
+    s = (raw or "eager").strip()
+    return s if s else "eager"
+
+
+def _from_pretrained_causal_lm(
+    resolved: str,
+    *,
+    torch_dtype=None,
+    quantization_config=None,
+    device_map=None,
+    attn_implementation: str,
+):
+    """Load causal LM; retry without ``attn_implementation`` if the installed transformers is too old."""
+    kwargs: Dict[str, object] = {
+        "trust_remote_code": True,
+        "attn_implementation": attn_implementation,
+    }
+    if quantization_config is not None:
+        kwargs["quantization_config"] = quantization_config
+        kwargs["device_map"] = device_map
+    else:
+        kwargs["torch_dtype"] = torch_dtype
+    try:
+        return AutoModelForCausalLM.from_pretrained(resolved, **kwargs)
+    except TypeError as e:
+        logger.warning(
+            "from_pretrained rejected attn_implementation=%r (%s); retrying without it",
+            attn_implementation,
+            e,
+        )
+        kwargs.pop("attn_implementation", None)
+        return AutoModelForCausalLM.from_pretrained(resolved, **kwargs)
+
+
 def _normalize_load_quantization(raw: Optional[str]) -> str:
     """Return one of: none, 8bit, 4bit."""
     q = (raw or "none").lower().strip()
@@ -55,18 +91,21 @@ class LocalHFServing:
         torch_dtype: torch.dtype = torch.float16,
         enable_thinking: bool = False,
         load_quantization: str = "none",
+        attn_implementation: str = "eager",
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_thinking = enable_thinking
         self._quant = _normalize_load_quantization(load_quantization)
+        self._attn = _normalize_attn_implementation(attn_implementation)
         resolved = resolve_slot_model_path(model_path_or_id)
         logger.info(
-            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s enable_thinking=%s",
+            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s attn=%s enable_thinking=%s",
             model_path_or_id,
             resolved,
             self.device,
             torch_dtype,
             self._quant,
+            self._attn,
             enable_thinking,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
@@ -90,17 +129,17 @@ class LocalHFServing:
                     bnb_4bit_quant_type="nf4",
                     bnb_4bit_use_double_quant=True,
                 )
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model = _from_pretrained_causal_lm(
                 resolved,
-                trust_remote_code=True,
                 quantization_config=bnb,
                 device_map="auto",
+                attn_implementation=self._attn,
             )
         else:
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model = _from_pretrained_causal_lm(
                 resolved,
-                trust_remote_code=True,
                 torch_dtype=torch_dtype,
+                attn_implementation=self._attn,
             ).to(self.device)
         self.model.eval()
         try:
