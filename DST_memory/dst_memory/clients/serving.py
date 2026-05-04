@@ -143,11 +143,15 @@ class LocalHFServing:
                 torch_dtype=torch_dtype,
                 attn_implementation=self._attn,
             ).to(self.device)
-            
+
         self.model.eval()
+
+        # Patch causal mask to avoid seq×seq materialization on long contexts
         import types
-        self.model._update_causal_mask = types.MethodType(
-            _patched_update_causal_mask, self.model
+        def _patched_update_causal_mask(self, attention_mask, *args, **kwargs):
+            return None
+        self.model.model._update_causal_mask = types.MethodType(
+            _patched_update_causal_mask, self.model.model
         )
         
         try:
