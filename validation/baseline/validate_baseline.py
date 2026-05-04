@@ -387,6 +387,21 @@ def extract_context_recent_10_plus_user(sessions: List[List[Dict]]) -> List[Dict
 
 
 # ============================================================================
+# Local HF generation (transformers)
+# ============================================================================
+
+def _hf_generate_kwargs(max_new_tokens: int, temperature: float) -> Dict[str, Any]:
+    """Greedy decode when temperature is 0; sampling only when temperature > 0."""
+    out: Dict[str, Any] = {"max_new_tokens": max_new_tokens}
+    if temperature is not None and temperature > 0:
+        out["do_sample"] = True
+        out["temperature"] = temperature
+    else:
+        out["do_sample"] = False
+    return out
+
+
+# ============================================================================
 # Final LLM Client with Retry
 # ============================================================================
 
@@ -527,7 +542,10 @@ class FinalLLMClient:
             inputs = self._tokenizer(prompt, return_tensors="pt").to(self._model.device)
 
             with torch.no_grad():
-                outputs = self._model.generate(**inputs, max_new_tokens=self.max_tokens, temperature=self.temperature)
+                outputs = self._model.generate(
+                    **inputs,
+                    **_hf_generate_kwargs(self.max_tokens, self.temperature),
+                )
 
             response = self._tokenizer.decode(outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True)
             return (response or "").strip(), None
@@ -667,8 +685,7 @@ Respond ONLY with JSON:
         with torch.no_grad():
             outputs = mdl.generate(
                 **inputs,
-                max_new_tokens=self.max_tokens,
-                temperature=self.temperature,
+                **_hf_generate_kwargs(self.max_tokens, self.temperature),
             )
 
         content = tok.decode(
