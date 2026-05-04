@@ -44,7 +44,7 @@ class DSTMemoryPipeline:
             "Initializing pipeline threshold=%.3f top_k=%d llm_mode=%s gate=%s "
             "memory_gate_stub=%s memory_strategy=%s ragu=%s ttl_mode=%s semantic_dedup=%s "
             "slot_context=%s deletion_mode=%s prompt_language=%s "
-            "unload_before_final_llm=%s",
+            "unload_before_final_llm=%s use_dataset_datetime=%s force_infinite_ttl=%s",
             config.importance_threshold,
             config.retrieval_top_k,
             config.llm_mode,
@@ -58,6 +58,8 @@ class DSTMemoryPipeline:
             config.triplet_deletion_mode,
             getattr(config, "prompt_language", "ru"),
             getattr(config, "unload_models_before_final_llm", True),
+            getattr(config, "use_dataset_datetime", False),
+            getattr(config, "force_infinite_ttl", True),
         )
         self.classifier = ImportanceClassifier(
             model_path=config.importance_model_path,
@@ -133,6 +135,7 @@ class DSTMemoryPipeline:
             triplet_deletion_mode=config.triplet_deletion_mode,
             negation_detector=negation_detector,
             deletion_client=deletion_client,
+            force_infinite_ttl=getattr(config, "force_infinite_ttl", True),
         )
         gate_stub = config.memory_gate_use_stub or slot_serving is None
         self.memory_gate = MemoryGateClient(
@@ -153,6 +156,47 @@ class DSTMemoryPipeline:
             prompt_language=config.prompt_language,
             load_dtype=config.llm_load_dtype,
         )
+
+    def set_dialogue_dataset_clock(self, dialogue_id: str, question_date_raw: Any) -> None:
+        """
+        For LongMemEval rows: one ``question_date`` per dialogue; used for fact timestamps,
+        TTL ``as_of``, and final-LLM prompt clock when ``use_dataset_datetime`` is True.
+        """
+        if not getattr(self.config, "use_dataset_datetime", False):
+            return
+        from .dataset_time import parse_longmemeval_question_date_to_iso
+
+        iso = parse_longmemeval_question_date_to_iso(question_date_raw)
+        if not iso:
+            logger.warning(
+                "use_dataset_datetime=True but question_date missing or unparseable "
+                "(dialogue_id=%s raw=%r) — using real wall clock for this dialogue",
+                dialogue_id,
+                question_date_raw,
+            )
+            return
+        state = self.dst.get_state(dialogue_id)
+        state.dataset_clock_iso = iso
+        logger.info(
+            "Dataset clock set dialogue_id=%s dataset_clock_iso=%s",
+            dialogue_id,
+            iso,
+        )
+
+    def final_llm_clock_display_for_dialogue(self, dialogue_id: str) -> Optional[str]:
+        """Return ``YYYY-MM-DD HH:MM`` for final LLM prompts, or None to use machine time."""
+        if not getattr(self.config, "use_dataset_datetime", False):
+            return None
+        state = self.dst.get_state(dialogue_id)
+        raw = getattr(state, "dataset_clock_iso", None) or None
+        if not raw:
+            return None
+        from .dataset_time import format_clock_for_final_llm_prompt
+
+        try:
+            return format_clock_for_final_llm_prompt(raw)
+        except ValueError:
+            return None
 
     def write_to_memory(self, dialogue_id: str, message: Message) -> Dict:
         logger.info(
@@ -301,10 +345,12 @@ class DSTMemoryPipeline:
         )
 
         # Build the prompt that WOULD be sent to final LLM (for logging)
+        clock_display = self.final_llm_clock_display_for_dialogue(dialogue_id)
         prompt_messages = self.final_llm.build_messages(
             question=question,
             memory_context=memory_context,
             recent_pairs=self.recent_pairs(dialogue_id),
+            clock_display=clock_display,
         )
         logger.debug(
             "answer_without_final_llm prompt:\nSYSTEM:\n%s\n\nUSER:\n%s",
@@ -441,10 +487,12 @@ class DSTMemoryPipeline:
             "answer memory_context full:\n%s",
             __import__("json").dumps(memory_context, ensure_ascii=False, indent=2),
         )
+        clock_display = self.final_llm_clock_display_for_dialogue(dialogue_id)
         answer_text = self.final_llm.generate(
             question=question,
             memory_context=memory_context,
             recent_pairs=self.recent_pairs(dialogue_id),
+            clock_display=clock_display,
         )
         logger.info("Final LLM answer dialogue_id=%s: %s", dialogue_id, answer_text[:500])
         return answer_text

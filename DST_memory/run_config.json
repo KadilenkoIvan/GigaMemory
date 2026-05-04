@@ -36,7 +36,9 @@
     "slot_model_enable_thinking": false,
     "slot_fallback_on_no_slots": true,
     "triplet_fallback_on_empty": true,
-    "prompt_language": "ru"
+    "prompt_language": "ru",
+    "use_dataset_datetime": false,
+    "force_infinite_ttl": true
   },
   "pipeline_jsonl": {
     "dataset_path": null,

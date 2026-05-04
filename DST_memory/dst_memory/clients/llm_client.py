@@ -125,10 +125,15 @@ class FinalLLMClient:
         question: str,
         memory_context: Any,
         recent_pairs: Optional[List[Dict[str, str]]] = None,
+        clock_display: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """Build the chat messages list without sending. Exposed for logging."""
         import datetime
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        if clock_display is not None and str(clock_display).strip():
+            now_str = str(clock_display).strip()
+        else:
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
         pm = self._final_llm_prompts
         system = pm.chat_api_output_policy() + pm.final_llm_system_prompt(now_str)
@@ -150,8 +155,11 @@ class FinalLLMClient:
         question: str,
         memory_context: Any,
         recent_pairs: Optional[List[Dict[str, str]]] = None,
+        clock_display: Optional[str] = None,
     ) -> str:
-        messages = self.build_messages(question, memory_context, recent_pairs or [])
+        messages = self.build_messages(
+            question, memory_context, recent_pairs or [], clock_display=clock_display
+        )
         self._last_prompt_messages = messages
 
         logger.info(

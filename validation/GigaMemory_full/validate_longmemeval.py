@@ -66,6 +66,7 @@ if str(ragu_path) not in sys.path:
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
 from dst_memory.utils.run_config_loader import load_run_config, shared_section
 from dst_memory.clients.llm_client import CHAT_API_OUTPUT_POLICY, _normalize_assistant_message_text
+from dst_memory.core.dataset_time import optional_clock_display_for_validation
 import random
 
 
@@ -345,7 +346,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "slot_context_max_facts", "triplet_deletion_mode", "deletion_use_pymorphy",
         "conflict_allow_multi_relation_same_object", "slot_model_enable_thinking",
         "slot_fallback_on_no_slots", "triplet_fallback_on_empty", "prompt_language",
-        "unload_models_before_final_llm"
+        "unload_models_before_final_llm", "use_dataset_datetime", "force_infinite_ttl",
     ]
     for attr in gm_defaults:
         if not hasattr(args, f"gm_{attr}"):
@@ -946,6 +947,8 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         triplet_fallback_on_empty=shared.get("triplet_fallback_on_empty", True),
         prompt_language=shared.get("prompt_language", "ru"),
         unload_models_before_final_llm=shared.get("unload_models_before_final_llm", True),
+        use_dataset_datetime=bool(shared.get("use_dataset_datetime", False)),
+        force_infinite_ttl=bool(shared.get("force_infinite_ttl", True)),
     )
 
 
@@ -1144,6 +1147,10 @@ class AccumulatedDialogue:
     pipeline_state: Dict[str, Any]  # Memory slots, deleted facts, etc.
     dataset_ordinal: Optional[int] = None  # index in source LongMemEval JSON array
     dialogue_row_index: Optional[int] = None  # dataset row index (one chunk_* per row)
+    # LongMemEval row ``question_date`` (shared for all questions in the row); replay for final_llm_only.
+    question_date: Optional[Any] = None
+    # Preformatted clock for FinalLLMClient when use_dataset_datetime (same as pipeline would use).
+    final_llm_clock_display: Optional[str] = None
 
 
 @dataclass
@@ -1175,6 +1182,7 @@ class MemoryOnlyState:
     pipeline_state: Dict[str, Any]  # Full pipeline state including memory_context
     dataset_ordinal: Optional[int] = None  # index in source LongMemEval JSON array
     dialogue_row_index: Optional[int] = None  # one chunk dir per row; shared across questions
+    question_date: Optional[Any] = None  # LongMemEval row field; for final_llm_only clock replay
 
 
 @dataclass
@@ -1190,6 +1198,7 @@ class IntermediateAnswer:
     memory_state_path: str  # Path for Memory Hit Rate calculation
     dataset_ordinal: Optional[int] = None
     dialogue_row_index: Optional[int] = None
+    question_date: Optional[Any] = None  # LongMemEval row; final_llm_only uses with use_dataset_datetime
 
 
 def build_judge_statistics_export(
@@ -1374,6 +1383,14 @@ class BatchProcessor:
         else:
             dialogue_id = f"longmemeval_{dialogue_row_index}"
 
+        qdate = item.get("question_date")
+        if hasattr(self.pipeline, "set_dialogue_dataset_clock"):
+            self.pipeline.set_dialogue_dataset_clock(dialogue_id, qdate)
+        clock_disp = optional_clock_display_for_validation(
+            bool(getattr(self.pipeline.config, "use_dataset_datetime", False)),
+            qdate,
+        )
+
         # Extract and process user messages (once per row)
         user_messages = extract_user_messages_from_sessions(sessions)
 
@@ -1467,6 +1484,7 @@ class BatchProcessor:
                     else None,
                     dataset_ordinal=ds_ord,
                     dialogue_row_index=dialogue_row_index,
+                    question_date=qdate,
                     pipeline_state={
                         "write_logs": write_logs,
                         "memory_slots": answer_details.get("memory_slots", []),
@@ -1490,6 +1508,8 @@ class BatchProcessor:
                     question_type=question_type,
                     dataset_ordinal=ds_ord,
                     dialogue_row_index=dialogue_row_index,
+                    question_date=qdate,
+                    final_llm_clock_display=clock_disp,
                     pipeline_state={
                         "write_logs": write_logs,
                         "memory_slots": answer_details.get("memory_slots", []),
@@ -1529,6 +1549,8 @@ class BatchProcessor:
                 row["_validation_dataset_ordinal"] = state.dataset_ordinal
             if state.dialogue_row_index is not None:
                 row["_validation_dialogue_row_index"] = state.dialogue_row_index
+            if state.question_date is not None:
+                row["question_date"] = state.question_date
             states_data.append(row)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
@@ -1581,6 +1603,7 @@ class BatchProcessor:
                         question=acc.question,
                         memory_context=memory_context,
                         recent_pairs=recent_pairs,
+                        clock_display=acc.final_llm_clock_display,
                     )
                     logger.info(
                         "[Batch] Final LLM answer for item %d: %s...",
@@ -1620,6 +1643,7 @@ class BatchProcessor:
                 memory_state_path="",  # Not available in full mode
                 dataset_ordinal=acc.dataset_ordinal,
                 dialogue_row_index=acc.dialogue_row_index,
+                question_date=acc.question_date,
             ))
 
         # Write intermediate answers
@@ -1685,6 +1709,7 @@ class BatchProcessor:
                 question_id = state_data["question_id"]
                 pipeline_state = state_data["pipeline_state"]
                 memory_state_path = state_data.get("memory_state_path", "")
+                qd = state_data.get("question_date")
 
                 # Get memory context from saved state
                 memory_context = pipeline_state.get("memory_context", {})
@@ -1692,12 +1717,18 @@ class BatchProcessor:
 
                 predicted_answer = "[no_final_llm]"
 
+                clock = optional_clock_display_for_validation(
+                    bool(getattr(self.pipeline.config, "use_dataset_datetime", False)),
+                    qd,
+                )
+
                 if self.pipeline.config.llm_mode != "stub":
                     try:
                         predicted_answer = self.pipeline.final_llm.generate(
                             question=question,
                             memory_context=memory_context,
                             recent_pairs=recent_pairs,
+                            clock_display=clock,
                         )
                         logger.info(
                             "[FinalLLMOnly] Final LLM answer for item %d: %s...",
@@ -1723,6 +1754,7 @@ class BatchProcessor:
                     memory_state_path=memory_state_path,
                     dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
                     dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
+                    question_date=qd,
                 )
                 self.intermediate_answers.append(intermediate)
 
@@ -1774,6 +1806,8 @@ class BatchProcessor:
                 row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
             if ans.dialogue_row_index is not None:
                 row_a["_validation_dialogue_row_index"] = ans.dialogue_row_index
+            if ans.question_date is not None:
+                row_a["question_date"] = ans.question_date
             answers_data.append(row_a)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
@@ -2190,6 +2224,14 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("  Calculate memory hit rate: %s", args.calculate_memory_hit_rate)
     logger.info("  Judge mode: %s", args.judge_mode)
     logger.info("  GigaMemory config: %s", args.config)
+    logger.info(
+        "  use_dataset_datetime: %s",
+        getattr(args, "gm_use_dataset_datetime", None),
+    )
+    logger.info(
+        "  force_infinite_ttl: %s",
+        getattr(args, "gm_force_infinite_ttl", None),
+    )
 
     # Mode-specific validation
     if args.validation_mode == "final_llm_only" and not args.input_state_dir:
@@ -2462,6 +2504,12 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if args.gm_unload_models_before_final_llm is not None:
         overrides["unload_models_before_final_llm"] = args.gm_unload_models_before_final_llm
 
+    if getattr(args, "gm_use_dataset_datetime", None) is not None:
+        overrides["use_dataset_datetime"] = bool(args.gm_use_dataset_datetime)
+
+    if getattr(args, "gm_force_infinite_ttl", None) is not None:
+        overrides["force_infinite_ttl"] = bool(args.gm_force_infinite_ttl)
+
     return overrides
 
 
@@ -2673,6 +2721,19 @@ Examples:
     gm_group.add_argument("--gm-unload-models-before-final-llm",
                           type=lambda x: x.lower() == 'true' if x else None,
                           default=None, help="Unload models before final LLM (true/false)")
+
+    gm_group.add_argument(
+        "--gm-use-dataset-datetime",
+        type=lambda x: x.lower() == "true" if x else None,
+        default=None,
+        help="Use LongMemEval row question_date for fact timestamps, TTL as_of, and final-LLM clock (true/false)",
+    )
+    gm_group.add_argument(
+        "--gm-force-infinite-ttl",
+        type=lambda x: x.lower() == "true" if x else None,
+        default=None,
+        help="Ignore model/slot TTL: all new facts get ttl=inf (no TTL expiry; default true in pipeline config)",
+    )
 
     # Parse known args first to get config path
     args, remaining = parser.parse_known_args()

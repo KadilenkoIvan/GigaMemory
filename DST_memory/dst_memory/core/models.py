@@ -18,8 +18,12 @@ TTL_TO_TIMEDELTA: Dict[str, Optional[timedelta]] = {
 }
 
 
-def is_expired(ttl: str, created_at_datetime: str) -> bool:
-    """Return True if the record's TTL has elapsed since created_at_datetime."""
+def is_expired(
+    ttl: str,
+    created_at_datetime: str,
+    as_of: Optional[datetime] = None,
+) -> bool:
+    """Return True if TTL has elapsed since ``created_at_datetime`` relative to ``as_of`` (default: real now)."""
     if ttl == "inf" or not created_at_datetime:
         return False
     delta = TTL_TO_TIMEDELTA.get(ttl)
@@ -29,7 +33,8 @@ def is_expired(ttl: str, created_at_datetime: str) -> bool:
         created = datetime.fromisoformat(created_at_datetime)
     except ValueError:
         return False
-    return datetime.now() > created + delta
+    ref = as_of if as_of is not None else datetime.now()
+    return ref > created + delta
 
 
 def now_iso() -> str:
@@ -58,8 +63,8 @@ class FactRecord:
     ttl: str = "inf"
     created_at_datetime: str = field(default_factory=now_iso)
 
-    def is_expired(self) -> bool:
-        return is_expired(self.ttl, self.created_at_datetime)
+    def is_expired(self, as_of: Optional[datetime] = None) -> bool:
+        return is_expired(self.ttl, self.created_at_datetime, as_of=as_of)
 
     def refresh_ttl(self) -> None:
         """Reset the TTL timer (called on semantic dedup match)."""
@@ -112,3 +117,5 @@ class DialogueMemoryState:
     next_record_id: int = 1
     recent_pairs: List[Dict[str, str]] = field(default_factory=list)
     deleted_facts: List[DeletedFact] = field(default_factory=list)  # Track all soft-deleted facts with reasons
+    # When set (LongMemEval validation): new facts use this ISO time; TTL expiry uses it as "now".
+    dataset_clock_iso: Optional[str] = None

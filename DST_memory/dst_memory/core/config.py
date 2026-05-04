@@ -177,6 +177,15 @@ class PipelineConfig:
     # Prompt UI language for slot/triplet/gate/deletion/conflict/final LLM ("ru" | "en").
     prompt_language: str = "ru"
 
+    # When True (LongMemEval-style validation): parse row ``question_date`` once per dialogue,
+    # stamp new facts with that instant, use it as "now" for TTL expiry, and show it to the
+    # final LLM instead of the machine clock.
+    use_dataset_datetime: bool = False
+
+    # When True (default): every inserted fact gets ttl ``inf`` — model TTL output is ignored;
+    # lazy TTL expiry never deactivates records. Set False to use normal ttl_mode / model TTL.
+    force_infinite_ttl: bool = True
+
     # -------------------------------------------------------------------
     # Model unloading for local final LLM
     # -------------------------------------------------------------------

@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 
@@ -75,6 +76,7 @@ class DSTManager:
         triplet_deletion_mode: str = "none",
         negation_detector: Optional[Any] = None,
         deletion_client: Optional[Any] = None,
+        force_infinite_ttl: bool = False,
     ):
         self._states: Dict[str, DialogueMemoryState] = {}
         self.triplet_extractor = triplet_extractor
@@ -92,6 +94,7 @@ class DSTManager:
         self.triplet_deletion_mode = triplet_deletion_mode
         self.negation_detector = negation_detector
         self.deletion_client = deletion_client
+        self.force_infinite_ttl = bool(force_infinite_ttl)
 
         # Enforce: llm_inline requires context
         if triplet_deletion_mode == "llm_inline" and not slot_context_enabled:
@@ -106,8 +109,27 @@ class DSTManager:
         if ttl_slot_overrides:
             self._slot_ttl.update(ttl_slot_overrides)
 
+    @staticmethod
+    def _as_of_datetime_for_state(state: DialogueMemoryState) -> Optional[datetime]:
+        raw = getattr(state, "dataset_clock_iso", None) or None
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _new_fact_created_at_iso(state: DialogueMemoryState) -> str:
+        raw = getattr(state, "dataset_clock_iso", None) or None
+        if raw:
+            return raw
+        return now_iso()
+
     def _resolve_ttl(self, triplet: ExtractedTriplet) -> str:
         """Determine TTL for a triplet based on ttl_mode."""
+        if self.force_infinite_ttl:
+            return "inf"
         if self.ttl_mode == "mode2" and triplet.ttl and triplet.ttl != "inf":
             return triplet.ttl
         if self.ttl_mode == "mode2" and triplet.ttl == "inf":
@@ -123,8 +145,9 @@ class DSTManager:
         Also tracks deleted facts with reason 'ttl_expired'.
         """
         deactivated: List[int] = []
+        as_of = self._as_of_datetime_for_state(state)
         for rec in state.slots.get(slot, []):
-            if rec.is_active and rec.is_expired():
+            if rec.is_active and rec.is_expired(as_of=as_of):
                 rec.is_active = False
                 rec.updated_at_step = state.step
                 deactivated.append(rec.record_id)
@@ -655,7 +678,7 @@ class DSTManager:
                     object=t.object,
                     is_active=True,
                     ttl=ttl,
-                    created_at_datetime=now_iso(),
+                    created_at_datetime=self._new_fact_created_at_iso(state),
                 )
                 state.slots[slot].append(rec)
 
@@ -805,10 +828,11 @@ class DSTManager:
     def expired_facts(self, dialogue_id: str) -> List[Dict[str, Any]]:
         """Return all expired (soft-deleted) records for logging/visualization."""
         state = self.get_state(dialogue_id)
+        as_of = self._as_of_datetime_for_state(state)
         result = []
         for slot, records in state.slots.items():
             for rec in records:
-                if not rec.is_active and is_expired(rec.ttl, rec.created_at_datetime):
+                if not rec.is_active and is_expired(rec.ttl, rec.created_at_datetime, as_of=as_of):
                     result.append({
                         "slot": slot,
                         "record_id": rec.record_id,
