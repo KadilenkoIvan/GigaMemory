@@ -142,7 +142,6 @@ class LocalHFServing:
                 attn_implementation=self._attn,
             ).to(self.device)
         self.model.eval()
-        logger.info(f"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n\n{self.model.config._attn_implementation}\n\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         try:
             first_param = next(self.model.parameters())
             model_device = first_param.device
@@ -246,7 +245,7 @@ class LocalHFServing:
             gen_kwargs["top_p"] = generation_config.top_p
         with torch.no_grad():
             outputs = self.model.generate(
-                **inputs,
+                input_ids=inputs["input_ids"],
                 **gen_kwargs,
             )
         result = self.tokenizer.decode(
