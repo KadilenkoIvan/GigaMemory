@@ -31,7 +31,11 @@ def build_conflict_messages(
         "IMPORTANT: If the existing and new triplet have the SAME subject and SAME object but "
         "DIFFERENT relations, they express COMPLEMENTARY information about the same entity "
         "(e.g. 'есть партнёр' and 'живёт вместе с' for the same partner) — "
-        "keep BOTH, return {\"deactivate\":[], \"skip_new\":[]}.\n\n"
+        "keep BOTH, return {\"deactivate\":[], \"skip_new\":[]}.\n"
+        "CRITICAL: if you deactivate an existing record BECAUSE a new triplet replaces it,"
+        "this new triplet SHOULD NOT be included in skip_new — it carries true information and should be inserted.\n"
+        "YOU CANNOT simultaneously deactivate a record and skip a new triplet that caused the deactivation.\n"
+        "If you deactivated an existing entry because a new triplet replaces it, then you need to insert all the information provided that relates to the new triplet.\n\n"
         f"SLOT: {slot_name}\n"
     )
 
