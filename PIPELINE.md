@@ -174,7 +174,8 @@ dst_memory/
    - если сходство ≥ `ttl_semantic_dedup_threshold` (default 0.9), старый факт деактивируется, новый вставляется (таймер TTL обновляется).
 7. Conflict resolution (`TripletConflictClient`):
    - rule-layer + LLM-layer;
-   - возможна деактивация старых записей и/или skip новых.
+   - возможна деактивация старых записей и/или skip новых;
+   - `skip_new` в ответе LLM является опциональным: парсер корректно обрабатывает ответы только вида `{"deactivate":[...]}`.
 8. Обновление DST state:
    - добавляются `FactRecord` с полями `ttl` и `created_at_datetime`;
    - обновляется `step`, `record_id`.
@@ -347,7 +348,8 @@ TTL хранится в поле `description` ребра в виде аннот
 - `stub` — локальный шаблонный ответ.
 - `openrouter` — основной runtime режим.
 - `api` — OpenAI-compatible endpoint.
-- `local` — не реализован.
+- `puter` — OpenAI-compatible endpoint Puter (`https://api.puter.com/puterai/openai/v1`).
+- `local` — локальная HF-модель через `LocalHFServing` (поддерживаются `llm_load_dtype`, `llm_load_quantization`, `llm_max_context_tokens`).
 
 ---
 
@@ -420,7 +422,6 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 ## 13. Текущие технические ограничения
 
 - На Python 3.13 возможны проблемы совместимости зависимостей RAGU (в т.ч. transitive deps).
-- `local` final LLM backend не реализован.
 - `ttl_mode=mode3` (отдельный вызов модели для TTL) не реализован — используется `mode2`.
 - Качество retrieval зависит от выбранной embedder-модели и качества триплетов.
 - Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен, дедупликация пропускается с предупреждением в логе.

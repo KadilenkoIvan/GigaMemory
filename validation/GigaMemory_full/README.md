@@ -117,7 +117,15 @@ memory_only_states.json  intermediate_answers.json  validation_results.json
 - Проверяется отдельным вызовом судьи, который анализирует `memory_context`
 - Помогает различать проблемы: плохое сохранение в память vs плохой ответ LLM
 
-### 9. Полная конфигурация через CLI
+### 9. Статистика размера prompt final LLM
+
+Для каждого вызова final LLM сохраняется размер prompt в символах:
+- до обрезки (`before_clamp`);
+- после обрезки (`after_clamp`).
+
+Агрегаты по запуску попадают в `statistics`, а значения по каждому примеру — в `results`/`intermediate_answers`.
+
+### 10. Полная конфигурация через CLI
 
 Все параметры можно переопределить через CLI:
 
@@ -435,6 +443,11 @@ output-dir/
 │     "statistics": {
 │       "total": 40,
 │       "total_score": 31.5,
+│       "final_llm_prompt_chars": {
+│         "calls": 40,
+│         "before_clamp_total": 1223400,
+│         "after_clamp_total": 988120
+│       },
 │       "by_type": {
 │         "knowledge-update": {"count": 10, "average_score": 0.85, "errors": 0},
 │         ...
@@ -457,6 +470,8 @@ output-dir/
 │         "score": 1.0,
 │         "reasoning": "Perfect match",
 │         "predicted_answer": "...",
+│         "final_llm_prompt_chars_before_clamp": 31240,
+│         "final_llm_prompt_chars_after_clamp": 24577,
 │         "correct": true,
 │         "memory_hit": true,
 │         "judge_evaluation": {...},
@@ -492,8 +507,9 @@ output-dir/
 | `--gm-importance-threshold` | Порог важности | `0.25` |
 | `--gm-memory-strategy` | Стратегия памяти | `full_graph_json`, `relevant_slots_full`, `topk_graph_records` |
 | `--gm-graph-top-k-records` | Top-K для retrieval | `20` |
-| `--gm-llm-mode` | Режим финальной LLM | `stub`, `local`, `openrouter`, `api` |
+| `--gm-llm-mode` | Режим финальной LLM | `stub`, `local`, `openrouter`, `api`, `puter` |
 | `--gm-llm-model` | Имя модели | `openai/gpt-oss-120b:free` |
+| `--gm-llm-tokenizer-model` | HF tokenizer id/path для clamp | `Qwen/Qwen2.5-7B-Instruct` |
 | `--gm-llm-api-key` | API ключ | `sk-or-v1-...` |
 | `--gm-ragu-storage-path` | Путь к RAGU | `./ragu_storage` |
 | `--gm-ragu-embedder-model` | Embedder модель | `deepvk/USER-bge-m3` |
@@ -502,6 +518,13 @@ output-dir/
 | `--gm-triplet-deletion-mode` | Режим удаления | `none`, `heuristic`, `llm_inline`, `llm_separate` |
 | `--gm-prompt-language` | Язык промптов | `ru`, `en` |
 | `--gm-unload-models-before-final-llm` | Выгрузка моделей | `true`, `false` |
+
+### Параметры judge
+
+| Параметр | Описание | Пример |
+|----------|----------|--------|
+| `--judge-max-context-tokens` | Лимит prompt judge перед completion | `32768` |
+| `--judge-tokenizer-model` | HF tokenizer id/path для clamp judge | `meta-llama/Llama-3.1-8B-Instruct` |
 
 ### Таблица сравнения режимов
 
@@ -550,11 +573,10 @@ Case 3: MHR=95%, Accuracy=92%
 ```bash
 # Обрабатываем 311 примеров батчами по 20
 for start in 0 20 40 60 80 100 120 140 160 180 200 220 240 260 280 300; do
-    python validate_longmemeval_v2.py \
+    python validate_longmemeval.py \
         --dataset-path ../../LongMemEval/longmemeval_s_cleaned.json \
         --output-dir ./results_batch_${start} \
-        --start-index ${start} \
-        --num-items 20 \
+        --num-items-per-type 5 \
         --final-llm-batch-size 10 \
         --judge-batch-size 20 \
         --calculate-memory-hit-rate \

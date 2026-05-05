@@ -69,9 +69,11 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--importance-model-path`
 - `--ragu-embedder-model`
 - `--ragu-storage-path`
-- `--llm-mode` (`openrouter|api|stub|local`)
+- `--llm-mode` (`openrouter|api|puter|stub|local`)
 - `--no-final-llm`
 - `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict и финальной LLM (в `run_config.json`: `prompt_language`)
+
+Для ограничения входного контекста final LLM используйте `shared.llm_max_context_tokens` в `run_config.json` (или соответствующий `giga_memory.llm_max_context_tokens` в конфиге валидации). Это особенно важно для моделей с меньшим окном контекста (например, 32768).
 
 ## Режимы удаления фактов
 
@@ -88,7 +90,7 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 ## Ключевые ограничения
 
 - Проект зафиксирован как RAGU-only.
-- `llm_mode=local` для final LLM пока не реализован.
+- `llm_mode=local` для final LLM поддерживается, но требует достаточного VRAM/CPU RAM и корректной локальной HF-модели.
 - `llm_inline` режим автоматически включает контекст слота, даже если `slot_context_enabled=false`.
 - Heuristic-детектор покрывает явные паттерны отрицания; косвенные семантические удаления — через LLM-режимы.
 

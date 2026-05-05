@@ -50,6 +50,11 @@ def setup_logging(level: str, log_file: Optional[str] = None) -> None:
     )
 
 logger = logging.getLogger(__name__)
+PUTER_OPENAI_BASE_URL = "https://api.puter.com/puterai/openai/v1"
+
+
+def _messages_char_count(messages: List[Dict[str, str]]) -> int:
+    return sum(len(str(m.get("content", ""))) for m in messages)
 
 
 def _normalize_openai_assistant_text(message: Any) -> str:
@@ -170,10 +175,20 @@ def retry_with_backoff(max_retries: int = 3, backoff_base: float = 1.0):
                     return func(*args, **kwargs)
                 except urllib.error.HTTPError as e:
                     last_exception = e
+                    err_body = ""
+                    try:
+                        if getattr(e, "fp", None) is not None:
+                            raw = e.read()
+                            if raw:
+                                err_body = raw.decode("utf-8", errors="replace")
+                    except Exception:
+                        err_body = ""
                     if e.code in (400, 429, 500, 502, 503, 504):
                         wait_time = backoff_base * (2 ** attempt) + random.uniform(0, 1)
                         logger.warning("HTTP %d error, retrying in %.1fs (attempt %d/%d)",
                                        e.code, wait_time, attempt + 1, max_retries)
+                        if err_body:
+                            logger.warning("HTTP %d response body: %s", e.code, err_body[:1000])
                         time.sleep(wait_time)
                     else:
                         raise
@@ -226,6 +241,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
         "final_llm": {
             "mode": "openrouter",
             "model": "openai/gpt-oss-120b:free",
+            "tokenizer_model": "",
             "api_url": "https://openrouter.ai/api/v1",
             "api_key": "",
             "temperature": 0.0,
@@ -404,6 +420,7 @@ class FinalLLMClient:
         api_url: str = "",
         api_key: str = "",
         model: str = "",
+        tokenizer_model: str = "",
         temperature: float = 0.0,
         max_tokens: int = 1024,
         local_model_path: str = "",
@@ -413,8 +430,15 @@ class FinalLLMClient:
     ):
         self.mode = mode
         self.api_url = api_url or "https://openrouter.ai/api/v1"
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENROUTER_API_KEY", "")
+            or os.environ.get("PUTER_API_KEY", "")
+        )
+        if self.mode == "puter" and (not self.api_url or "openrouter.ai" in self.api_url):
+            self.api_url = PUTER_OPENAI_BASE_URL
         self.model = model
+        self.tokenizer_model = (tokenizer_model or "").strip()
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path or ""
@@ -423,13 +447,16 @@ class FinalLLMClient:
         self.max_context_tokens = int(max_context_tokens)
         self._hf_serving = None
         self._tok_limit: Any = None  # AutoTokenizer or False
+        self._last_prompt_chars_before_clamp = 0
+        self._last_prompt_chars_after_clamp = 0
 
         # local: from_pretrained(local_model_path or model) — HF repo id or disk path
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
-            "FinalLLM mode=%s pretrained=%s load_dtype=%s load_quantization=%s max_context_tokens=%s",
+            "FinalLLM mode=%s pretrained=%s tokenizer_model=%s load_dtype=%s load_quantization=%s max_context_tokens=%s",
             mode,
             _resolved or "(empty)",
+            self.tokenizer_model or "(auto)",
             self.load_dtype,
             self.load_quantization,
             self.max_context_tokens,
@@ -468,7 +495,6 @@ class FinalLLMClient:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "messages": messages,
-            "tool_choice": "none",
         }
 
         headers = {
@@ -503,7 +529,7 @@ class FinalLLMClient:
             return None
         if self._tok_limit is not None:
             return self._tok_limit
-        pid = self._local_pretrained_id()
+        pid = (self.tokenizer_model or "").strip() or self._local_pretrained_id()
         if not pid:
             self._tok_limit = False
             return None
@@ -519,6 +545,8 @@ class FinalLLMClient:
 
     def generate(self, question: str, context: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
         """Generate answer. Returns (answer, error)."""
+        messages_before = self.build_messages(question, list(context))
+        self._last_prompt_chars_before_clamp = _messages_char_count(messages_before)
         ctx: List[Dict[str, str]] = list(context)
         if self.max_context_tokens > 0 and self.mode != "stub":
             tok = self._get_limit_tokenizer()
@@ -533,11 +561,12 @@ class FinalLLMClient:
                     self.max_context_tokens,
                 )
         messages = self.build_messages(question, ctx)
+        self._last_prompt_chars_after_clamp = _messages_char_count(messages)
 
         if self.mode == "stub":
             return f"[STUB] Answer to: {question[:50]}...", None
 
-        if self.mode == "openrouter":
+        if self.mode in ("openrouter", "puter", "api"):
             try:
                 return self._call_api(messages), None
             except Exception as e:
@@ -548,6 +577,12 @@ class FinalLLMClient:
             return self._call_local(messages)
 
         return "", f"Unknown mode: {self.mode}"
+
+    def get_last_prompt_char_stats(self) -> Dict[str, int]:
+        return {
+            "before_clamp_chars": int(self._last_prompt_chars_before_clamp),
+            "after_clamp_chars": int(self._last_prompt_chars_after_clamp),
+        }
 
     def _local_pretrained_id(self) -> str:
         return (self.local_model_path or "").strip() or (self.model or "").strip()
@@ -627,8 +662,14 @@ class JudgeClient:
     ):
         self.mode = mode
         self.model = model
-        self.api_url = api_url
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_url = api_url or "https://openrouter.ai/api/v1"
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENROUTER_API_KEY", "")
+            or os.environ.get("PUTER_API_KEY", "")
+        )
+        if self.mode == "puter" and (not self.api_url or "openrouter.ai" in self.api_url):
+            self.api_url = PUTER_OPENAI_BASE_URL
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path or ""
@@ -648,32 +689,35 @@ class JudgeClient:
     def _local_pretrained_id(self) -> str:
         return (self.local_model_path or "").strip() or (self.model or "").strip()
 
-    def _get_system_prompt(self, question_type: str) -> str:
-        """Get system prompt with scoring criteria."""
+    def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
+        """Get system prompt with 0-1 scoring criteria."""
         type_desc = QUESTION_TYPES.get(question_type, "General question answering")
 
         return CHAT_API_OUTPUT_POLICY + f"""You are an expert evaluator assessing answer quality.
 
-Question Type: {question_type}
-Type Description: {type_desc}
+    Question Type: {question_type}
+    Type Description: {type_desc}
 
-Your task: Compare the predicted answer with the reference (gold) answer and return a score from 0.0 to 1.0 representing how well the predicted answer covers the factual content of the reference.
+    Your task: Compare the predicted answer with the reference (gold) answer and return a score from 0.0 to 1.0 representing how well the predicted answer covers the factual content of the reference.
 
-Scoring Scale:
-1.0 - Perfect match: Contains all key entities and facts from reference. Wording may differ, but meaning is identical.
-0.8 - Minor inaccuracy: All key entities present, but one is slightly distorted (wrong number, approximate date, slight name variation).
-0.6 - Partial answer: Covers most of reference, but one of several equally important entities is missing or replaced.
-0.4 - Weak coverage: Only one correct entity from several needed mentioned, OR correct category but wrong specific fact.
-0.2 - Minimal match: Thematically related to question but factually almost no overlap with reference — guessed domain but not content.
-0.0 - No match: Factually incorrect, contradicts reference, or system said "I don't know" when reference exists.
+    Core Evaluation Principle:
+    Focus ONLY on whether the required facts/entities from the reference are present in the predicted answer.
+    IGNORE everything else: additional context, caveats, disclaimers, uncertainty phrases ("I think", "probably", "as of my knowledge"), verbose explanations, or any extra information beyond what was asked. Their presence or absence does NOT affect the score.
 
-Special Rules:
-- For knowledge-update: If system named old/outdated fact instead of new one → 0.0 (old fact doesn't count).
-- For single-session-preference: Judge if correct user fact was used, not quote accuracy. Different phrasing with correct fact = 1.0.
-- For multi-session: If aggregation needed (e.g., "how many total"), partial count scores proportionally: found 2 of 4 needed entities → 0.4-0.6 depending on importance of missing ones.
+    Scoring Scale:
+    1.0 - Perfect match: All key entities and facts from the reference are present. Wording may differ, but the required content is there.
+    0.8 - Minor inaccuracy: All key entities present, but one is slightly distorted (wrong number, approximate date, slight name variation).
+    0.6 - Partial answer: Most of the reference is covered, but one of several equally important entities is missing or replaced.
+    0.4 - Weak coverage: Only one correct entity from several needed is mentioned, OR correct category but wrong specific fact.
+    0.2 - Minimal match: Thematically related to the question but factually almost no overlap with the reference.
+    0.0 - No match: Factually incorrect, contradicts the reference, or no relevant facts present.
 
-Respond ONLY with JSON:
-{{"score": 0.0-1.0, "reasoning": "brief explanation of coverage and any missing elements"}}"""
+    Special Rules:
+    - For knowledge-update: If the system named the old/outdated fact instead of the new one → 0.0 (old fact does not count).
+    - For single-session-preference: Judge whether the correct user fact was used, not phrasing. Different wording with the correct fact = 1.0.
+    - For multi-session: If aggregation is needed (e.g., "how many total"), score proportionally to how many required entities were found: 2 of 4 → 0.4–0.6 depending on the importance of missing ones.
+
+    Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}"""
 
     @retry_with_backoff(max_retries=3)
     def _call_judge_api(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -683,7 +727,6 @@ Respond ONLY with JSON:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "messages": messages,
-            "tool_choice": "none",
         }
 
         headers = {
@@ -799,7 +842,6 @@ Respond ONLY with JSON:
             f"Predicted Answer: {predicted}\n\n"
             f"Score the predicted answer's coverage of the reference."
         )
-
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -862,13 +904,16 @@ class BatchProcessor:
         self._validation_metadata = validation_metadata
 
         self.item_buffer: List[AccumulatedItem] = []
-        self.answer_buffer: List[Tuple[AccumulatedItem, str, Optional[str]]] = []
+        self.answer_buffer: List[Tuple[AccumulatedItem, str, Optional[str], int, int]] = []
         self.results: List[Dict[str, Any]] = []
 
         self.stats = {
             "total": 0,
             "errors_final_llm": 0,
             "errors_judge": 0,
+            "final_llm_calls": 0,
+            "final_llm_prompt_chars_before_clamp_total": 0,
+            "final_llm_prompt_chars_after_clamp_total": 0,
             "by_type": {qt: {"count": 0, "total_score": 0.0, "errors": 0}
                         for qt in QUESTION_TYPES.keys()},
         }
@@ -912,13 +957,19 @@ class BatchProcessor:
 
         for item in self.item_buffer:
             answer, error = self.final_llm.generate(item.question, item.context)
+            char_stats = self.final_llm.get_last_prompt_char_stats()
+            prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
+            prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
+            self.stats["final_llm_calls"] += 1
+            self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
+            self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
 
             if error:
                 logger.error("[Item %d] Final LLM error: %s", item.global_index, error)
                 self.stats["errors_final_llm"] += 1
 
             logger.info("[Item %d] Answer: %s", item.global_index, answer)
-            self.answer_buffer.append((item, answer, error))
+            self.answer_buffer.append((item, answer, error, prompt_chars_before, prompt_chars_after))
 
         self.item_buffer.clear()
 
@@ -940,7 +991,7 @@ class BatchProcessor:
 
         logger.info("[Batch] Judging %d answers", len(self.answer_buffer))
 
-        for item, predicted, final_llm_error in self.answer_buffer:
+        for item, predicted, final_llm_error, prompt_chars_before, prompt_chars_after in self.answer_buffer:
             score, reasoning, judge_error = self.judge.evaluate(
                 item.question, predicted, item.reference_answer, item.question_type
             )
@@ -970,6 +1021,8 @@ class BatchProcessor:
                 "reasoning": reasoning,
                 "final_llm_error": final_llm_error,
                 "judge_error": judge_error,
+                "final_llm_prompt_chars_before_clamp": prompt_chars_before,
+                "final_llm_prompt_chars_after_clamp": prompt_chars_after,
             })
 
             self.stats["total"] += 1
@@ -1005,6 +1058,17 @@ class BatchProcessor:
                 "errors_final_llm": self.stats["errors_final_llm"],
                 "errors_judge": self.stats["errors_judge"],
                 "average_score": avg_score,
+                "final_llm_calls": self.stats["final_llm_calls"],
+                "final_llm_prompt_chars_before_clamp_total": self.stats["final_llm_prompt_chars_before_clamp_total"],
+                "final_llm_prompt_chars_after_clamp_total": self.stats["final_llm_prompt_chars_after_clamp_total"],
+                "final_llm_prompt_chars_before_clamp_avg": (
+                    self.stats["final_llm_prompt_chars_before_clamp_total"] / self.stats["final_llm_calls"]
+                    if self.stats["final_llm_calls"] > 0 else 0.0
+                ),
+                "final_llm_prompt_chars_after_clamp_avg": (
+                    self.stats["final_llm_prompt_chars_after_clamp_total"] / self.stats["final_llm_calls"]
+                    if self.stats["final_llm_calls"] > 0 else 0.0
+                ),
                 "by_type": by_type,
             },
             "timing": timing_stats,
@@ -1090,6 +1154,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         api_url=final_llm_cfg.get("api_url", ""),
         api_key=final_llm_cfg.get("api_key", ""),
         model=final_llm_cfg.get("model", ""),
+        tokenizer_model=final_llm_cfg.get("tokenizer_model", ""),
         temperature=final_llm_cfg.get("temperature", 0.0),
         max_tokens=final_llm_cfg.get("max_tokens", 1024),
         local_model_path=final_llm_cfg.get("local_model_path", ""),
@@ -1175,6 +1240,12 @@ def run_validation(config: Dict[str, Any]) -> None:
     logger.info("Total processed: %d", stats["total"])
     logger.info("Final LLM errors: %d", stats["errors_final_llm"])
     logger.info("Judge errors: %d", stats["errors_judge"])
+    logger.info(
+        "Final LLM prompt chars: before_clamp_total=%d after_clamp_total=%d calls=%d",
+        stats.get("final_llm_prompt_chars_before_clamp_total", 0),
+        stats.get("final_llm_prompt_chars_after_clamp_total", 0),
+        stats.get("final_llm_calls", 0),
+    )
 
     # Per-type summary
     logger.info("\nPer-question-type results:")

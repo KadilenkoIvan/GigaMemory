@@ -20,12 +20,14 @@
 | `disable_memory_gate` | bool | отключить LLM gate для `relevant_slots_full` |
 | `memory_gate_use_stub` | bool | использовать эвристику вместо локальной gate LLM |
 | `memory_strategy` | str | `full_graph_json` \| `relevant_slots_full` \| `topk_graph_records` |
-| `llm_mode` | str | `openrouter` \| `api` \| `stub` \| `local` |
+| `llm_mode` | str | `openrouter` \| `api` \| `puter` \| `stub` \| `local` |
 | `llm_api_url` | str | OpenAI-compatible endpoint |
 | `llm_api_key` | str | API key, можно через `${OPENROUTER_API_KEY}` |
 | `llm_model` | str | model id провайдера |
+| `llm_tokenizer_model` | str | HF tokenizer id/path для clamp, если `llm_model` не HF-совместимый |
 | `llm_temperature` | float | температура final LLM |
 | `llm_max_tokens` | int | max tokens final LLM |
+| `llm_max_context_tokens` | int | максимальный размер prompt-контекста в токенах (0 = без ограничения) |
 | `openrouter_http_referer` | str | optional Referer header |
 | `openrouter_x_title` | str | optional X-OpenRouter-Title |
 | `no_final_llm` | bool | вернуть только структуру ответа без вызова final LLM |
@@ -50,6 +52,10 @@
 | `slot_context_max_facts` | int | макс. кол-во фактов в контексте слота (default `10`, защита от раздувания промпта) |
 | `triplet_deletion_mode` | str | режим удаления: `none` / `heuristic` / `llm_inline` / `llm_separate` |
 | `deletion_use_pymorphy` | bool | использовать pymorphy2 для лемматизации в режиме `heuristic` (default `false`) |
+
+Примечание по Puter:
+- Для `llm_mode=puter` используется OpenAI-compatible backend Puter (`https://api.puter.com/puterai/openai/v1`).
+- Ключ можно передать в `llm_api_key` или через `PUTER_API_KEY`.
 
 ### Режимы удаления (`triplet_deletion_mode`)
 
@@ -98,6 +104,10 @@
 | key | type | description |
 |---|---|---|
 | `conflict_allow_multi_relation_same_object` | bool | Если `true` (default): два факта с одинаковым `subject` + одинаковым `object` но разными `relation` считаются **дополняющими** и LLM-вызов конфликт-резолвера для них пропускается. Пример: `есть партнёр` и `живёт вместе с` одного и того же объекта — оба факта сохраняются. Установи `false` чтобы всегда вызывать LLM при любом `same-subject` совпадении. |
+
+Формат ответа LLM-конфликт-резолвера:
+- Поддерживаются оба варианта JSON: `{"deactivate":[...], "skip_new":[...]}` и сокращённый `{"deactivate":[...]}`.
+- При отсутствии `skip_new` парсер трактует его как пустой список (без ошибки пайплайна).
 
 ## `pipeline_jsonl`
 

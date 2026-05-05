@@ -15,6 +15,7 @@ from .context_limit import (
 )
 
 logger = logging.getLogger(__name__)
+PUTER_OPENAI_BASE_URL = "https://api.puter.com/puterai/openai/v1"
 
 # Bilingual prefix for judge / baseline evaluator API calls (validation scripts import this).
 # Final LLM uses language-specific policy from `prompts.<ru|en>.final_llm_messages`.
@@ -65,6 +66,18 @@ def _torch_dtype_from_string(name: str):
     return torch.float32
 
 
+def _messages_char_count(messages: List[Dict[str, str]]) -> int:
+    return sum(len(str(m.get("content", ""))) for m in messages)
+
+
+def _effective_prompt_token_budget(max_context_tokens: int, max_completion_tokens: int) -> int:
+    cap = int(max_context_tokens or 0)
+    if cap <= 0:
+        return 0
+    reserve = max(64, int(max_completion_tokens or 0))
+    return max(256, cap - reserve)
+
+
 class FinalLLMClient:
     def __init__(
         self,
@@ -72,6 +85,7 @@ class FinalLLMClient:
         api_url: str = "",
         api_key: str = "",
         model: str = "",
+        tokenizer_model: str = "",
         temperature: float = 0.0,
         max_tokens: int = 1024,
         http_referer: str = "",
@@ -84,10 +98,17 @@ class FinalLLMClient:
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
+        if self.mode == "puter":
+            if (not self.api_url) or ("openrouter.ai" in self.api_url):
+                self.api_url = PUTER_OPENAI_BASE_URL
         self.api_key = (api_key or "").strip() or (
-            os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+            os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("PUTER_API_KEY")
+            or ""
         ).strip()
         self.model = model or ""
+        self.tokenizer_model = (tokenizer_model or "").strip()
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.http_referer = http_referer or ""
@@ -104,12 +125,15 @@ class FinalLLMClient:
         # Last sent messages (system + user) — populated on every generate() call.
         # Used for logging to *_logs.json.
         self._last_prompt_messages: List[Dict[str, str]] = []
+        self._last_prompt_chars_before_clamp: int = 0
+        self._last_prompt_chars_after_clamp: int = 0
         self._local_serving: Any = None
         logger.info(
-            "FinalLLMClient initialized mode=%s model=%s temperature=%s prompt_language=%s "
+            "FinalLLMClient initialized mode=%s model=%s tokenizer_model=%s temperature=%s prompt_language=%s "
             "load_dtype=%s load_quantization=%s max_context_tokens=%s enable_thinking=%s",
             self.mode,
             self.model or "(none)",
+            self.tokenizer_model or "(auto)",
             temperature,
             self._prompt_lang,
             self.load_dtype,
@@ -148,14 +172,15 @@ class FinalLLMClient:
             return None
         if self._tokenizer_limit is not None:
             return self._tokenizer_limit
-        if not (self.model or "").strip():
+        model_id = (self.tokenizer_model or "").strip() or (self.model or "").strip()
+        if not model_id:
             self._tokenizer_limit = False
             return None
         try:
             from transformers import AutoTokenizer
 
             self._tokenizer_limit = AutoTokenizer.from_pretrained(
-                self.model.strip(),
+                model_id,
                 trust_remote_code=True,
             )
             return self._tokenizer_limit
@@ -204,15 +229,21 @@ class FinalLLMClient:
         messages = self.build_messages(
             question, memory_context, recent_pairs or [], clock_display=clock_display
         )
+        self._last_prompt_chars_before_clamp = _messages_char_count(messages)
         if self.mode != "stub" and self.max_context_tokens > 0:
             tok = self._tokenizer_for_prompt_limit()
             if tok is not None:
+                prompt_budget = _effective_prompt_token_budget(
+                    self.max_context_tokens,
+                    self.max_tokens,
+                )
                 messages = clamp_chat_messages_to_max_tokens(
                     tok,
                     messages,
-                    self.max_context_tokens,
+                    prompt_budget,
                     enable_thinking=self.enable_thinking,
                 )
+        self._last_prompt_chars_after_clamp = _messages_char_count(messages)
         self._last_prompt_messages = messages
 
         logger.info(
@@ -261,13 +292,21 @@ class FinalLLMClient:
             )
             return self._local_serving.generate_chat(messages, generation_config=gen_cfg)
 
-        if self.mode in ("api", "openrouter"):
+        if self.mode in ("api", "openrouter", "puter"):
             return self._openai_compatible_chat(messages)
 
         raise ValueError(f"Unknown llm_mode: {self.mode}")
 
+    def get_last_prompt_char_stats(self) -> Dict[str, int]:
+        return {
+            "before_clamp_chars": int(self._last_prompt_chars_before_clamp),
+            "after_clamp_chars": int(self._last_prompt_chars_after_clamp),
+        }
+
     def _chat_url(self) -> str:
         base = self.api_url
+        if not base and self.mode == "puter":
+            base = PUTER_OPENAI_BASE_URL
         if not base:
             base = "https://openrouter.ai/api/v1"
         if base.endswith("/chat/completions"):

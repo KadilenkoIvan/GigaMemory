@@ -149,6 +149,7 @@ class DSTMemoryPipeline:
             api_url=config.llm_api_url,
             api_key=config.llm_api_key,
             model=config.llm_model,
+            tokenizer_model=getattr(config, "llm_tokenizer_model", ""),
             temperature=config.llm_temperature,
             max_tokens=config.llm_max_tokens,
             http_referer=config.openrouter_http_referer,

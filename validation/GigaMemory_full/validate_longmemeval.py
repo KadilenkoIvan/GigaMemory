@@ -66,6 +66,10 @@ if str(ragu_path) not in sys.path:
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
 from dst_memory.utils.run_config_loader import load_run_config, shared_section
 from dst_memory.clients.llm_client import CHAT_API_OUTPUT_POLICY, _normalize_assistant_message_text
+from dst_memory.clients.context_limit import (
+    DEFAULT_MAX_CONTEXT_TOKENS,
+    clamp_chat_messages_to_max_tokens,
+)
 from dst_memory.core.dataset_time import (
     fact_clock_iso_for_haystack_session,
     optional_clock_display_for_validation,
@@ -249,6 +253,8 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "api_key": "",
             "temperature": 0.0,
             "max_tokens": 1024,
+            "max_context_tokens": 128 * 1024,
+            "tokenizer_model": "",
             "local_model_path": "",
             "load_dtype": "float16",
             "load_quantization": "none",
@@ -322,6 +328,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_api_key = judge.get("api_key", "")
     args.judge_temperature = judge.get("temperature", 0.0)
     args.judge_max_tokens = judge.get("max_tokens", 1024)
+    args.judge_max_context_tokens = int(judge.get("max_context_tokens", 128 * 1024))
+    args.judge_tokenizer_model = judge.get("tokenizer_model", "")
     args.judge_local_model_path = judge.get("local_model_path", "")
     args.judge_load_dtype = judge.get("load_dtype", "float16")
     args.judge_load_quantization = judge.get("load_quantization", "none")
@@ -346,7 +354,7 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "importance_model_path", "importance_threshold", "retrieval_top_k",
         "graph_top_k_records", "recent_history_pairs", "disable_memory_gate",
         "memory_gate_use_stub", "memory_strategy", "llm_mode", "llm_model",
-        "llm_load_dtype", "llm_load_quantization", "llm_max_context_tokens",
+        "llm_load_dtype", "llm_load_quantization", "llm_max_context_tokens", "llm_tokenizer_model",
         "llm_api_key", "llm_api_url", "llm_temperature", "llm_max_tokens",
         "openrouter_http_referer", "openrouter_x_title", "slot_use_stub",
         "slot_model_path", "slot_max_slots_per_message", "ragu_storage_path",
@@ -380,6 +388,14 @@ def setup_logging(level: str, log_file: Optional[str] = None) -> None:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_prompt_token_budget(max_context_tokens: int, max_completion_tokens: int) -> int:
+    cap = int(max_context_tokens or 0)
+    if cap <= 0:
+        return 0
+    reserve = max(64, int(max_completion_tokens or 0))
+    return max(256, cap - reserve)
 
 
 # ============================================================================
@@ -442,7 +458,7 @@ RELEVANT_QUESTION_TYPES = [
 class JudgeClient:
     """
     LLM-as-Judge client for evaluating answer correctness.
-    Supports 'openrouter', 'local', and 'none' modes.
+    Supports 'openrouter', 'puter', 'local', and 'none' modes.
     """
 
     def __init__(
@@ -457,27 +473,90 @@ class JudgeClient:
         enable_thinking: bool = True,
         load_dtype: str = "float16",
         load_quantization: str = "none",
+        max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+        tokenizer_model: str = "",
     ):
         self.mode = mode
         self.model = model
         self.api_url = api_url
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        if self.mode == "puter" and ((not self.api_url) or ("openrouter.ai" in self.api_url)):
+            self.api_url = "https://api.puter.com/puterai/openai/v1"
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENROUTER_API_KEY", "")
+            or os.environ.get("PUTER_API_KEY", "")
+        )
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.local_model_path = local_model_path
         self.enable_thinking = bool(enable_thinking)
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
+        self.max_context_tokens = int(max_context_tokens)
+        self.tokenizer_model = (tokenizer_model or "").strip()
         self._local_serving = None
+        self._tokenizer_limit: Any = None
 
         logger.info(
-            "JudgeClient initialized mode=%s model=%s enable_thinking=%s load_dtype=%s load_quantization=%s",
+            "JudgeClient initialized mode=%s model=%s tokenizer_model=%s enable_thinking=%s load_dtype=%s "
+            "load_quantization=%s max_context_tokens=%s",
             mode,
-            model if mode == "openrouter" else local_model_path,
+            model if mode in ("openrouter", "puter") else local_model_path,
+            self.tokenizer_model or "(auto)",
             self.enable_thinking,
             self.load_dtype,
             self.load_quantization,
+            self.max_context_tokens,
         )
+
+    def _tokenizer_for_prompt_limit(self):
+        if self._local_serving is not None and getattr(self._local_serving, "tokenizer", None):
+            return self._local_serving.tokenizer
+        if self._tokenizer_limit is False:
+            return None
+        if self._tokenizer_limit is not None:
+            return self._tokenizer_limit
+
+        model_id = (
+            (self.tokenizer_model or "").strip()
+            or (self.local_model_path or "").strip()
+            or (self.model or "").strip()
+        )
+        if not model_id:
+            self._tokenizer_limit = False
+            return None
+        try:
+            from transformers import AutoTokenizer
+
+            self._tokenizer_limit = AutoTokenizer.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+            )
+            return self._tokenizer_limit
+        except Exception as e:
+            logger.warning("Judge tokenizer unavailable for max_context_tokens clamp: %s", e)
+            self._tokenizer_limit = False
+            return None
+
+    def _build_messages(self, system_msg: str, user_msg: str) -> List[Dict[str, str]]:
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ]
+        if self.max_context_tokens > 0:
+            tok = self._tokenizer_for_prompt_limit()
+            if tok is not None:
+                prompt_budget = _effective_prompt_token_budget(
+                    self.max_context_tokens,
+                    self.max_tokens,
+                )
+                messages = clamp_chat_messages_to_max_tokens(
+                    tok,
+                    messages,
+                    prompt_budget,
+                    enable_thinking=self.enable_thinking,
+                )
+        return messages
 
     def _get_system_prompt_answer_correctness(self, question_type: str) -> str:
         """Get system prompt with 0-1 scoring criteria."""
@@ -485,25 +564,29 @@ class JudgeClient:
 
         return CHAT_API_OUTPUT_POLICY + f"""You are an expert evaluator assessing answer quality.
 
-Question Type: {question_type}
-Type Description: {type_desc}
+    Question Type: {question_type}
+    Type Description: {type_desc}
 
-Your task: Compare the predicted answer with the reference (gold) answer and return a score from 0.0 to 1.0 representing how well the predicted answer covers the factual content of the reference.
+    Your task: Compare the predicted answer with the reference (gold) answer and return a score from 0.0 to 1.0 representing how well the predicted answer covers the factual content of the reference.
 
-Scoring Scale:
-1.0 - Perfect match: Contains all key entities and facts from reference. Wording may differ, but meaning is identical.
-0.8 - Minor inaccuracy: All key entities present, but one is slightly distorted (wrong number, approximate date, slight name variation).
-0.6 - Partial answer: Covers most of reference, but one of several equally important entities is missing or replaced.
-0.4 - Weak coverage: Only one correct entity from several needed mentioned, OR correct category but wrong specific fact.
-0.2 - Minimal match: Thematically related to question but factually almost no overlap with reference — guessed domain but not content.
-0.0 - No match: Factually incorrect, contradicts reference, or system said "I don't know" when reference exists.
+    Core Evaluation Principle:
+    Focus ONLY on whether the required facts/entities from the reference are present in the predicted answer.
+    IGNORE everything else: additional context, caveats, disclaimers, uncertainty phrases ("I think", "probably", "as of my knowledge"), verbose explanations, or any extra information beyond what was asked. Their presence or absence does NOT affect the score.
 
-Special Rules:
-- For knowledge-update: If system named old/outdated fact instead of new one → 0.0 (old fact doesn't count).
-- For single-session-preference: Judge if correct user fact was used, not quote accuracy. Different phrasing with correct fact = 1.0.
-- For multi-session: If aggregation needed (e.g., "how many total"), partial count scores proportionally: found 2 of 4 needed entities → 0.4-0.6 depending on importance of missing ones.
+    Scoring Scale:
+    1.0 - Perfect match: All key entities and facts from the reference are present. Wording may differ, but the required content is there.
+    0.8 - Minor inaccuracy: All key entities present, but one is slightly distorted (wrong number, approximate date, slight name variation).
+    0.6 - Partial answer: Most of the reference is covered, but one of several equally important entities is missing or replaced.
+    0.4 - Weak coverage: Only one correct entity from several needed is mentioned, OR correct category but wrong specific fact.
+    0.2 - Minimal match: Thematically related to the question but factually almost no overlap with the reference.
+    0.0 - No match: Factually incorrect, contradicts the reference, or no relevant facts present.
 
-Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}"""
+    Special Rules:
+    - For knowledge-update: If the system named the old/outdated fact instead of the new one → 0.0 (old fact does not count).
+    - For single-session-preference: Judge whether the correct user fact was used, not phrasing. Different wording with the correct fact = 1.0.
+    - For multi-session: If aggregation is needed (e.g., "how many total"), score proportionally to how many required entities were found: 2 of 4 → 0.4–0.6 depending on the importance of missing ones.
+
+    Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}"""
 
     def _get_system_prompt_memory_hit(self) -> str:
         return CHAT_API_OUTPUT_POLICY + (
@@ -578,17 +661,18 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
         )
         if self.mode == "openrouter":
             return self._call_openrouter(system_msg, user_msg, mode)
+        elif self.mode == "puter":
+            return self._call_puter(system_msg, user_msg, mode)
         elif self.mode == "local":
             return self._call_local(system_msg, user_msg, mode)
         else:
             raise ValueError(f"Unknown judge mode: {self.mode}")
 
     @retry_with_backoff(max_retries=3)
-    def _call_openrouter_api(self, body: Dict, headers: Dict) -> str:
-        """Call OpenRouter API with retry."""
+    def _call_openrouter_api(self, body: Dict, headers: Dict, url: str) -> str:
+        """Call OpenAI-compatible API with retry."""
         import urllib.request
 
-        url = f"{self.api_url.rstrip('/')}/chat/completions"
         req = urllib.request.Request(
             url,
             data=json.dumps(body).encode("utf-8"),
@@ -601,15 +685,13 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
 
     def _call_openrouter(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
         """Call OpenRouter API with retry."""
+        messages = self._build_messages(system_msg, user_msg)
 
         body = {
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
+            "messages": messages,
             "tool_choice": "none",
         }
 
@@ -618,8 +700,12 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
             "Content-Type": "application/json",
         }
 
+        url = f"{self.api_url.rstrip('/')}/chat/completions"
+        if not self.api_url.strip():
+            url = "https://openrouter.ai/api/v1/chat/completions"
+
         try:
-            raw = self._call_openrouter_api(body, headers)
+            raw = self._call_openrouter_api(body, headers, url)
         except Exception as e:
             logger.error("Judge API failed after retries: %s", e)
             return self._error_result(mode, f"API error: {e}")
@@ -637,6 +723,16 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
         except Exception as e:
             logger.error("Failed to parse judge response: %s", e)
             return self._error_result(mode, f"Parse error: {e}")
+
+    def _call_puter(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
+        """Call Puter OpenAI-compatible endpoint."""
+        if not self.api_key.strip():
+            return self._error_result(mode, "PUTER API key is empty (set judge.api_key or PUTER_API_KEY)")
+
+        if not self.api_url.strip():
+            self.api_url = "https://api.puter.com/puterai/openai/v1"
+
+        return self._call_openrouter(system_msg, user_msg, mode)
 
     def _call_local(self, system_msg: str, user_msg: str, mode: str) -> Dict[str, Any]:
         """Call local model (HF causal LM via LocalHFServing; dtype / BitsAndBytes from config)."""
@@ -663,10 +759,7 @@ Respond with ONLY JSON: {{"score": 0.0-1.0, "reasoning": "brief explanation"}}""
                 load_quantization=self.load_quantization,
             )
 
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
+        messages = self._build_messages(system_msg, user_msg)
 
         try:
             gen_cfg = GenerationConfig(
@@ -954,6 +1047,7 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         llm_api_url=shared.get("llm_api_url", "https://openrouter.ai/api/v1"),
         llm_api_key=shared.get("llm_api_key", ""),
         llm_model=shared.get("llm_model", "openai/gpt-oss-120b:free"),
+        llm_tokenizer_model=shared.get("llm_tokenizer_model", ""),
         llm_load_dtype=str(shared.get("llm_load_dtype", "float16")),
         llm_load_quantization=str(shared.get("llm_load_quantization", "none")),
         llm_max_context_tokens=int(shared.get("llm_max_context_tokens", 128 * 1024)),
@@ -1039,6 +1133,7 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         api_url=cfg.llm_api_url,
         api_key=cfg.llm_api_key,
         model=cfg.llm_model,
+        tokenizer_model=getattr(cfg, "llm_tokenizer_model", ""),
         temperature=cfg.llm_temperature,
         max_tokens=cfg.llm_max_tokens,
         http_referer=cfg.openrouter_http_referer,
@@ -1203,6 +1298,8 @@ class AccumulatedAnswer:
     question_type: str
     predicted_answer: str
     memory_context: Dict[str, Any]
+    final_llm_prompt_chars_before_clamp: int = 0
+    final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
     dialogue_row_index: Optional[int] = None
 
@@ -1236,6 +1333,8 @@ class IntermediateAnswer:
     predicted_answer: str
     memory_context: Dict[str, Any]
     memory_state_path: str  # Path for Memory Hit Rate calculation
+    final_llm_prompt_chars_before_clamp: int = 0
+    final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
     dialogue_row_index: Optional[int] = None
     question_date: Optional[Any] = None  # LongMemEval row; final_llm_only uses with use_dataset_datetime
@@ -1268,6 +1367,9 @@ def build_judge_statistics_export(
     hits = int(stats.get("memory_hit", 0) or 0)
     misses = int(stats.get("memory_miss", 0) or 0)
     mhe_total = hits + misses
+    final_llm_calls = int(stats.get("final_llm_calls", 0) or 0)
+    chars_before_total = int(stats.get("final_llm_prompt_chars_before_clamp_total", 0) or 0)
+    chars_after_total = int(stats.get("final_llm_prompt_chars_after_clamp_total", 0) or 0)
 
     mhe_by_type: Dict[str, Any] = {}
     for qt, st in by_type_raw.items():
@@ -1296,6 +1398,13 @@ def build_judge_statistics_export(
             "misses": misses,
             "hit_rate": (hits / mhe_total) if mhe_total > 0 else None,
             "by_type": mhe_by_type,
+        },
+        "final_llm_prompt_chars": {
+            "calls": final_llm_calls,
+            "before_clamp_total": chars_before_total,
+            "after_clamp_total": chars_after_total,
+            "before_clamp_avg": (chars_before_total / final_llm_calls) if final_llm_calls > 0 else 0.0,
+            "after_clamp_avg": (chars_after_total / final_llm_calls) if final_llm_calls > 0 else 0.0,
         },
     }
 
@@ -1376,6 +1485,9 @@ class BatchProcessor:
             "total_score": 0.0,
             "errors_final_llm": 0,
             "errors_judge": 0,
+            "final_llm_calls": 0,
+            "final_llm_prompt_chars_before_clamp_total": 0,
+            "final_llm_prompt_chars_after_clamp_total": 0,
             "memory_hit": 0,
             "memory_miss": 0,
             "by_type": {
@@ -1675,6 +1787,8 @@ class BatchProcessor:
             # Restore memory context (we need to rebuild it)
             # Actually, we saved the prompt, so we can use that
             predicted_answer = "[no_final_llm]"
+            prompt_chars_before = 0
+            prompt_chars_after = 0
 
             if self.pipeline.config.llm_mode != "stub":
                 # Rebuild memory context
@@ -1689,6 +1803,12 @@ class BatchProcessor:
                         recent_pairs=recent_pairs,
                         clock_display=acc.final_llm_clock_display,
                     )
+                    char_stats = self.pipeline.final_llm.get_last_prompt_char_stats()
+                    prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
+                    prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
+                    self.stats["final_llm_calls"] += 1
+                    self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
+                    self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
                     logger.info(
                         "[Batch] Final LLM answer for item %d: %s...",
                         acc.global_index, predicted_answer[:100]
@@ -1709,6 +1829,8 @@ class BatchProcessor:
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
+                final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                final_llm_prompt_chars_after_clamp=prompt_chars_after,
                 dataset_ordinal=acc.dataset_ordinal,
                 dialogue_row_index=acc.dialogue_row_index,
             )
@@ -1725,6 +1847,8 @@ class BatchProcessor:
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
                 memory_state_path="",  # Not available in full mode
+                final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                final_llm_prompt_chars_after_clamp=prompt_chars_after,
                 dataset_ordinal=acc.dataset_ordinal,
                 dialogue_row_index=acc.dialogue_row_index,
                 question_date=acc.question_date,
@@ -1822,6 +1946,8 @@ class BatchProcessor:
                 recent_pairs = list(pipeline_state.get("recent_pairs") or [])
 
                 predicted_answer = "[no_final_llm]"
+                prompt_chars_before = 0
+                prompt_chars_after = 0
 
                 clock = optional_clock_display_for_validation(
                     bool(getattr(self.pipeline.config, "use_dataset_datetime", False)),
@@ -1836,6 +1962,12 @@ class BatchProcessor:
                             recent_pairs=recent_pairs,
                             clock_display=clock,
                         )
+                        char_stats = self.pipeline.final_llm.get_last_prompt_char_stats()
+                        prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
+                        prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
+                        self.stats["final_llm_calls"] += 1
+                        self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
+                        self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
                         logger.info(
                             "[FinalLLMOnly] Final LLM answer for item %d: %s...",
                             global_index, predicted_answer[:100]
@@ -1858,6 +1990,8 @@ class BatchProcessor:
                     predicted_answer=predicted_answer,
                     memory_context=memory_context,
                     memory_state_path=memory_state_path,
+                    final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                    final_llm_prompt_chars_after_clamp=prompt_chars_after,
                     dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
                     dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
                     question_date=qd,
@@ -1873,6 +2007,8 @@ class BatchProcessor:
                     question_type=question_type,
                     predicted_answer=predicted_answer,
                     memory_context=memory_context,
+                    final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                    final_llm_prompt_chars_after_clamp=prompt_chars_after,
                     dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
                     dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
                 )
@@ -1916,6 +2052,8 @@ class BatchProcessor:
                 "predicted_answer": ans.predicted_answer,
                 "memory_context": ans.memory_context,
                 "memory_state_path": ans.memory_state_path,
+                "final_llm_prompt_chars_before_clamp": ans.final_llm_prompt_chars_before_clamp,
+                "final_llm_prompt_chars_after_clamp": ans.final_llm_prompt_chars_after_clamp,
             }
             if ans.dataset_ordinal is not None:
                 row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
@@ -1926,6 +2064,15 @@ class BatchProcessor:
             answers_data.append(row_a)
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
+            "statistics": {
+                "final_llm_calls": int(self.stats.get("final_llm_calls", 0)),
+                "final_llm_prompt_chars_before_clamp_total": int(
+                    self.stats.get("final_llm_prompt_chars_before_clamp_total", 0)
+                ),
+                "final_llm_prompt_chars_after_clamp_total": int(
+                    self.stats.get("final_llm_prompt_chars_after_clamp_total", 0)
+                ),
+            },
             "answers": answers_data,
         })
 
@@ -2020,6 +2167,8 @@ class BatchProcessor:
             "score": score,
             "reasoning": reasoning,
             "judge_error": judge_error,
+            "final_llm_prompt_chars_before_clamp": acc.final_llm_prompt_chars_before_clamp,
+            "final_llm_prompt_chars_after_clamp": acc.final_llm_prompt_chars_after_clamp,
             "memory_hit_evaluation": memory_hit_result,
             "memory_hit": memory_hit_result.get("fact_present", False) if memory_hit_result else None,
         }
@@ -2200,6 +2349,12 @@ class BatchProcessor:
                     question_type=ans_data.get("question_type", ""),
                     predicted_answer=ans_data["predicted_answer"],
                     memory_context=memory_context,
+                    final_llm_prompt_chars_before_clamp=int(
+                        ans_data.get("final_llm_prompt_chars_before_clamp", 0) or 0
+                    ),
+                    final_llm_prompt_chars_after_clamp=int(
+                        ans_data.get("final_llm_prompt_chars_after_clamp", 0) or 0
+                    ),
                     dataset_ordinal=ans_data.get("_validation_dataset_ordinal"),
                     dialogue_row_index=ans_data.get("_validation_dialogue_row_index"),
                 )
@@ -2422,6 +2577,8 @@ def run_validation(args: argparse.Namespace) -> None:
             api_key=args.judge_api_key,
             temperature=args.judge_temperature,
             max_tokens=args.judge_max_tokens,
+            max_context_tokens=getattr(args, "judge_max_context_tokens", 128 * 1024),
+            tokenizer_model=getattr(args, "judge_tokenizer_model", ""),
             local_model_path=(args.judge_local_model_path or args.judge_model or "").strip() or None,
             enable_thinking=getattr(args, "judge_enable_thinking", True),
             load_dtype=getattr(args, "judge_load_dtype", "float16"),
@@ -2524,6 +2681,12 @@ def run_validation(args: argparse.Namespace) -> None:
         logger.info("=" * 70)
         logger.info("Output files:")
         logger.info("  Answers: %s", persistence.output_dir / "intermediate_answers.json")
+        logger.info(
+            "  Final LLM prompt chars: before_clamp_total=%d after_clamp_total=%d calls=%d",
+            int(stats.get("final_llm_prompt_chars_before_clamp_total", 0)),
+            int(stats.get("final_llm_prompt_chars_after_clamp_total", 0)),
+            int(stats.get("final_llm_calls", 0)),
+        )
         logger.info("\nNext step - run judge:")
         logger.info("  python validate_longmemeval.py \\")
         logger.info("    --validation-mode judge_only \\")
@@ -2620,6 +2783,8 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["llm_mode"] = args.gm_llm_mode
     if args.gm_llm_model:
         overrides["llm_model"] = args.gm_llm_model
+    if getattr(args, "gm_llm_tokenizer_model", ""):
+        overrides["llm_tokenizer_model"] = args.gm_llm_tokenizer_model
     if args.gm_llm_api_key:
         overrides["llm_api_key"] = args.gm_llm_api_key
     if args.gm_llm_load_dtype:
@@ -2751,7 +2916,7 @@ Examples:
                            help="Override: calculate memory hit rate (true/false)")
 
     val_group.add_argument("--val-judge-mode", type=str,
-                           choices=["openrouter", "local", "none"],
+                           choices=["openrouter", "puter", "local", "none"],
                            help="Override: judge mode")
     val_group.add_argument("--val-judge-model", type=str,
                            help="Override: judge model")
@@ -2761,6 +2926,10 @@ Examples:
                            help="Override: judge temperature")
     val_group.add_argument("--val-judge-max-tokens", type=int,
                            help="Override: judge max tokens")
+    val_group.add_argument("--val-judge-max-context-tokens", type=int,
+                           help="Override: judge max prompt tokens before completion")
+    val_group.add_argument("--val-judge-tokenizer-model", type=str,
+                           help="Override: HF tokenizer id/path for judge context clamp")
     val_group.add_argument("--val-judge-local-model-path", type=str,
                            help="Override: judge local model path")
 
@@ -2783,7 +2952,7 @@ Examples:
                         help="Calculate memory hit rate metric (extra LLM calls)")
 
     # Judge configuration
-    parser.add_argument("--judge-mode", type=str, choices=["openrouter", "local", "none"],
+    parser.add_argument("--judge-mode", type=str, choices=["openrouter", "puter", "local", "none"],
                         default="openrouter", help="Judge mode")
     parser.add_argument("--judge-model", type=str, default="openai/gpt-oss-120b:free",
                         help="Judge model for openrouter")
@@ -2793,6 +2962,10 @@ Examples:
                         help="Judge API key (or OPENROUTER_API_KEY env var)")
     parser.add_argument("--judge-temperature", type=float, default=0.0, help="Judge temperature")
     parser.add_argument("--judge-max-tokens", type=int, default=1024, help="Judge max tokens")
+    parser.add_argument("--judge-max-context-tokens", type=int, default=128 * 1024,
+                        help="Judge max prompt tokens (0 disables clamp)")
+    parser.add_argument("--judge-tokenizer-model", type=str, default="",
+                        help="HF tokenizer id/path for judge context clamp")
     parser.add_argument("--judge-local-model-path", type=str, default="",
                         help="Local judge model path")
 
@@ -2834,10 +3007,12 @@ Examples:
 
     # LLM settings
     gm_group.add_argument("--gm-llm-mode", type=str, default="",
-                          choices=["", "stub", "local", "openrouter", "api"],
+                          choices=["", "stub", "local", "openrouter", "api", "puter"],
                           help="Final LLM mode")
     gm_group.add_argument("--gm-llm-model", type=str, default="",
                           help="Final LLM model name")
+    gm_group.add_argument("--gm-llm-tokenizer-model", type=str, default="",
+                          help="HF tokenizer id/path for final LLM context clamp")
     gm_group.add_argument("--gm-llm-api-key", type=str, default="",
                           help="Final LLM API key")
     gm_group.add_argument(
@@ -2939,6 +3114,10 @@ Examples:
         config["judge"]["temperature"] = args.val_judge_temperature
     if args.val_judge_max_tokens is not None:
         config["judge"]["max_tokens"] = args.val_judge_max_tokens
+    if args.val_judge_max_context_tokens is not None:
+        config["judge"]["max_context_tokens"] = int(args.val_judge_max_context_tokens)
+    if args.val_judge_tokenizer_model:
+        config["judge"]["tokenizer_model"] = args.val_judge_tokenizer_model
     if args.val_judge_local_model_path:
         config["judge"]["local_model_path"] = args.val_judge_local_model_path
 

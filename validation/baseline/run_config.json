@@ -4,15 +4,12 @@
 
   "shared": {
     "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
-    "output_dir": "./baseline_full-context_Qwen25-7b-instruct_10-per-categoru_new-dataset",
+    "output_dir": "./baseline_tests/recent_10_plus_user_Qwen25-7b-instruct_other-categories",
 
     "_comment": "Balanced sampling: N items per question type",
-    "num_items_per_type": 100,
+    "num_items_per_type": 1000,
     "question_types": [
-      "single-session-user",
-      "single-session-preference",
-      "multi-session",
-      "knowledge-update"
+      "single-session-user", "single-session-preference", "multi-session", "knowledge-update"
     ],
 
     "log_level": "INFO",
@@ -35,30 +32,30 @@
   "final_llm": {
     "_description": "Final LLM configuration (must match GigaMemory for fair comparison)",
 
-    "mode": "local",
-    "model": "Qwen/Qwen3.5-9B",
-    "api_url": "",
+    "mode": "openrouter",
+    "api_url": "https://openrouter.ai/api/v1",
     "api_key": "",
+    "model": "qwen/qwen-2.5-7b-instruct",
+    "tokenizer_model": "Qwen/Qwen2.5-7B-Instruct",
     "temperature": 0.0,
     "max_tokens": 1024,
     "local_model_path": "",
-    "load_dtype": "float16",    
+    "load_dtype": "float16",
     "load_quantization": "4bit",
-    "max_context_tokens": 8000,
+    "max_context_tokens": 25000,
     "attn_implementation": "sdpa",
-    "use_sliding_window": true,
-    "sliding_window": 4096
+    "use_sliding_window": false,
+    "sliding_window": 2048
   },
 
   "judge": {
     "_description": "LLM-as-Judge with 0-1 scoring scale",
-
-    "mode": "local",
-    "model": "Skywork/Skywork-Critic-Llama-3.1-8B",
-    "api_url": "",
+    "mode": "openrouter",
+    "api_url": "https://openrouter.ai/api/v1",
     "api_key": "",
+    "model": "openai/gpt-oss-20b",
     "temperature": 0.0,
-    "max_tokens": 4096,
+    "max_tokens": 2048,
     "load_dtype": "float16"
   }
 }

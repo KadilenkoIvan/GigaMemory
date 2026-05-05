@@ -25,6 +25,8 @@ Baseline testing with simple context-passing strategies. Includes timing metrics
 
 - **Per-question-type metrics:** aggregated scores by type
 
+- **Final LLM prompt size stats:** total/average symbols before and after context clamp
+
 - **Balanced sampling:** N items per question type
 
 ## Configuration
@@ -49,7 +51,8 @@ Baseline testing with simple context-passing strategies. Includes timing metrics
   },
   "final_llm": {
     "mode": "openrouter",
-    "model": "openai/gpt-oss-120b:free"
+    "model": "openai/gpt-oss-120b:free",
+    "tokenizer_model": ""
   },
   "judge": {
     "mode": "openrouter",
@@ -57,6 +60,9 @@ Baseline testing with simple context-passing strategies. Includes timing metrics
   }
 }
 ```
+
+`final_llm.tokenizer_model` — optional HF model id/path for tokenizer used in `max_context_tokens` truncation.
+Use it when API model id is provider-specific (e.g., `qwen/qwen-2.5-7b-instruct`) and not resolvable by `AutoTokenizer`.
 
 ## Usage
 
@@ -78,6 +84,11 @@ python validate_baseline.py --strategy recent_10_plus_user --output-dir ./result
     "errors_final_llm": 0,
     "errors_judge": 0,
     "average_score": 0.75,
+    "final_llm_calls": 40,
+    "final_llm_prompt_chars_before_clamp_total": 1200000,
+    "final_llm_prompt_chars_after_clamp_total": 980000,
+    "final_llm_prompt_chars_before_clamp_avg": 30000.0,
+    "final_llm_prompt_chars_after_clamp_avg": 24500.0,
     "by_type": {
       "single-session-user": {"count": 10, "average_score": 0.82, "errors": 0},
       "single-session-preference": {"count": 10, "average_score": 0.78, "errors": 0},
@@ -103,7 +114,9 @@ python validate_baseline.py --strategy recent_10_plus_user --output-dir ./result
       "score": 1.0,
       "reasoning": "Perfect match",
       "final_llm_error": null,
-      "judge_error": null
+      "judge_error": null,
+      "final_llm_prompt_chars_before_clamp": 31240,
+      "final_llm_prompt_chars_after_clamp": 24577
     }
   ]
 }

@@ -54,6 +54,7 @@ def build_pipeline(args: argparse.Namespace):
         llm_api_url=args.llm_api_url,
         llm_api_key=args.llm_api_key,
         llm_model=args.llm_model,
+        llm_tokenizer_model=getattr(args, "llm_tokenizer_model", ""),
         llm_max_tokens=args.llm_max_tokens,
         openrouter_http_referer=args.openrouter_http_referer,
         openrouter_x_title=args.openrouter_x_title,
@@ -141,11 +142,12 @@ def create_parser(
         "--llm-mode",
         type=str,
         default=str(s.get("llm_mode", "openrouter")),
-        choices=["stub", "local", "api", "openrouter"],
+        choices=["stub", "local", "api", "openrouter", "puter"],
     )
     parser.add_argument("--llm-api-url", type=str, default=str(s.get("llm_api_url", "https://openrouter.ai/api/v1")))
     parser.add_argument("--llm-api-key", type=str, default=str(s.get("llm_api_key", "")))
     parser.add_argument("--llm-model", type=str, default=str(s.get("llm_model", "openai/gpt-oss-120b:free")))
+    parser.add_argument("--llm-tokenizer-model", type=str, default=str(s.get("llm_tokenizer_model", "")))
     parser.add_argument("--llm-temperature", type=float, default=float(s.get("llm_temperature", 0.0)))
     parser.add_argument("--llm-max-tokens", type=int, default=int(s.get("llm_max_tokens", 1024)))
     parser.add_argument("--openrouter-http-referer", dest="openrouter_http_referer", type=str, default=str(s.get("openrouter_http_referer", "")))

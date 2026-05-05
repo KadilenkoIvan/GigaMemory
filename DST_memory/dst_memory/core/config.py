@@ -63,6 +63,9 @@ class PipelineConfig:
     llm_api_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "openai/gpt-oss-120b:free"
+    # Optional HF tokenizer id/path for prompt clamp in API modes.
+    # Useful when llm_model is provider-specific (e.g., "qwen/...") and not a HF repo id.
+    llm_tokenizer_model: str = ""
     # Weight dtype when llm_mode == "local" (torch_dtype in from_pretrained). Default FP16.
     llm_load_dtype: str = "float16"
     # When llm_mode == "local": none | 8bit | 4bit (BitsAndBytes; reduces VRAM).
