@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..core.models import VALID_TTL_VALUES
 from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.triplet_messages import build_triplet_messages
+from ..prompts.loader import load_prompt_modules
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ class TripletExtractionClient:
         max_triplets: int = 12,
         max_retries: int = 1,
         ttl_mode: str = "mode2",
+        prompt_language: str = "ru",
     ):
         self.use_stub = use_stub
         self.serving = serving
@@ -54,6 +55,8 @@ class TripletExtractionClient:
         self.max_triplets = max_triplets
         self.max_retries = max_retries
         self.ttl_mode = ttl_mode
+        self.prompt_language = prompt_language
+        self._prompt_modules = None
 
         if self.use_stub:
             logger.info("Triplet extractor in STUB mode")
@@ -119,7 +122,9 @@ class TripletExtractionClient:
         # Контекст (existing_triplets) и инструкции удаления — независимы.
         if enable_deletion is None:
             enable_deletion = False
-        messages = build_triplet_messages(
+        if self._prompt_modules is None:
+            self._prompt_modules = load_prompt_modules(self.prompt_language)
+        messages = self._prompt_modules.triplet_messages.build_triplet_messages(
             user_message,
             slot_name=slot_name,
             include_slot=slot_name is None,
@@ -216,8 +221,7 @@ class TripletExtractionClient:
     def _normalize_field(s: str) -> str:
         """
         Normalize a triplet field produced by the LLM.
-        Model outputs lowercase Russian words with spaces; we keep that format
-        (lowercase, single spaces) for natural language compatibility with Meno-Lite.
+        Lowercase and single spaces; lemmas match the active prompt pack (Russian or English).
         """
         s = s.strip().lower()
         s = re.sub(r'\s+', ' ', s)

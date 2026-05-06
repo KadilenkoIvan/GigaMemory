@@ -1,0 +1,50 @@
+{
+  "dialogue_id": "minimal_multi_dog_dialogue",
+  "step": 2,
+  "next_record_id": 4,
+  "slots": {
+    "PETS": [
+      {
+        "record_id": 1,
+        "value": "user | has pet | dog",
+        "source_text": "I have a dog named Max. He is 3 years old.",
+        "created_at_step": 1,
+        "updated_at_step": 1,
+        "subject": "user",
+        "relation": "has pet",
+        "object": "dog",
+        "is_active": true,
+        "ttl": "1y",
+        "created_at_datetime": "2026-05-04T09:01:47.117189"
+      },
+      {
+        "record_id": 2,
+        "value": "user's dog | name | max",
+        "source_text": "I have a dog named Max. He is 3 years old.",
+        "created_at_step": 1,
+        "updated_at_step": 1,
+        "subject": "user's dog",
+        "relation": "name",
+        "object": "max",
+        "is_active": true,
+        "ttl": "1y",
+        "created_at_datetime": "2026-05-04T09:01:47.117401"
+      },
+      {
+        "record_id": 3,
+        "value": "user's dog | age | 3 years",
+        "source_text": "I have a dog named Max. He is 3 years old.",
+        "created_at_step": 1,
+        "updated_at_step": 1,
+        "subject": "user's dog",
+        "relation": "age",
+        "object": "3 years",
+        "is_active": true,
+        "ttl": "1y",
+        "created_at_datetime": "2026-05-04T09:01:47.117467"
+      }
+    ]
+  },
+  "deleted_facts": [],
+  "recent_pairs": []
+}

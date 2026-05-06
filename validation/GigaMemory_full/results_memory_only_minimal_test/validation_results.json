@@ -1,0 +1,89 @@
+{
+  "metadata": {
+    "validation_mode": "full",
+    "dataset_path": "test_data/minimal_test.json",
+    "num_items_per_type": 10,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ],
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1,
+    "calculate_memory_hit_rate": true,
+    "judge_mode": "none",
+    "judge_model": "openai/gpt-oss-120b:free",
+    "config_path": "config_memory_only.json",
+    "timestamp": "2026-05-04 09:00:49"
+  },
+  "statistics": {
+    "total": 0,
+    "total_score": 0.0,
+    "errors_final_llm": 0,
+    "errors_judge": 0,
+    "memory_hit": 0,
+    "memory_miss": 0,
+    "by_type": {
+      "single-session-user": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      },
+      "single-session-preference": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      },
+      "multi-session": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      },
+      "knowledge-update": {
+        "count": 0,
+        "total_score": 0.0,
+        "errors": 0
+      }
+    }
+  },
+  "timing": {
+    "total_time": 71.82096266746521,
+    "total_items": 2,
+    "total_messages": 10,
+    "total_user_message_writes": 6,
+    "time_per_dialogue": {
+      "min": 8.435924530029297,
+      "max": 10.301536560058594,
+      "p50": 9.368730545043945,
+      "p95": 10.208255958557128,
+      "p99": 10.282880439758301,
+      "mean": 9.368730545043945
+    },
+    "time_per_item": {
+      "min": 8.435924530029297,
+      "max": 10.301536560058594,
+      "p50": 9.368730545043945,
+      "p95": 10.208255958557128,
+      "p99": 10.282880439758301,
+      "mean": 9.368730545043945
+    },
+    "time_per_user_message": {
+      "min": 0.022690773010253906,
+      "max": 4.511456727981567,
+      "p50": 2.8022266626358032,
+      "p95": 4.400426387786865,
+      "p99": 4.489250659942627,
+      "mean": 2.762785315513611
+    },
+    "time_per_message": {
+      "min": 1.6871849060058595,
+      "max": 2.0603073120117186,
+      "p50": 1.873746109008789,
+      "p95": 2.0416511917114257,
+      "p99": 2.05657608795166,
+      "mean": 1.873746109008789
+    }
+  },
+  "results": []
+}

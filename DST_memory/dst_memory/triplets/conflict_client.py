@@ -13,7 +13,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..prompts.conflict_messages import build_conflict_messages, parse_conflict_response
+from ..prompts.loader import load_prompt_modules
+from ..prompts.parsers import parse_conflict_response
 from ..core.graph_backend import GraphEdge
 from ..clients.serving import GenerationConfig, LocalHFServing
 from .triplet_client import ExtractedTriplet
@@ -52,11 +53,14 @@ class TripletConflictClient:
         serving: Optional[LocalHFServing] = None,
         max_retries: int = 1,
         allow_multi_relation_same_object: bool = True,
+        prompt_language: str = "ru",
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
         self.allow_multi_relation_same_object = allow_multi_relation_same_object
+        self.prompt_language = prompt_language
+        self._prompt_modules = None
 
         if not use_stub and serving is None:
             raise ValueError("TripletConflictClient requires serving when use_stub is False")
@@ -182,7 +186,11 @@ class TripletConflictClient:
         new_triplets: List[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         assert self.serving is not None
-        messages = build_conflict_messages(slot_name, existing, new_triplets)
+        if self._prompt_modules is None:
+            self._prompt_modules = load_prompt_modules(self.prompt_language)
+        messages = self._prompt_modules.conflict_messages.build_conflict_messages(
+            slot_name, existing, new_triplets
+        )
         cfg = GenerationConfig(max_new_tokens=256, temperature=0.0, do_sample=False)
 
         for attempt in range(self.max_retries + 1):

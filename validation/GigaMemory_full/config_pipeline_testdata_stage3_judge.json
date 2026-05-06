@@ -1,0 +1,59 @@
+{
+  "_description": "Stage 3/3: judge_only — локальный судья Qwen/Qwen3.5-9B (FP16). Обе метрики: оценка ответа (score) + Memory Hit Rate (calculate_memory_hit_rate).",
+  "_pipeline": {
+    "prev_answers": "pipeline_test_runs/stage2_final_llm/intermediate_answers.json",
+    "prev_memory": "pipeline_test_runs/stage1_memory",
+    "metrics": [
+      "Две отдельные генерации судьи: (1) evaluate_answer — только predicted vs reference; (2) evaluate_memory_hit — только reference vs memory_context (predicted не в промпте).",
+      "Результаты: score/reasoning и memory_hit_evaluation в validation_results.json."
+    ],
+    "notes": [
+      "Пайплайн не строится (judge_only): в VRAM только модель судьи.",
+      "HF id судьи: Qwen/Qwen3.5-9B; при офлайн-запуске заранее скачайте веса (huggingface-cli download).",
+      "max_tokens судьи: запас под JSON (в т.ч. Qwen3.5); при обрезании ответа увеличьте judge.max_tokens."
+    ]
+  },
+
+  "shared": {
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
+    "output_dir": "pipeline_test_runs/stage3_judge",
+    "num_items_per_type": 10,
+    "question_types": ["single-session-user", "knowledge-update"],
+    "log_level": "INFO",
+    "log_file": true,
+    "save_memory_state": false,
+    "save_intermediate": false
+  },
+
+  "batch_processing": {
+    "final_llm_batch_size": 10,
+    "judge_batch_size": 10,
+    "calculate_memory_hit_rate": true
+  },
+
+  "judge": {
+    "mode": "local",
+    "model": "Qwen/Qwen3.5-9B",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 4096,
+    "local_model_path": "Qwen/Qwen3.5-9B",
+    "unload_between_items": false
+  },
+
+  "giga_memory": {
+    "memory_strategy": "relevant_slots_full",
+    "llm_mode": "stub",
+    "llm_model": "",
+    "slot_model_path": "DST_memory/models/Meno-Lite-0.1",
+    "ragu_embedder_model": "deepvk/USER-bge-m3",
+    "ragu_storage_path": ""
+  },
+
+  "validation_mode": {
+    "mode": "judge_only",
+    "input_state_dir": "./pipeline_test_runs/stage1_memory",
+    "input_answers_path": "./pipeline_test_runs/stage2_final_llm/intermediate_answers.json"
+  }
+}

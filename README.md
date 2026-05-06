@@ -16,7 +16,7 @@
 - `run.py` — единая CLI-точка запуска.
 - `dst_memory/` — вся логика пайплайна (разбита по подпакетам):
   - `core/` — pipeline, dst_manager, models, config, graph_backend
-  - `prompts/` — все сборщики промптов и few-shot банк
+  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в `run_config.json` / `--prompt-language` (включая тексты **финальной** LLM: `prompts/<ru|en>/final_llm_messages.py`)
   - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
   - `triplets/` — extraction, conflict, deletion, negation_detector
   - `storage/` — RAGU backend (ragu_graph_processor)
@@ -69,8 +69,11 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--importance-model-path`
 - `--ragu-embedder-model`
 - `--ragu-storage-path`
-- `--llm-mode` (`openrouter|api|stub|local`)
+- `--llm-mode` (`openrouter|api|puter|stub|local`)
 - `--no-final-llm`
+- `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict и финальной LLM (в `run_config.json`: `prompt_language`)
+
+Для ограничения входного контекста final LLM используйте `shared.llm_max_context_tokens` в `run_config.json` (или соответствующий `giga_memory.llm_max_context_tokens` в конфиге валидации). Это особенно важно для моделей с меньшим окном контекста (например, 32768).
 
 ## Режимы удаления фактов
 
@@ -87,9 +90,176 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 ## Ключевые ограничения
 
 - Проект зафиксирован как RAGU-only.
-- `llm_mode=local` для final LLM пока не реализован.
+- `llm_mode=local` для final LLM поддерживается, но требует достаточного VRAM/CPU RAM и корректной локальной HF-модели.
 - `llm_inline` режим автоматически включает контекст слота, даже если `slot_context_enabled=false`.
 - Heuristic-детектор покрывает явные паттерны отрицания; косвенные семантические удаления — через LLM-режимы.
+
+## Валидация
+
+### LongMemEval Benchmark
+
+Для тестирования качества системы памяти используется датасет **LongMemEval** (`xiaowu0162/longmemeval-cleaned`).
+
+### Структура валидации
+
+```
+validation/
+├── GigaMemory_full/        # Полное тестирование GigaMemory (v3)
+│   ├── validate_longmemeval.py      # Основной скрипт с 4 режимами
+│   ├── run_config.json              # Базовый конфиг
+│   ├── config_full.json             # Полный пайплайн
+│   ├── config_memory_only.json      # Только память
+│   ├── config_final_llm.json        # Только финальная LLM
+│   ├── config_judge.json            # Только судья
+│   ├── README.md
+│   └── CONFIG.md
+└── baseline/               # Baseline тестирование
+    ├── validate_baseline.py
+    ├── run_config.json
+    └── README.md
+```
+
+### Режимы валидации (v3)
+
+Скрипт `validate_longmemeval.py` поддерживает 4 режима работы:
+
+| Режим | Описание | Команда |
+|-------|----------|---------|
+| `full` | Полный пайплайн: память → финальная LLM → судья | `python validate_longmemeval.py --validation-mode full` |
+| `memory_only` | Только обработка памяти и сохранение состояний | `python validate_longmemeval.py --validation-mode memory_only` |
+| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory` |
+| `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `python validate_longmemeval.py --validation-mode judge_only --input-answers-path ./results/answers.json` |
+
+### 1. GigaMemory Full Validation
+
+#### Полный пайплайн (режим `full`)
+
+Полное тестирование с structured memory, batch processing и Memory Hit Rate.
+
+```bash
+cd validation/GigaMemory_full
+
+# Используем конфиг файл (config_full.json)
+python validate_longmemeval.py --config ./config_full.json
+
+# Или с кастомным конфигом
+python validate_longmemeval.py --config ./my_config.json
+
+# Batch processing: накапливаем 5 диалогов перед вызовом финальной LLM
+python validate_longmemeval.py \
+    --validation-mode full \
+    --val-shared-num-items-per-type 20 \
+    --val-batch-final-llm-batch-size 5 \
+    --val-batch-judge-batch-size 10
+
+# С подсчётом Memory Hit Rate (дополнительная метрика)
+python validate_longmemeval.py \
+    --validation-mode full \
+    --calculate-memory-hit-rate \
+    --judge-mode openrouter
+```
+
+#### Пошаговая валидация (3 этапа)
+
+Разделение процесса для экономии ресурсов и тестирования разных конфигураций:
+
+```bash
+# Шаг 1: Обработка памяти (один раз)
+python validate_longmemeval.py \
+    --validation-mode memory_only \
+    --config ./config_memory_only.json
+
+# Шаг 2: Генерация ответов (можно запускать с разными LLM)
+python validate_longmemeval.py \
+    --validation-mode final_llm_only \
+    --input-state-dir ./results_memory_only \
+    --gm-llm-model "openai/gpt-4o-mini" \
+    --config ./config_final_llm.json
+
+# Шаг 3: Оценка (можно менять judge модель)
+python validate_longmemeval.py \
+    --validation-mode judge_only \
+    --input-answers-path ./results_final_llm/intermediate_answers.json \
+    --calculate-memory-hit-rate \
+    --config ./config_judge.json
+```
+
+**Преимущества разделения:**
+- Обработка памяти выполняется один раз (самый быстрый этап)
+- Можно тестировать разные финальные LLM на одних и тех же состояниях памяти
+- GPU оптимизация: выгрузка моделей памяти перед загрузкой большой LLM
+- Гибкость в выборе моделей для каждого этапа
+
+**Метрики:**
+- Accuracy (correct / total)
+- Memory Hit Rate (дополнительно, через `--calculate-memory-hit-rate`)
+
+### 2. Baseline Validation
+
+Сравнение с простыми стратегиями передачи контекста.
+
+```bash
+cd validation/baseline
+
+# Baseline: передаём ВЕСЬ контекст (все user + assistant)
+python validate_baseline.py --strategy full_context
+
+# Baseline: последние 10 пар + оставшиеся user сообщения
+python validate_baseline.py --strategy recent_10_plus_user --output-dir ./results_recent10
+```
+
+**Стратегии:**
+- `full_context` — все user и assistant сообщения из всех сессий
+- `recent_10_plus_user` — последние 10 пар + все ранние user сообщения
+
+**Метрики:**
+- Accuracy (correct / total)
+
+### Честное сравнение
+
+Для честного сравнения используйте **одинаковые** настройки:
+
+```bash
+# 1. GigaMemory
+cd validation/GigaMemory_full
+python validate_longmemeval.py --config ./run_config.json
+
+# 2. Baseline - Full Context
+cd validation/baseline
+python validate_baseline.py \
+    --strategy full_context \
+    --config ./run_config.json
+
+# 3. Baseline - Recent 10 + User
+python validate_baseline.py \
+    --strategy recent_10_plus_user \
+    --config ./run_config.json
+```
+
+### Структура вывода (GigaMemory)
+
+```
+output-dir/
+├── validation_results.json     # Итоговые метрики
+│   {
+│     "statistics": {
+│       "total": 50,
+│       "correct": 42,
+│       "incorrect": 8,
+│       "accuracy": 0.84,
+│       "memory_hit": 48,       # GigaMemory only
+│       "memory_miss": 2,       # GigaMemory only
+│       "memory_hit_rate": 0.96 # GigaMemory only
+│     },
+│     "results": [...]
+│   }
+├── validation.log              # Полный лог
+└── chunk_*/                    # Состояние памяти (GigaMemory only)
+```
+
+Подробная документация:
+- GigaMemory: `validation/GigaMemory_full/README.md`, `README_CONFIG.md`
+- Baseline: `validation/baseline/README.md`
 
 ## Подробная техдокументация
 

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from .prompt_fewshots_ru import MEMORY_GATE_FEWSHOT, MEMORY_GATE_FEWSHOT_VECTOR, memory_gate_user_block
+from ...slots.ontology import CANONICAL_TO_RU_LABEL
+from .prompt_fewshots import MEMORY_GATE_FEWSHOT, MEMORY_GATE_FEWSHOT_VECTOR, memory_gate_user_block
+
+
+def _slots_ru(canonical: List[str]) -> List[str]:
+    return [CANONICAL_TO_RU_LABEL.get(s, s) for s in canonical]
 
 
 def build_memory_gate_messages(
@@ -55,6 +60,6 @@ def build_memory_gate_messages(
             )
             few_shot.append({"role": "assistant", "content": assistant_json})
 
-    final_user = memory_gate_user_block(user_message, slot_names, extra_block)
+    final_user = memory_gate_user_block(user_message, _slots_ru(slot_names), extra_block)
 
     return [{"role": "system", "content": system}] + few_shot + [{"role": "user", "content": final_user}]

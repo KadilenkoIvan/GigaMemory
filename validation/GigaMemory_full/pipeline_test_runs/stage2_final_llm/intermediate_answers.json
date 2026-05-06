@@ -1,0 +1,146 @@
+{
+  "metadata": {
+    "validation_mode": "final_llm_only",
+    "dataset_path": "test_data/minimal_test.json",
+    "num_items_per_type": 10,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ],
+    "final_llm_batch_size": 10,
+    "judge_batch_size": 10,
+    "calculate_memory_hit_rate": false,
+    "judge_mode": "none",
+    "judge_model": "",
+    "config_path": "config_pipeline_testdata_stage2_final_llm.json",
+    "timestamp": "2026-05-04 12:57:41",
+    "input_state_dir": "./pipeline_test_runs/stage1_memory",
+    "input_answers_path": "",
+    "giga_memory_memory_strategy": "relevant_slots_full",
+    "giga_memory_llm_mode": "local",
+    "pipeline_backend": "FinalLLMOnlyPipelineFacade"
+  },
+  "answers": [
+    {
+      "global_index": 0,
+      "question_id": "e47becba",
+      "question": "What degree did I graduate with?",
+      "reference_answer": "Business Administration",
+      "question_type": "single-session-user",
+      "predicted_answer": "You graduated with a degree in Business Administration.",
+      "memory_context": {
+        "slots": [
+          {
+            "slot": "EVENTS",
+            "slot_label": "EVENTS",
+            "messages": [
+              {
+                "record_id": 49,
+                "message_text": "user | last attended | barbecue party at alex's house",
+                "source_text": "I think I'll call ahead to check the wait times at Smokey's. By the way, it's been three weeks since I last went to a barbecue party at Alex's house.",
+                "subject": "user",
+                "relation": "last attended",
+                "object": "barbecue party at alex's house",
+                "created_at_step": 26,
+                "updated_at_step": 26,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:36:48.754564"
+              },
+              {
+                "record_id": 97,
+                "message_text": "international market | location | town",
+                "source_text": "I'm interested in the International Market that's happening in our town next month. I'm not sure about the exact name, but I know it's a popular event that attracts a lot of visitors. I plan to sell my handmade crafts, like candles and soaps. By the way, I've been pretty busy with local markets and events lately - I attended the Farmers' Market at the town square just three weeks ago and had a great time.",
+                "subject": "international market",
+                "relation": "location",
+                "object": "town",
+                "created_at_step": 88,
+                "updated_at_step": 88,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:41:05.314704"
+              },
+              {
+                "record_id": 98,
+                "message_text": "international market | date | next month",
+                "source_text": "I'm interested in the International Market that's happening in our town next month. I'm not sure about the exact name, but I know it's a popular event that attracts a lot of visitors. I plan to sell my handmade crafts, like candles and soaps. By the way, I've been pretty busy with local markets and events lately - I attended the Farmers' Market at the town square just three weeks ago and had a great time.",
+                "subject": "international market",
+                "relation": "date",
+                "object": "next month",
+                "created_at_step": 88,
+                "updated_at_step": 88,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:41:05.315186"
+              },
+              {
+                "record_id": 99,
+                "message_text": "user | plans to sell | handmade crafts",
+                "source_text": "I'm interested in the International Market that's happening in our town next month. I'm not sure about the exact name, but I know it's a popular event that attracts a lot of visitors. I plan to sell my handmade crafts, like candles and soaps. By the way, I've been pretty busy with local markets and events lately - I attended the Farmers' Market at the town square just three weeks ago and had a great time.",
+                "subject": "user",
+                "relation": "plans to sell",
+                "object": "handmade crafts",
+                "created_at_step": 88,
+                "updated_at_step": 88,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:41:05.315425"
+              },
+              {
+                "record_id": 104,
+                "message_text": "user | wore | mother's locket",
+                "source_text": "I'll add my mother's locket to the list. It's an old locket and I'm not sure when I acquired it, but I wore it to my cousin's wedding on June 15th.",
+                "subject": "user",
+                "relation": "wore",
+                "object": "mother's locket",
+                "created_at_step": 98,
+                "updated_at_step": 98,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:41:41.676331"
+              },
+              {
+                "record_id": 105,
+                "message_text": "user | attended | cousin's wedding",
+                "source_text": "I'll add my mother's locket to the list. It's an old locket and I'm not sure when I acquired it, but I wore it to my cousin's wedding on June 15th.",
+                "subject": "user",
+                "relation": "attended",
+                "object": "cousin's wedding",
+                "created_at_step": 98,
+                "updated_at_step": 98,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:41:41.676848"
+              }
+            ]
+          },
+          {
+            "slot": "EDUCATION",
+            "slot_label": "EDUCATION",
+            "messages": [
+              {
+                "record_id": 126,
+                "message_text": "user | degree | business administration",
+                "source_text": "I graduated with a degree in Business Administration, which has definitely helped me in my new role. Do you have any advice on how to stay organized when it comes to paperwork and documentation, especially when it comes to tracking expenses and reimbursements?",
+                "subject": "user",
+                "relation": "degree",
+                "object": "business administration",
+                "created_at_step": 114,
+                "updated_at_step": 114,
+                "is_active": true,
+                "ttl": "inf",
+                "created_at_datetime": "2026-05-04T12:43:01.479184"
+              }
+            ]
+          }
+        ]
+      },
+      "memory_state_path": "pipeline_test_runs/stage1_memory/chunk_0000/dst_state.json",
+      "_validation_dataset_ordinal": 0,
+      "_validation_dialogue_row_index": 0,
+      "question_date": "2023/05/30 (Tue) 23:40"
+    }
+  ]
+}

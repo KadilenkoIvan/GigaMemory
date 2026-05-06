@@ -66,14 +66,10 @@ dst_memory/
 │   ├── models.py        — Message, FactRecord, MemoryFact, DialogueMemoryState
 │   ├── config.py        — PipelineConfig, SLOT_DEFAULT_TTL
 │   └── graph_backend.py — GraphEdge (dataclass)
-├── prompts/             — все сборщики промптов и few-shot банк
-│   ├── prompt_fewshots_ru.py   — центральный банк few-shot примеров
-│   ├── slot_select_messages.py — промпт выбора слотов
-│   ├── triplet_messages.py     — промпт извлечения триплетов
-│   ├── conflict_messages.py    — промпт разрешения конфликтов
-│   ├── memory_gate_messages.py — промпт memory gate
-│   ├── deletion_messages.py    — промпт детекции удалений
-│   └── slot_update_messages.py — промпт обновления слотов (для slot_eval)
+├── prompts/             — сборщики промптов и few-shot банки по языку UI
+│   ├── loader.py , parsers.py — выбор `ru`/`en`, общие JSON-парсеры ответов LLM
+│   ├── ru/              — русскоязычные тексты (system/user, few-shots)
+│   └── en/              — English UI (тот же формат JSON; триплеты в графе — русские леммы)
 ├── slots/               — слоты и онтология
 │   ├── ontology.py             — SlotOntology, DEFAULT_USER_SLOTS, метки RU
 │   ├── slot_name_normalize.py  — нормализация имён слотов
@@ -178,7 +174,8 @@ dst_memory/
    - если сходство ≥ `ttl_semantic_dedup_threshold` (default 0.9), старый факт деактивируется, новый вставляется (таймер TTL обновляется).
 7. Conflict resolution (`TripletConflictClient`):
    - rule-layer + LLM-layer;
-   - возможна деактивация старых записей и/или skip новых.
+   - возможна деактивация старых записей и/или skip новых;
+   - `skip_new` в ответе LLM является опциональным: парсер корректно обрабатывает ответы только вида `{"deactivate":[...]}`.
 8. Обновление DST state:
    - добавляются `FactRecord` с полями `ttl` и `created_at_datetime`;
    - обновляется `step`, `record_id`.
@@ -342,6 +339,8 @@ TTL хранится в поле `description` ребра в виде аннот
 - `memory_context` (структурный JSON/records)
 - `recent_pairs`
 
+Язык system/user текстов финальной LLM совпадает с `prompt_language` (`ru` \| `en`): шаблоны в `dst_memory/prompts/ru/final_llm_messages.py` и `dst_memory/prompts/en/final_llm_messages.py` (префикс политики API без инструментов — одноязычный внутри выбранной локали). Константа `CHAT_API_OUTPUT_POLICY` в `llm_client.py` остаётся двуязычной только для **judge**-вызовов в скриптах валидации.
+
 В `openrouter/api` режиме отправляется OpenAI-compatible `chat/completions`.
 
 ### Поддерживаемые режимы final LLM
@@ -349,7 +348,8 @@ TTL хранится в поле `description` ребра в виде аннот
 - `stub` — локальный шаблонный ответ.
 - `openrouter` — основной runtime режим.
 - `api` — OpenAI-compatible endpoint.
-- `local` — не реализован.
+- `puter` — OpenAI-compatible endpoint Puter (`https://api.puter.com/puterai/openai/v1`).
+- `local` — локальная HF-модель через `LocalHFServing` (поддерживаются `llm_load_dtype`, `llm_load_quantization`, `llm_max_context_tokens`).
 
 ---
 
@@ -422,7 +422,6 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 ## 13. Текущие технические ограничения
 
 - На Python 3.13 возможны проблемы совместимости зависимостей RAGU (в т.ч. transitive deps).
-- `local` final LLM backend не реализован.
 - `ttl_mode=mode3` (отдельный вызов модели для TTL) не реализован — используется `mode2`.
 - Качество retrieval зависит от выбранной embedder-модели и качества триплетов.
 - Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен, дедупликация пропускается с предупреждением в логе.

@@ -1,0 +1,85 @@
+{
+  "_description": "Stage 1/3: memory_only on test_data/minimal_test.json (incl. multi-question row). Run from directory validation/GigaMemory_full.",
+  "_pipeline": {
+    "next_config": "config_pipeline_testdata_stage2_final_llm.json",
+    "notes": [
+      "memory_strategy applies ONLY here — it shapes memory_context saved into memory_only_states.json.",
+      "After changing memory_strategy (or graph_top_k_records, retrieval_top_k), re-run stage 1, then 2, then 3.",
+      "minimal_test.json: 2 dataset rows → 3 evaluation questions (2 + 1)."
+    ]
+  },
+
+  "shared": {
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
+    "output_dir": "./pipeline_test_runs/stage1_memory",
+    "num_items_per_type": 1,
+    "question_types": ["single-session-user"],
+    "log_level": "INFO",
+    "log_file": true,
+    "save_memory_state": true,
+    "save_intermediate": true
+  },
+
+  "batch_processing": {
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1,
+    "calculate_memory_hit_rate": false
+  },
+
+  "judge": {
+    "mode": "none",
+    "model": "",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "local_model_path": "",
+    "unload_between_items": false
+  },
+
+  "giga_memory": {
+    "importance_model_path": "../../message_important_learning/best_model",
+    "importance_threshold": 0.25,
+    "retrieval_top_k": 5,
+    "graph_top_k_records": 20,
+    "recent_history_pairs": 10,
+    "disable_memory_gate": false,
+    "memory_gate_use_stub": false,
+    "memory_strategy": "relevant_slots_full",
+    "llm_mode": "stub",
+    "llm_api_url": "",
+    "llm_api_key": "",
+    "llm_model": "",
+    "llm_load_dtype": "float16",
+    "llm_temperature": 0.0,
+    "llm_max_tokens": 512,
+    "slot_use_stub": false,
+    "slot_model_path": "../../DST_memory/models/Meno-Lite-0.1",
+    "slot_max_slots_per_message": 5,
+    "use_ragu": true,
+    "ragu_embedder_model": "deepvk/USER-bge-m3",
+    "ragu_storage_path": "",
+    "ttl_mode": "mode2",
+    "ttl_semantic_dedup_enabled": true,
+    "ttl_semantic_dedup_threshold": 0.9,
+    "ttl_slot_overrides": {},
+    "slot_context_enabled": false,
+    "slot_context_max_facts": 25,
+    "triplet_deletion_mode": "none",
+    "deletion_use_pymorphy": false,
+    "conflict_allow_multi_relation_same_object": true,
+    "slot_model_enable_thinking": false,
+    "slot_fallback_on_no_slots": true,
+    "triplet_fallback_on_empty": true,
+    "prompt_language": "en",
+    "unload_models_before_final_llm": true,
+    "use_dataset_datetime": true,
+    "force_infinite_ttl": true
+  },
+
+  "validation_mode": {
+    "mode": "memory_only",
+    "input_state_dir": "",
+    "input_answers_path": ""
+  }
+}

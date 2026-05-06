@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 VALID_TTL_VALUES = {"1d", "3d", "10d", "2w", "3w", "1m", "3m", "6m", "1y", "inf"}
 
@@ -18,8 +18,12 @@ TTL_TO_TIMEDELTA: Dict[str, Optional[timedelta]] = {
 }
 
 
-def is_expired(ttl: str, created_at_datetime: str) -> bool:
-    """Return True if the record's TTL has elapsed since created_at_datetime."""
+def is_expired(
+    ttl: str,
+    created_at_datetime: str,
+    as_of: Optional[datetime] = None,
+) -> bool:
+    """Return True if TTL has elapsed since ``created_at_datetime`` relative to ``as_of`` (default: real now)."""
     if ttl == "inf" or not created_at_datetime:
         return False
     delta = TTL_TO_TIMEDELTA.get(ttl)
@@ -29,7 +33,8 @@ def is_expired(ttl: str, created_at_datetime: str) -> bool:
         created = datetime.fromisoformat(created_at_datetime)
     except ValueError:
         return False
-    return datetime.now() > created + delta
+    ref = as_of if as_of is not None else datetime.now()
+    return ref > created + delta
 
 
 def now_iso() -> str:
@@ -58,8 +63,8 @@ class FactRecord:
     ttl: str = "inf"
     created_at_datetime: str = field(default_factory=now_iso)
 
-    def is_expired(self) -> bool:
-        return is_expired(self.ttl, self.created_at_datetime)
+    def is_expired(self, as_of: Optional[datetime] = None) -> bool:
+        return is_expired(self.ttl, self.created_at_datetime, as_of=as_of)
 
     def refresh_ttl(self) -> None:
         """Reset the TTL timer (called on semantic dedup match)."""
@@ -87,9 +92,31 @@ class MemoryFact:
 
 
 @dataclass
+class DeletedFact:
+    """Record of a deleted/soft-deleted fact with deletion metadata."""
+    slot: str
+    record_id: int
+    subject: str
+    relation: str
+    object: str
+    value: str
+    source_text: str
+    created_at_step: int
+    created_at_datetime: str
+    deleted_at_step: int
+    deletion_reason: str  # 'ttl_expired', 'deletion_signal', 'conflict_resolution', 'semantic_dedup', 'manual'
+    deletion_source: str  # 'llm_inline', 'llm_separate', 'heuristic', 'ttl_checker', 'conflict_resolver', 'dedup_engine'
+    deletion_details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class DialogueMemoryState:
     dialogue_id: str
     step: int = 0
     slots: Dict[str, List[FactRecord]] = field(default_factory=dict)
     next_record_id: int = 1
     recent_pairs: List[Dict[str, str]] = field(default_factory=list)
+    deleted_facts: List[DeletedFact] = field(default_factory=list)  # Track all soft-deleted facts with reasons
+    # LongMemEval validation: ``question_date`` as ISO — TTL lazy expiry "as_of" + final-LLM clock.
+    # Per-fact insert times may differ (``haystack_dates[i]``) via ``upsert_from_message(..., fact_created_at_iso=)``.
+    dataset_clock_iso: Optional[str] = None

@@ -65,6 +65,7 @@ RU_SLOT_LABELS_ORDERED: List[str] = [
     "ЕДА",
     "ДОМ",
     "ЛОКАЦИЯ",
+    "МЕСТОПОЛОЖЕНИЕ",
     "ПУТЕШЕСТВИЯ",
     "ПИТОМЦЫ",
     "ТЕХНИКА",
@@ -91,6 +92,7 @@ RU_SLOT_TO_CANONICAL: dict[str, str] = {
     "СПОРТ": "SPORTS",
     "ЕДА": "FOOD",
     "ДОМ": "HOME",
+    "МЕСТОПОЛОЖЕНИЕ": "LOCATION",
     "ЛОКАЦИЯ": "LOCATION",
     "ПУТЕШЕСТВИЯ": "TRAVEL",
     "ПИТОМЦЫ": "PETS",
@@ -133,6 +135,25 @@ DEFAULT_USER_SLOTS = SlotOntology(
 CANONICAL_TO_RU_LABEL: dict[str, str] = dict(
     zip(DEFAULT_USER_SLOTS.slot_names, RU_SLOT_LABELS_ORDERED)
 )
+
+
+# --- Условные блоки промпта экстракции триплетов (per-slot) ---
+# При single-pass (slot_name is None) подсказки из всех блоков включаются целиком.
+TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY: frozenset[str] = frozenset({"FAMILY", "ROMANCE"})
+TRIPLET_CLARIFY_EVENTS_TRAVEL_CHAIN: frozenset[str] = frozenset({"EVENTS", "TRAVEL"})
+TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY: frozenset[str] = frozenset({"FAMILY", "FRIENDS", "ROMANCE"})
+
+
+def triplet_prompt_show_clarification(slot_name: str | None, applicable_slots: frozenset[str]) -> bool:
+    """
+    Нужно ли включить слот-специфичное уточнение в system-промпт.
+
+    slot_name is None — режим одного прохода по всем слотам: показываем все уточнения.
+    Иначе — только если текущий канонический слот входит в applicable_slots.
+    """
+    if slot_name is None:
+        return True
+    return slot_name in applicable_slots
 
 
 def resolve_slot_or_none(name: str, *, ontology: SlotOntology = DEFAULT_USER_SLOTS) -> Optional[str]:

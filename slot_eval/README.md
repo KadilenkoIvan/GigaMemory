@@ -6,7 +6,7 @@
 
 Инференс slot-update реализован **отдельно** в `slot_eval/pipeline_slot_update.py` (класс `PipelineSlotUpdate`) — та же последовательность, что и `SlotUpdateClient` в DST_memory, без изменений в основном репозитории.
 
-Из DST_memory подтягиваются только **загрузка модели** (`LocalHFServing`) и **промпт** (`build_update_messages`).
+Из DST_memory подтягиваются только **загрузка модели** (`LocalHFServing`) и **промпт** — `load_prompt_modules("ru").slot_update_messages.build_update_messages` (пакет `ru` по умолчанию; для English UI используйте `"en"` в коде при необходимости).
 
 ## Зависимости
 

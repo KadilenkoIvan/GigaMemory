@@ -10,18 +10,15 @@
 """
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from ..slots.ontology import CANONICAL_TO_RU_LABEL
-
+from ...slots.ontology import CANONICAL_TO_RU_LABEL
 
 # ---------------------------------------------------------------------------
 # Few-shot примеры для детекции удалений
 # ---------------------------------------------------------------------------
 
 _DELETION_FEWSHOTS: List[tuple[str, str, str, str]] = [
-    # (slot_ru, existing_lines, user_message, assistant_json)
     (
         "ЛОКАЦИЯ",
         "пользователь | место жительства | москва",
@@ -60,18 +57,6 @@ def build_deletion_messages(
     slot_name: str,
     existing_triplets: List[str],
 ) -> List[Dict[str, Any]]:
-    """
-    Построить чат-сообщения для отдельного LLM-вызова детекции удалений.
-
-    Parameters
-    ----------
-    user_message : str
-        Новое сообщение пользователя.
-    slot_name : str
-        Канонический ключ слота (LOCATION, WORK, ...).
-    existing_triplets : list of str
-        Текущие активные факты в слоте в формате "subject | relation | object".
-    """
     ru_slot = CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else slot_name
     facts_block = "\n".join(existing_triplets) if existing_triplets else "(нет фактов)"
 
@@ -166,3 +151,4 @@ def parse_deletion_response(text: str) -> List[Dict[str, str]]:
         if s and r and o:
             result.append({"subject": s, "relation": r, "object": o})
     return result
+

@@ -57,12 +57,21 @@ class PipelineConfig:
 
     # LLM mode:
     # - "stub": no external LLM call, returns template response
-    # - "local": TODO implement local LLM backend
+    # - "local": HuggingFace causal LM via LocalHFServing (llm_model = path or HF id)
     # - "openrouter" / "api": OpenAI-compatible chat completions (OpenRouter default URL)
     llm_mode: str = "stub"
     llm_api_url: str = ""
     llm_api_key: str = ""
     llm_model: str = "openai/gpt-oss-120b:free"
+    # Optional HF tokenizer id/path for prompt clamp in API modes.
+    # Useful when llm_model is provider-specific (e.g., "qwen/...") and not a HF repo id.
+    llm_tokenizer_model: str = ""
+    # Weight dtype when llm_mode == "local" (torch_dtype in from_pretrained). Default FP16.
+    llm_load_dtype: str = "float16"
+    # When llm_mode == "local": none | 8bit | 4bit (BitsAndBytes; reduces VRAM).
+    llm_load_quantization: str = "none"
+    # Max prompt tokens (chat template) before generate; default 128k. Set 0 to disable clamp.
+    llm_max_context_tokens: int = 128 * 1024
     llm_max_tokens: int = 1024
     openrouter_http_referer: str = ""
     openrouter_x_title: str = ""
@@ -74,6 +83,9 @@ class PipelineConfig:
 
     # Финальная LLM temperature=0 для воспроизводимости.
     llm_temperature: float = 0.0
+
+    # Hybrid thinking (Qwen3 / Qwen3.5) for local final LLM only; ignored for API modes.
+    llm_enable_thinking: bool = True
 
     # RAGU knowledge-graph backend (required in this project).
     use_ragu: bool = True
@@ -171,3 +183,25 @@ class PipelineConfig:
     #   When False: passes enable_thinking=False to apply_chat_template AND prepends
     #   '/no_think' to the system prompt as a fallback for older tokenizer versions.
     slot_model_enable_thinking: bool = False
+
+    # Prompt UI language for slot/triplet/gate/deletion/conflict/final LLM ("ru" | "en").
+    prompt_language: str = "ru"
+
+    # When True (LongMemEval-style validation): parse row ``question_date`` once per dialogue,
+    # stamp new facts with that instant, use it as "now" for TTL expiry, and show it to the
+    # final LLM instead of the machine clock.
+    use_dataset_datetime: bool = False
+
+    # When True (default): every inserted fact gets ttl ``inf`` — model TTL output is ignored;
+    # lazy TTL expiry never deactivates records. Set False to use normal ttl_mode / model TTL.
+    force_infinite_ttl: bool = True
+
+    # -------------------------------------------------------------------
+    # Model unloading for local final LLM
+    # -------------------------------------------------------------------
+    # unload_models_before_final_llm:
+    #   When True (default) and llm_mode="local" — before calling the final LLM,
+    #   all other models (slot selector, triplet extractor, classifier, etc.)
+    #   are unloaded from GPU to free memory for the final LLM.
+    #   Ignored when llm_mode="openrouter" or "api" (no local models to unload).
+    unload_models_before_final_llm: bool = True

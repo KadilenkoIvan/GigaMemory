@@ -54,6 +54,7 @@ def build_pipeline(args: argparse.Namespace):
         llm_api_url=args.llm_api_url,
         llm_api_key=args.llm_api_key,
         llm_model=args.llm_model,
+        llm_tokenizer_model=getattr(args, "llm_tokenizer_model", ""),
         llm_max_tokens=args.llm_max_tokens,
         openrouter_http_referer=args.openrouter_http_referer,
         openrouter_x_title=args.openrouter_x_title,
@@ -76,6 +77,7 @@ def build_pipeline(args: argparse.Namespace):
         slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
         slot_fallback_on_no_slots=getattr(args, "slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=getattr(args, "triplet_fallback_on_empty", True),
+        prompt_language=getattr(args, "prompt_language", "ru"),
     )
 
     logger.info(
@@ -140,11 +142,12 @@ def create_parser(
         "--llm-mode",
         type=str,
         default=str(s.get("llm_mode", "openrouter")),
-        choices=["stub", "local", "api", "openrouter"],
+        choices=["stub", "local", "api", "openrouter", "puter"],
     )
     parser.add_argument("--llm-api-url", type=str, default=str(s.get("llm_api_url", "https://openrouter.ai/api/v1")))
     parser.add_argument("--llm-api-key", type=str, default=str(s.get("llm_api_key", "")))
     parser.add_argument("--llm-model", type=str, default=str(s.get("llm_model", "openai/gpt-oss-120b:free")))
+    parser.add_argument("--llm-tokenizer-model", type=str, default=str(s.get("llm_tokenizer_model", "")))
     parser.add_argument("--llm-temperature", type=float, default=float(s.get("llm_temperature", 0.0)))
     parser.add_argument("--llm-max-tokens", type=int, default=int(s.get("llm_max_tokens", 1024)))
     parser.add_argument("--openrouter-http-referer", dest="openrouter_http_referer", type=str, default=str(s.get("openrouter_http_referer", "")))
@@ -154,6 +157,14 @@ def create_parser(
     parser.add_argument("--slot-use-stub", action="store_const", const=True, default=bool(s.get("slot_use_stub", False)))
     parser.add_argument("--slot-model-path", type=str, default=str(s.get("slot_model_path", "Qwen/Qwen3-0.6B")))
     parser.add_argument("--slot-max-slots-per-message", type=int, default=int(s.get("slot_max_slots_per_message", 5)))
+    parser.add_argument(
+        "--prompt-language",
+        dest="prompt_language",
+        type=str,
+        default=str(s.get("prompt_language", "ru")),
+        choices=["ru", "en"],
+        help="UI language for slot/triplet/gate/deletion/conflict and final LLM prompts (ru or en)",
+    )
     parser.add_argument("--ragu-embedder-model", type=str, default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")))
     parser.add_argument("--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", "")))
     parser.add_argument(
@@ -355,6 +366,7 @@ def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
         max_tokens=min(int(args.llm_max_tokens), 256),
         http_referer=args.openrouter_http_referer,
         x_title=args.openrouter_x_title,
+        prompt_language=getattr(args, "prompt_language", "ru"),
     )
     print(client.generate(question=args.prompt, memory_context={}, recent_pairs=[]))
 
@@ -561,6 +573,7 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
             ),
             "memory_context_for_final_llm": verbose_answer.get("memory_context_for_final_llm"),
             "expired_facts": verbose_answer.get("expired_facts", []),
+            "deleted_facts_with_reasons": verbose_answer.get("deleted_facts_with_reasons", []),
         }
         results_logs.append(log_entry)
 

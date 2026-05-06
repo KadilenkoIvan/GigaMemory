@@ -1,3 +1,4 @@
+import gc
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -8,6 +9,20 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from ..slots.slot_model_path import resolve_slot_model_path
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_load_quantization(raw: Optional[str]) -> str:
+    """Return one of: none, 8bit, 4bit."""
+    q = (raw or "none").lower().strip()
+    if q in ("", "none", "off", "false", "no", "fp16", "float16", "bf16", "bfloat16", "fp32", "float32"):
+        return "none"
+    if q in ("8bit", "int8", "8-bit", "bnb8"):
+        return "8bit"
+    if q in ("4bit", "int4", "4-bit", "bnb4"):
+        return "4bit"
+    raise ValueError(
+        f"Unknown load_quantization={raw!r}; use none, 8bit, or 4bit (requires bitsandbytes)."
+    )
 
 
 @dataclass
@@ -39,24 +54,54 @@ class LocalHFServing:
         model_path_or_id: str,
         torch_dtype: torch.dtype = torch.float16,
         enable_thinking: bool = False,
+        load_quantization: str = "none",
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_thinking = enable_thinking
+        self._quant = _normalize_load_quantization(load_quantization)
         resolved = resolve_slot_model_path(model_path_or_id)
         logger.info(
-            "Serving loading model=%s (resolved=%s) device=%s dtype=%s enable_thinking=%s",
+            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s enable_thinking=%s",
             model_path_or_id,
             resolved,
             self.device,
             torch_dtype,
+            self._quant,
             enable_thinking,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            resolved,
-            trust_remote_code=True,
-            torch_dtype=torch_dtype,
-        ).to(self.device)
+
+        if self._quant != "none":
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError as e:
+                raise ImportError(
+                    "load_quantization requires transformers with BitsAndBytesConfig; "
+                    "install bitsandbytes (and a compatible GPU driver)."
+                ) from e
+
+            compute = torch_dtype if torch_dtype in (torch.float16, torch.bfloat16) else torch.float16
+            if self._quant == "8bit":
+                bnb = BitsAndBytesConfig(load_in_8bit=True)
+            else:
+                bnb = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=compute,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+            self.model = AutoModelForCausalLM.from_pretrained(
+                resolved,
+                trust_remote_code=True,
+                quantization_config=bnb,
+                device_map="auto",
+            )
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                resolved,
+                trust_remote_code=True,
+                torch_dtype=torch_dtype,
+            ).to(self.device)
         self.model.eval()
         try:
             first_param = next(self.model.parameters())
@@ -66,11 +111,33 @@ class LocalHFServing:
             model_device = "unknown"
             param_dtype = None
         logger.info(
-            "Serving model loaded on device=%s param_dtype=%s (requested load dtype=%s)",
+            "Serving model loaded on device=%s param_dtype=%s (requested load dtype=%s quant=%s)",
             model_device,
             param_dtype,
             torch_dtype,
+            self._quant,
         )
+
+    def release(self) -> None:
+        """Drop weights from VRAM/RAM (call before loading another large local model)."""
+        logger.info("LocalHFServing.release() — dropping model and tokenizer")
+        try:
+            del self.model
+        except Exception:
+            pass
+        try:
+            del self.tokenizer
+        except Exception:
+            pass
+        self.model = None  # type: ignore[assignment]
+        self.tokenizer = None  # type: ignore[assignment]
+        gc.collect()
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except Exception:
+            pass
 
     @staticmethod
     def _inject_no_think(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -119,7 +186,11 @@ class LocalHFServing:
                 add_generation_prompt=True,
             )
 
-        inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
+        try:
+            in_dev = next(self.model.parameters()).device
+        except (StopIteration, AttributeError):
+            in_dev = torch.device(self.device)
+        inputs = self.tokenizer(text, return_tensors="pt").to(in_dev)
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
         # Transformers only uses temperature/top_p when sampling is enabled.

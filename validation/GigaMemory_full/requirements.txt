@@ -1,0 +1,22 @@
+# LongMemEval Validation Requirements
+
+# Core dependencies (already in DST_memory)
+# - transformers
+# - torch
+# - sentence-transformers
+# - numpy
+
+# RAGU dependencies (ensure these are installed)
+razdel>=0.5.0
+networkx>=2.8
+aiohttp>=3.8.0
+
+# Validation script dependencies
+# (already in Python stdlib: json, logging, argparse, pathlib, etc.)
+
+# Optional: for local judge mode
+# transformers>=4.30.0
+# torch>=2.0.0
+
+# Optional: for better JSON handling (not required)
+# ujson>=5.7.0
