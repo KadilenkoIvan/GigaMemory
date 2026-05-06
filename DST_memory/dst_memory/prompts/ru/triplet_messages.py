@@ -141,6 +141,7 @@ def build_triplet_messages(
             context_block = (
                 "Текущие факты в слоте"
                 + (f" «{ru_slot}»" if ru_slot else "")
+                + " (нет записей)\n\n"
             )
 
     use_ttl = (ttl_mode == "mode2")
