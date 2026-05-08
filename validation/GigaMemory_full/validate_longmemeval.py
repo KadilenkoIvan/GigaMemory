@@ -223,6 +223,7 @@ QUESTION_TYPES = {
 
 RELEVANT_TYPES = list(QUESTION_TYPES.keys())
 MEMORY_STRATEGIES = ("full_graph_json", "relevant_slots_full", "topk_graph_records")
+MEMORY_PAYLOAD_MODES = ("with_metadata", "triplets_only")
 
 
 def _normalize_memory_strategies(raw: Any) -> List[str]:
@@ -249,6 +250,53 @@ def _normalize_memory_strategies(raw: Any) -> List[str]:
             out.append(s)
             seen.add(s)
     return out
+
+
+def _normalize_memory_payload_mode(raw: Any) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in MEMORY_PAYLOAD_MODES:
+        return mode
+    return "with_metadata"
+
+
+def _memory_context_for_payload_mode(memory_context: Any, payload_mode: str) -> Any:
+    """Optionally strip metadata and pass only triplets to final LLM."""
+    mode = _normalize_memory_payload_mode(payload_mode)
+    if mode != "triplets_only":
+        return memory_context
+
+    if not isinstance(memory_context, dict):
+        return memory_context
+
+    slots = memory_context.get("slots")
+    if isinstance(slots, list):
+        out_slots: List[Dict[str, Any]] = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            slot_name = str(slot.get("slot", "") or "").strip()
+            triplets: List[Dict[str, str]] = []
+            for msg in slot.get("messages") or []:
+                if not isinstance(msg, dict):
+                    continue
+                subj = str(msg.get("subject", "") or "").strip()
+                rel = str(msg.get("relation", "") or "").strip()
+                obj = str(msg.get("object", "") or "").strip()
+                if subj or rel or obj:
+                    triplets.append({
+                        "subject": subj,
+                        "relation": rel,
+                        "object": obj,
+                    })
+            out_slots.append({"slot": slot_name, "triplets": triplets})
+        return {"slots": out_slots}
+
+    records = memory_context.get("records")
+    if isinstance(records, list):
+        # topk_graph_records is already a compact list of graph records
+        return {"records": list(records)}
+
+    return memory_context
 
 
 # ============================================================================
@@ -294,6 +342,7 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "input_answers_path": "",  # For judge_only: path to intermediate_answers.json
             "memory_only_output_suffix": "_memory_only",  # Suffix for memory_only output dirs
             "final_llm_memory_strategies": [],  # Optional strategies list for final_llm_only
+            "final_llm_memory_payload_mode": "with_metadata",  # with_metadata | triplets_only
         },
     }
 
@@ -371,6 +420,9 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.memory_only_output_suffix = val_mode.get("memory_only_output_suffix", "_memory_only")
     args.final_llm_memory_strategies = _normalize_memory_strategies(
         val_mode.get("final_llm_memory_strategies", [])
+    )
+    args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
+        val_mode.get("final_llm_memory_payload_mode", "with_metadata")
     )
 
     # GigaMemory config (for building CLI overrides)
@@ -1490,6 +1542,7 @@ class BatchProcessor:
         input_state_dir: Optional[Path] = None,
         input_answers_path: Optional[Path] = None,
         final_llm_memory_strategies: Optional[List[str]] = None,
+        final_llm_memory_payload_mode: str = "with_metadata",
         save_giga_memory_logs: bool = True,
     ):
         self.pipeline = pipeline
@@ -1508,6 +1561,7 @@ class BatchProcessor:
         cfg_strategy = getattr(self.pipeline.config, "memory_strategy", "full_graph_json") if self.pipeline else "full_graph_json"
         selected = _normalize_memory_strategies(final_llm_memory_strategies or [])
         self.final_llm_memory_strategies = selected or [cfg_strategy]
+        self.final_llm_memory_payload_mode = _normalize_memory_payload_mode(final_llm_memory_payload_mode)
         # When local judge follows local final LLM on full DST pipeline, defer slot reload until judge finishes.
         self._pending_slot_reload_after_judge = False
 
@@ -1635,9 +1689,8 @@ class BatchProcessor:
             for turn in session:
                 if not isinstance(turn, dict):
                     continue
-                content = str(turn.get("content") or "").strip()
-                if content:
-                    dialogue_context_chars += len(content)
+                content = str(turn.get("content") or "")
+                dialogue_context_chars += len(content)
 
         logger.info(
             "[Batch] Row %d: one memory pass, %d question(s), %d sessions, %d user messages, type=%s",
@@ -1912,7 +1965,10 @@ class BatchProcessor:
 
             if self.pipeline.config.llm_mode != "stub":
                 # Rebuild memory context
-                memory_context = acc.pipeline_state["memory_context"]
+                memory_context = _memory_context_for_payload_mode(
+                    acc.pipeline_state["memory_context"],
+                    self.final_llm_memory_payload_mode,
+                )
                 recent_pairs = list(acc.pipeline_state.get("recent_pairs") or [])
 
                 # Call final LLM
@@ -1948,7 +2004,7 @@ class BatchProcessor:
                 reference_answer=acc.reference_answer,
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
-                memory_context=acc.pipeline_state["memory_context"],
+                memory_context=memory_context if self.pipeline.config.llm_mode != "stub" else acc.pipeline_state["memory_context"],
                 dialogue_context_chars=dialogue_context_chars,
                 final_llm_prompt_chars_before_clamp=prompt_chars_before,
                 final_llm_prompt_chars_after_clamp=prompt_chars_after,
@@ -1966,7 +2022,7 @@ class BatchProcessor:
                 reference_answer=acc.reference_answer,
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
-                memory_context=acc.pipeline_state["memory_context"],
+                memory_context=memory_context if self.pipeline.config.llm_mode != "stub" else acc.pipeline_state["memory_context"],
                 memory_state_path="",  # Not available in full mode
                 dialogue_context_chars=dialogue_context_chars,
                 final_llm_prompt_chars_before_clamp=prompt_chars_before,
@@ -2106,6 +2162,10 @@ class BatchProcessor:
                         memory_context = {"records": retrieved[: max(0, k)]}
                     else:
                         memory_context = legacy_context
+                    memory_context = _memory_context_for_payload_mode(
+                        memory_context,
+                        self.final_llm_memory_payload_mode,
+                    )
                     predicted_answer = "[no_final_llm]"
                     prompt_chars_before = 0
                     prompt_chars_after = 0
@@ -2711,6 +2771,10 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("  GigaMemory config: %s", args.config)
     logger.info("  final_llm_memory_strategies: %s", getattr(args, "final_llm_memory_strategies", []))
     logger.info(
+        "  final_llm_memory_payload_mode: %s",
+        getattr(args, "final_llm_memory_payload_mode", "with_metadata"),
+    )
+    logger.info(
         "  use_dataset_datetime: %s",
         getattr(args, "gm_use_dataset_datetime", None),
     )
@@ -2754,6 +2818,9 @@ def run_validation(args: argparse.Namespace) -> None:
         "input_state_dir": args.input_state_dir or "",
         "input_answers_path": args.input_answers_path or "",
         "final_llm_memory_strategies": list(getattr(args, "final_llm_memory_strategies", []) or []),
+        "final_llm_memory_payload_mode": str(
+            getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+        ),
     }
 
     # Initialize persistence
@@ -2809,6 +2876,9 @@ def run_validation(args: argparse.Namespace) -> None:
         input_state_dir=Path(args.input_state_dir) if args.input_state_dir else None,
         input_answers_path=Path(args.input_answers_path) if args.input_answers_path else None,
         final_llm_memory_strategies=list(getattr(args, "final_llm_memory_strategies", []) or []),
+        final_llm_memory_payload_mode=str(
+            getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+        ),
         save_giga_memory_logs=bool(getattr(args, "save_intermediate", True)),
     )
 
@@ -3093,6 +3163,13 @@ Examples:
             "Allowed: full_graph_json,relevant_slots_full,topk_graph_records"
         ),
     )
+    mode_group.add_argument(
+        "--final-llm-memory-payload-mode",
+        type=str,
+        default=None,
+        choices=list(MEMORY_PAYLOAD_MODES),
+        help="Payload mode for memory in final LLM: with_metadata | triplets_only",
+    )
 
     # Validation parameters (override config file)
     val_group = parser.add_argument_group("Validation Config Overrides (--val-*)")
@@ -3350,6 +3427,10 @@ Examples:
         config["validation_mode"]["final_llm_memory_strategies"] = _normalize_memory_strategies(
             args.final_llm_memory_strategies
         )
+    if args.final_llm_memory_payload_mode is not None:
+        config["validation_mode"]["final_llm_memory_payload_mode"] = _normalize_memory_payload_mode(
+            args.final_llm_memory_payload_mode
+        )
 
     # Handle legacy args
     if args.dataset_path:
@@ -3371,6 +3452,9 @@ Examples:
     args = parser.parse_args()
     args.final_llm_memory_strategies = _normalize_memory_strategies(
         getattr(args, "final_llm_memory_strategies", [])
+    )
+    args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
+        getattr(args, "final_llm_memory_payload_mode", "with_metadata")
     )
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)

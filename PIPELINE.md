@@ -320,6 +320,9 @@ dst_memory/
   - `chunk_*/ragu_storage` (для retrieval);
   - компактные strategy artifacts (выбор релевантных слотов и retrieval candidates), без дублирования трёх полных memory-context.
 - В `final_llm_only` стратегия выбирается при генерации ответа (`--final-llm-memory-strategies`), можно запускать сразу несколько стратегий на одном `memory_only` результате.
+- Дополнительно есть режим payload-а для final LLM:
+  - `with_metadata` (полные записи),
+  - `triplets_only` (только `subject/relation/object`).
 
 ---
 

@@ -49,6 +49,9 @@ python validate_longmemeval.py --config ./run_config.json
 
 Дополнительно для `final_llm_only`:
 - `final_llm_memory_strategies` — массив стратегий (`full_graph_json`, `relevant_slots_full`, `topk_graph_records`), которые будут запущены на одном и том же `memory_only` state.
+- `final_llm_memory_payload_mode` — режим передачи памяти в final LLM:
+  - `with_metadata` — полный JSON как сейчас;
+  - `triplets_only` — только `subject/relation/object` (без служебных полей).
 
 ## CLI override
 
@@ -56,6 +59,7 @@ python validate_longmemeval.py --config ./run_config.json
 - `--val-*` для блока валидации/батчей/judge;
 - `--gm-*` для переопределения `giga_memory`;
 - прямые флаги режима: `--validation-mode`, `--input-state-dir`, `--input-answers-path`, `--final-llm-memory-strategies`.
+- прямые флаги режима: `--validation-mode`, `--input-state-dir`, `--input-answers-path`, `--final-llm-memory-strategies`, `--final-llm-memory-payload-mode`.
 
 Для моделей с ограниченным окном контекста настраивайте:
 - `giga_memory.llm_max_context_tokens` для final LLM;

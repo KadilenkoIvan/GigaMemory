@@ -157,6 +157,9 @@ Final LLM получает полный JSON активной памяти:
 В stage-режиме:
 - `memory_only` сохраняет состояние памяти (DST + RAGU + компактные strategy artifacts) без хранения трёх полных memory-context;
 - `final_llm_only` может запускаться по одной или нескольким стратегиям на одном и том же state (без повторного `write_to_memory`);
+- в `final_llm_only` можно выбрать формат передачи памяти в final LLM:
+  - `with_metadata` — с метаданными записей;
+  - `triplets_only` — только триплеты (`subject/relation/object`);
 - RAGU state для retrieval берётся из `chunk_*/ragu_storage`, поэтому `topk_graph_records` использует тот же сохранённый граф.
 
 ## История последних пар

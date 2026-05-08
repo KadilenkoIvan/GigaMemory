@@ -174,6 +174,7 @@ python validate_longmemeval.py \
     --validation-mode final_llm_only \
     --input-state-dir ./results_memory_only \
     --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records \
+    --final-llm-memory-payload-mode triplets_only \
     --gm-llm-model "openai/gpt-4o-mini" \
     --config ./config_final_llm.json
 

@@ -277,6 +277,7 @@ python validate_longmemeval.py \
 - `--input-state-dir` - директория с результатами `memory_only` (обязательно)
 - `--final-llm-batch-size` - размер батча для финальной LLM
 - `--final-llm-memory-strategies` - список стратегий через запятую (если не указан, используется `giga_memory.memory_strategy`)
+- `--final-llm-memory-payload-mode` - формат памяти для final LLM: `with_metadata` или `triplets_only`
 
 **Выходные файлы:**
 ```
@@ -515,6 +516,7 @@ output-dir/
 | `--input-answers-path` | Путь к ответам (для `judge_only`) | `./results/full_graph_json/intermediate_answers.json` |
 | `--memory-only-output-suffix` | Суффикс для выходных директорий | `_memory_only` |
 | `--final-llm-memory-strategies` | Список стратегий памяти для `final_llm_only` | `full_graph_json,relevant_slots_full` |
+| `--final-llm-memory-payload-mode` | Формат памяти для final LLM | `with_metadata` \| `triplets_only` |
 
 ### Параметры GigaMemory
 
