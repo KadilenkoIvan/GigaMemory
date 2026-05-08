@@ -67,6 +67,11 @@ python validate_longmemeval.py --config ./run_config.json
 - `final_llm_prompt_chars_before_clamp_total`
 - `final_llm_prompt_chars_after_clamp_total`
 - число вызовов final LLM (`final_llm_calls`)
+- `dialogue_context_chars_total` / `dialogue_context_chars_avg` (размер исходного диалога в символах)
+
+В `judge_only` эти же поля агрегируются в итоговом `validation_results.json`:
+- `statistics.dialogue_context_chars.*`
+- `results[].dialogue_context_chars`
 
 ## Пример stage-прохода
 

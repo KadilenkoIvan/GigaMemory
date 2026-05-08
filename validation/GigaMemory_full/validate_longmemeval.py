@@ -1330,6 +1330,7 @@ class AccumulatedAnswer:
     predicted_answer: str
     memory_context: Dict[str, Any]
     memory_strategy: str = ""
+    dialogue_context_chars: int = 0
     final_llm_prompt_chars_before_clamp: int = 0
     final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
@@ -1366,6 +1367,7 @@ class IntermediateAnswer:
     memory_context: Dict[str, Any]
     memory_state_path: str  # Path for Memory Hit Rate calculation
     memory_strategy: str = ""
+    dialogue_context_chars: int = 0
     final_llm_prompt_chars_before_clamp: int = 0
     final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
@@ -1403,6 +1405,8 @@ def build_judge_statistics_export(
     final_llm_calls = int(stats.get("final_llm_calls", 0) or 0)
     chars_before_total = int(stats.get("final_llm_prompt_chars_before_clamp_total", 0) or 0)
     chars_after_total = int(stats.get("final_llm_prompt_chars_after_clamp_total", 0) or 0)
+    dialogue_chars_total = int(stats.get("dialogue_context_chars_total", 0) or 0)
+    dialogue_chars_count = int(stats.get("dialogue_context_chars_count", 0) or 0)
 
     mhe_by_type: Dict[str, Any] = {}
     for qt, st in by_type_raw.items():
@@ -1438,6 +1442,11 @@ def build_judge_statistics_export(
             "after_clamp_total": chars_after_total,
             "before_clamp_avg": (chars_before_total / final_llm_calls) if final_llm_calls > 0 else 0.0,
             "after_clamp_avg": (chars_after_total / final_llm_calls) if final_llm_calls > 0 else 0.0,
+        },
+        "dialogue_context_chars": {
+            "count": dialogue_chars_count,
+            "total": dialogue_chars_total,
+            "avg": (dialogue_chars_total / dialogue_chars_count) if dialogue_chars_count > 0 else 0.0,
         },
     }
 
@@ -1525,6 +1534,8 @@ class BatchProcessor:
             "final_llm_calls": 0,
             "final_llm_prompt_chars_before_clamp_total": 0,
             "final_llm_prompt_chars_after_clamp_total": 0,
+            "dialogue_context_chars_total": 0,
+            "dialogue_context_chars_count": 0,
             "memory_hit": 0,
             "memory_miss": 0,
             "by_type": {
@@ -1617,6 +1628,16 @@ class BatchProcessor:
         clock_disp = optional_clock_display_for_validation(use_dataset_dt, qdate)
 
         user_messages = extract_user_messages_from_sessions(sessions)
+        dialogue_context_chars = 0
+        for session in sessions:
+            if not isinstance(session, list):
+                continue
+            for turn in session:
+                if not isinstance(turn, dict):
+                    continue
+                content = str(turn.get("content") or "").strip()
+                if content:
+                    dialogue_context_chars += len(content)
 
         logger.info(
             "[Batch] Row %d: one memory pass, %d question(s), %d sessions, %d user messages, type=%s",
@@ -1762,6 +1783,7 @@ class BatchProcessor:
                     question_date=qdate,
                     pipeline_state={
                         "write_logs": write_logs,
+                        "dialogue_context_chars": dialogue_context_chars,
                         "memory_slots": answer_details.get("memory_slots", []),
                         "memory_gate": answer_details.get("memory_gate", {}),
                         "retrieved": answer_details.get("retrieved", []),
@@ -1791,6 +1813,7 @@ class BatchProcessor:
                     final_llm_clock_display=clock_disp,
                     pipeline_state={
                         "write_logs": write_logs,
+                        "dialogue_context_chars": dialogue_context_chars,
                         "memory_slots": answer_details.get("memory_slots", []),
                         "memory_gate": answer_details.get("memory_gate", {}),
                         "retrieved": answer_details.get("retrieved", []),
@@ -1825,6 +1848,7 @@ class BatchProcessor:
                 "question_type": state.question_type,
                 "memory_state_path": state.memory_state_path,
                 "ragu_storage_path": state.ragu_storage_path,
+                "dialogue_context_chars": int((state.pipeline_state or {}).get("dialogue_context_chars", 0) or 0),
                 "pipeline_state": state.pipeline_state,
             }
             if state.dataset_ordinal is not None:
@@ -1884,6 +1908,7 @@ class BatchProcessor:
             predicted_answer = "[no_final_llm]"
             prompt_chars_before = 0
             prompt_chars_after = 0
+            dialogue_context_chars = int(acc.pipeline_state.get("dialogue_context_chars", 0) or 0)
 
             if self.pipeline.config.llm_mode != "stub":
                 # Rebuild memory context
@@ -1924,6 +1949,7 @@ class BatchProcessor:
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
+                dialogue_context_chars=dialogue_context_chars,
                 final_llm_prompt_chars_before_clamp=prompt_chars_before,
                 final_llm_prompt_chars_after_clamp=prompt_chars_after,
                 dataset_ordinal=acc.dataset_ordinal,
@@ -1942,6 +1968,7 @@ class BatchProcessor:
                 predicted_answer=predicted_answer,
                 memory_context=acc.pipeline_state["memory_context"],
                 memory_state_path="",  # Not available in full mode
+                dialogue_context_chars=dialogue_context_chars,
                 final_llm_prompt_chars_before_clamp=prompt_chars_before,
                 final_llm_prompt_chars_after_clamp=prompt_chars_after,
                 dataset_ordinal=acc.dataset_ordinal,
@@ -2047,6 +2074,7 @@ class BatchProcessor:
                 )
                 legacy_context = pipeline_state.get("memory_context", {}) or {}
                 full_context = self._load_memory_context_from_state(memory_state_path) or legacy_context
+                dialogue_context_chars = int(pipeline_state.get("dialogue_context_chars", 0) or 0)
 
                 for strategy in self.final_llm_memory_strategies:
                     if strategy == "full_graph_json":
@@ -2118,6 +2146,7 @@ class BatchProcessor:
                         memory_context=memory_context,
                         memory_strategy=strategy,
                         memory_state_path=memory_state_path,
+                        dialogue_context_chars=dialogue_context_chars,
                         final_llm_prompt_chars_before_clamp=prompt_chars_before,
                         final_llm_prompt_chars_after_clamp=prompt_chars_after,
                         dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
@@ -2135,6 +2164,7 @@ class BatchProcessor:
                         predicted_answer=predicted_answer,
                         memory_context=memory_context,
                         memory_strategy=strategy,
+                        dialogue_context_chars=dialogue_context_chars,
                         final_llm_prompt_chars_before_clamp=prompt_chars_before,
                         final_llm_prompt_chars_after_clamp=prompt_chars_after,
                         dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
@@ -2186,6 +2216,7 @@ class BatchProcessor:
                     "predicted_answer": ans.predicted_answer,
                     "memory_context": ans.memory_context,
                     "memory_strategy": strategy,
+                    "dialogue_context_chars": int(ans.dialogue_context_chars or 0),
                     "memory_state_path": ans.memory_state_path,
                     "final_llm_prompt_chars_before_clamp": ans.final_llm_prompt_chars_before_clamp,
                     "final_llm_prompt_chars_after_clamp": ans.final_llm_prompt_chars_after_clamp,
@@ -2204,6 +2235,12 @@ class BatchProcessor:
                 },
                 "statistics": {
                     "answers_count": len(answers_data),
+                    "dialogue_context_chars_total": int(sum(int(a.dialogue_context_chars or 0) for a in answers)),
+                    "dialogue_context_chars_avg": (
+                        float(sum(int(a.dialogue_context_chars or 0) for a in answers) / len(answers))
+                        if answers
+                        else 0.0
+                    ),
                     "final_llm_calls_total": int(self.stats.get("final_llm_calls", 0)),
                     "final_llm_prompt_chars_before_clamp_total": int(
                         self.stats.get("final_llm_prompt_chars_before_clamp_total", 0)
@@ -2304,6 +2341,7 @@ class BatchProcessor:
             "predicted_answer": acc.predicted_answer,
             "question_type": acc.question_type,
             "memory_strategy": acc.memory_strategy,
+            "dialogue_context_chars": int(acc.dialogue_context_chars or 0),
             "score": score,
             "reasoning": reasoning,
             "judge_error": judge_error,
@@ -2322,6 +2360,8 @@ class BatchProcessor:
         # Update stats
         self.stats["total"] += 1
         self.stats["total_score"] += score
+        self.stats["dialogue_context_chars_total"] += int(acc.dialogue_context_chars or 0)
+        self.stats["dialogue_context_chars_count"] += 1
         if judge_error:
             self.stats["errors_judge"] += 1
 
@@ -2420,6 +2460,11 @@ class BatchProcessor:
                     states_map[global_index] = {
                         "memory_context": memory_context,
                         "memory_state_path": state.get("memory_state_path", ""),
+                        "dialogue_context_chars": int(
+                            state.get("dialogue_context_chars")
+                            or (pipeline_state.get("dialogue_context_chars", 0) if isinstance(pipeline_state, dict) else 0)
+                            or 0
+                        ),
                     }
         except Exception as e:
             logger.warning("[JudgeOnly] Failed to load memory states map: %s", e)
@@ -2467,6 +2512,7 @@ class BatchProcessor:
                 # input_state_dir only fills gaps — avoids mismatched runs overwriting context.
                 memory_context = ans_data.get("memory_context") or {}
                 memory_state_path = ans_data.get("memory_state_path", "")
+                dialogue_context_chars = int(ans_data.get("dialogue_context_chars", 0) or 0)
 
                 if self.input_state_dir and self.calculate_memory_hit_rate:
                     map_data = memory_states_map.get(global_index)
@@ -2480,6 +2526,8 @@ class BatchProcessor:
                             )
                         if not memory_state_path:
                             memory_state_path = map_data.get("memory_state_path", "") or memory_state_path
+                        if not dialogue_context_chars:
+                            dialogue_context_chars = int(map_data.get("dialogue_context_chars", 0) or 0)
                 
                 acc = AccumulatedAnswer(
                     global_index=global_index,
@@ -2490,6 +2538,7 @@ class BatchProcessor:
                     predicted_answer=ans_data["predicted_answer"],
                     memory_context=memory_context,
                     memory_strategy=str(ans_data.get("memory_strategy", "") or ""),
+                    dialogue_context_chars=dialogue_context_chars,
                     final_llm_prompt_chars_before_clamp=int(
                         ans_data.get("final_llm_prompt_chars_before_clamp", 0) or 0
                     ),

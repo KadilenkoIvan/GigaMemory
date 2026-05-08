@@ -130,6 +130,14 @@ memory_only_states.json  intermediate_answers.json  validation_results.json
 
 Агрегаты по запуску попадают в `statistics`, а значения по каждому примеру — в `results`/`intermediate_answers`.
 
+### 10. Размер исходного диалога vs переданный контекст
+
+Дополнительно сохраняются:
+- `dialogue_context_chars` — общий размер исходного диалога (все реплики) в символах;
+- `final_llm_prompt_chars_after_clamp` — сколько символов реально ушло в final LLM после ограничений контекста.
+
+Эти поля есть в `intermediate_answers.json` (`final_llm_only`) и дублируются в итоговых метриках `judge_only`.
+
 ### 10. Полная конфигурация через CLI
 
 Все параметры можно переопределить через CLI:
