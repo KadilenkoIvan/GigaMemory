@@ -126,8 +126,8 @@ validation/
 | Режим | Описание | Команда |
 |-------|----------|---------|
 | `full` | Полный пайплайн: память → финальная LLM → судья | `python validate_longmemeval.py --validation-mode full` |
-| `memory_only` | Только обработка памяти и сохранение состояний | `python validate_longmemeval.py --validation-mode memory_only` |
-| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory` |
+| `memory_only` | Только обработка памяти и сохранение переиспользуемого state | `python validate_longmemeval.py --validation-mode memory_only` |
+| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов для 1+ стратегий | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records` |
 | `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `python validate_longmemeval.py --validation-mode judge_only --input-answers-path ./results/answers.json` |
 
 ### 1. GigaMemory Full Validation
@@ -169,10 +169,11 @@ python validate_longmemeval.py \
     --validation-mode memory_only \
     --config ./config_memory_only.json
 
-# Шаг 2: Генерация ответов (можно запускать с разными LLM)
+# Шаг 2: Генерация ответов (можно запускать с разными LLM и стратегиями памяти)
 python validate_longmemeval.py \
     --validation-mode final_llm_only \
     --input-state-dir ./results_memory_only \
+    --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records \
     --gm-llm-model "openai/gpt-4o-mini" \
     --config ./config_final_llm.json
 

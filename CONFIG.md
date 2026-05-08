@@ -152,6 +152,13 @@ Final LLM получает полный JSON активной памяти:
 2. Возвращаются top-k строк-графовых записей (`graph_top_k_records`).
 3. Этот список идет в final LLM.
 
+### Важно для валидации `validation/GigaMemory_full`
+
+В stage-режиме:
+- `memory_only` сохраняет состояние памяти (DST + RAGU + компактные strategy artifacts) без хранения трёх полных memory-context;
+- `final_llm_only` может запускаться по одной или нескольким стратегиям на одном и том же state (без повторного `write_to_memory`);
+- RAGU state для retrieval берётся из `chunk_*/ragu_storage`, поэтому `topk_graph_records` использует тот же сохранённый граф.
+
 ## История последних пар
 
 `recent_history_pairs` задает размер окна из последних:

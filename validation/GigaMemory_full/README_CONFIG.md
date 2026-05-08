@@ -25,7 +25,7 @@ python validate_longmemeval.py --config ./run_config.json
 - `batch_processing` — `final_llm_batch_size`, `judge_batch_size`, `calculate_memory_hit_rate`.
 - `judge` — параметры judge LLM (`openrouter|puter|local|none`), включая `max_context_tokens` и `tokenizer_model`.
 - `giga_memory` — runtime-параметры пайплайна памяти (зеркалят `DST_memory/run_config.json`).
-- `validation_mode` — режим запуска (`full|memory_only|final_llm_only|judge_only`) и входные пути для stage-режимов.
+- `validation_mode` — режим запуска (`full|memory_only|final_llm_only|judge_only`), входные пути и список стратегий для stage-режимов.
 
 ## Важные поля `giga_memory`
 
@@ -47,12 +47,15 @@ python validate_longmemeval.py --config ./run_config.json
 - `final_llm_only` — только генерация ответов по сохранённым state (`input_state_dir` обязателен)
 - `judge_only` — только оценка ответов (`input_answers_path` обязателен)
 
+Дополнительно для `final_llm_only`:
+- `final_llm_memory_strategies` — массив стратегий (`full_graph_json`, `relevant_slots_full`, `topk_graph_records`), которые будут запущены на одном и том же `memory_only` state.
+
 ## CLI override
 
 Поддерживаются:
 - `--val-*` для блока валидации/батчей/judge;
 - `--gm-*` для переопределения `giga_memory`;
-- прямые флаги режима: `--validation-mode`, `--input-state-dir`, `--input-answers-path`.
+- прямые флаги режима: `--validation-mode`, `--input-state-dir`, `--input-answers-path`, `--final-llm-memory-strategies`.
 
 Для моделей с ограниченным окном контекста настраивайте:
 - `giga_memory.llm_max_context_tokens` для final LLM;
@@ -77,12 +80,13 @@ python validate_longmemeval.py \
 python validate_longmemeval.py \
   --validation-mode final_llm_only \
   --input-state-dir ./results_memory_only \
+  --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records \
   --config ./config_final_llm.json
 
 # 3) Judge
 python validate_longmemeval.py \
   --validation-mode judge_only \
-  --input-answers-path ./results_final_llm/intermediate_answers.json \
+  --input-answers-path ./results_final_llm/full_graph_json/intermediate_answers.json \
   --input-state-dir ./results_memory_only \
   --calculate-memory-hit-rate \
   --config ./config_judge.json
