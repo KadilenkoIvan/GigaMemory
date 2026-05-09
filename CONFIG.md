@@ -156,6 +156,7 @@ Final LLM получает полный JSON активной памяти:
 
 В stage-режиме:
 - `memory_only` сохраняет состояние памяти (DST + RAGU + компактные strategy artifacts) без хранения трёх полных memory-context;
+- `memory_only_write_mode=single_path_only` форсирует single-pass extraction (без `slot_select` и per-slot extraction) для A/B-сравнения write-path;
 - `final_llm_only` может запускаться по одной или нескольким стратегиям на одном и том же state (без повторного `write_to_memory`);
 - в `final_llm_only` можно выбрать формат передачи памяти в final LLM:
   - `with_metadata` — с метаданными записей;

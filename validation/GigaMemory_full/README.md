@@ -23,6 +23,7 @@
 - Хотите разделить процесс на этапы для экономии ресурсов
 - Нужно сохранить промежуточные состояния памяти для анализа
 - Планируете запускать финальную LLM позже с другими параметрами
+- Нужно сравнить multi-stage write-path и `single_path_only`
 
 **`final_llm_only`** - используйте когда:
 - Уже обработали диалоги в режиме `memory_only`
@@ -238,6 +239,7 @@ python validate_longmemeval.py \
     --output-dir ./results_memory_only \
     --num-items-per-type 10 \
     --validation-mode memory_only \
+    --memory-only-write-mode single_path_only \
     --config ../../DST_memory/run_config.json
 ```
 
@@ -515,6 +517,7 @@ output-dir/
 | `--input-state-dir` | Директория с состояниями (для `final_llm_only` и `judge_only`) | `./results_memory_only` |
 | `--input-answers-path` | Путь к ответам (для `judge_only`) | `./results/full_graph_json/intermediate_answers.json` |
 | `--memory-only-output-suffix` | Суффикс для выходных директорий | `_memory_only` |
+| `--memory-only-write-mode` | Режим записи памяти в `memory_only` | `standard` \| `single_path_only` |
 | `--final-llm-memory-strategies` | Список стратегий памяти для `final_llm_only` | `full_graph_json,relevant_slots_full` |
 | `--final-llm-memory-payload-mode` | Формат памяти для final LLM | `with_metadata` \| `triplets_only` |
 

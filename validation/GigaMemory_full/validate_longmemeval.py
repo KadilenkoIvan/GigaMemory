@@ -224,6 +224,7 @@ QUESTION_TYPES = {
 RELEVANT_TYPES = list(QUESTION_TYPES.keys())
 MEMORY_STRATEGIES = ("full_graph_json", "relevant_slots_full", "topk_graph_records")
 MEMORY_PAYLOAD_MODES = ("with_metadata", "triplets_only")
+MEMORY_ONLY_WRITE_MODES = ("standard", "single_path_only")
 
 
 def _normalize_memory_strategies(raw: Any) -> List[str]:
@@ -299,6 +300,13 @@ def _memory_context_for_payload_mode(memory_context: Any, payload_mode: str) -> 
     return memory_context
 
 
+def _normalize_memory_only_write_mode(raw: Any) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in MEMORY_ONLY_WRITE_MODES:
+        return mode
+    return "standard"
+
+
 # ============================================================================
 # Config Loading
 # ============================================================================
@@ -341,6 +349,7 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "input_state_dir": "",  # For final_llm_only: directory with saved memory states
             "input_answers_path": "",  # For judge_only: path to intermediate_answers.json
             "memory_only_output_suffix": "_memory_only",  # Suffix for memory_only output dirs
+            "memory_only_write_mode": "standard",  # standard | single_path_only
             "final_llm_memory_strategies": [],  # Optional strategies list for final_llm_only
             "final_llm_memory_payload_mode": "with_metadata",  # with_metadata | triplets_only
         },
@@ -418,6 +427,9 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.input_state_dir = val_mode.get("input_state_dir", "")
     args.input_answers_path = val_mode.get("input_answers_path", "")
     args.memory_only_output_suffix = val_mode.get("memory_only_output_suffix", "_memory_only")
+    args.memory_only_write_mode = _normalize_memory_only_write_mode(
+        val_mode.get("memory_only_write_mode", "standard")
+    )
     args.final_llm_memory_strategies = _normalize_memory_strategies(
         val_mode.get("final_llm_memory_strategies", [])
     )
@@ -1506,6 +1518,41 @@ def build_judge_statistics_export(
 def _is_full_dst_pipeline(pipeline: Any) -> bool:
     if pipeline is None:
         return False
+
+
+def _enable_memory_only_single_path_mode(pipeline: Any) -> None:
+    """
+    Force memory writes to use single-path extraction only in validation memory_only.
+
+    Implementation detail: monkey-patch slot selector to return no slots, which
+    deterministically activates existing DSTManager single-pass fallback path.
+    """
+    if not _is_full_dst_pipeline(pipeline):
+        logger.warning("[MemoryOnly] single_path_only requested, but pipeline is not DSTMemoryPipeline")
+        return
+    dst = getattr(pipeline, "dst", None)
+    if dst is None:
+        logger.warning("[MemoryOnly] single_path_only requested, but pipeline.dst is missing")
+        return
+    slot_selector = getattr(dst, "slot_selector", None)
+    if slot_selector is None or not hasattr(slot_selector, "select_slots"):
+        logger.warning("[MemoryOnly] single_path_only requested, but slot_selector is missing")
+        return
+    if getattr(slot_selector, "_validation_single_path_forced", False):
+        return
+
+    original = slot_selector.select_slots
+
+    def _select_slots_single_path_only(_user_text: str) -> List[str]:
+        return []
+
+    setattr(slot_selector, "_validation_original_select_slots", original)
+    slot_selector.select_slots = _select_slots_single_path_only  # type: ignore[method-assign]
+    setattr(slot_selector, "_validation_single_path_forced", True)
+    # Ensure fallback route is enabled.
+    if hasattr(dst, "slot_fallback_on_no_slots"):
+        dst.slot_fallback_on_no_slots = True
+    logger.info("[MemoryOnly] single_path_only enabled: slot selection bypassed, using only single-pass extraction")
     try:
         from dst_memory.core.pipeline import DSTMemoryPipeline
 
@@ -2770,6 +2817,7 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("  Judge mode: %s", args.judge_mode)
     logger.info("  GigaMemory config: %s", args.config)
     logger.info("  final_llm_memory_strategies: %s", getattr(args, "final_llm_memory_strategies", []))
+    logger.info("  memory_only_write_mode: %s", getattr(args, "memory_only_write_mode", "standard"))
     logger.info(
         "  final_llm_memory_payload_mode: %s",
         getattr(args, "final_llm_memory_payload_mode", "with_metadata"),
@@ -2817,6 +2865,7 @@ def run_validation(args: argparse.Namespace) -> None:
         "timestamp": run_timestamp,
         "input_state_dir": args.input_state_dir or "",
         "input_answers_path": args.input_answers_path or "",
+        "memory_only_write_mode": str(getattr(args, "memory_only_write_mode", "standard")),
         "final_llm_memory_strategies": list(getattr(args, "final_llm_memory_strategies", []) or []),
         "final_llm_memory_payload_mode": str(
             getattr(args, "final_llm_memory_payload_mode", "with_metadata")
@@ -2852,6 +2901,11 @@ def run_validation(args: argparse.Namespace) -> None:
             pipeline = build_final_llm_only_facade(args.config, cli_overrides)
         else:
             pipeline = build_pipeline_from_config(args.config, cli_overrides)
+            if (
+                args.validation_mode == "memory_only"
+                and str(getattr(args, "memory_only_write_mode", "standard")) == "single_path_only"
+            ):
+                _enable_memory_only_single_path_mode(pipeline)
         validation_metadata["giga_memory_memory_strategy"] = getattr(
             pipeline.config, "memory_strategy", ""
         )
@@ -3155,6 +3209,13 @@ Examples:
                            default=None,
                            help="Suffix for memory_only output dirs; omit = from config")
     mode_group.add_argument(
+        "--memory-only-write-mode",
+        type=str,
+        default=None,
+        choices=list(MEMORY_ONLY_WRITE_MODES),
+        help="memory_only write path: standard | single_path_only",
+    )
+    mode_group.add_argument(
         "--final-llm-memory-strategies",
         type=str,
         default=None,
@@ -3423,6 +3484,10 @@ Examples:
         config["validation_mode"]["input_answers_path"] = args.input_answers_path
     if args.memory_only_output_suffix is not None:
         config["validation_mode"]["memory_only_output_suffix"] = args.memory_only_output_suffix
+    if args.memory_only_write_mode is not None:
+        config["validation_mode"]["memory_only_write_mode"] = _normalize_memory_only_write_mode(
+            args.memory_only_write_mode
+        )
     if args.final_llm_memory_strategies is not None:
         config["validation_mode"]["final_llm_memory_strategies"] = _normalize_memory_strategies(
             args.final_llm_memory_strategies
@@ -3452,6 +3517,9 @@ Examples:
     args = parser.parse_args()
     args.final_llm_memory_strategies = _normalize_memory_strategies(
         getattr(args, "final_llm_memory_strategies", [])
+    )
+    args.memory_only_write_mode = _normalize_memory_only_write_mode(
+        getattr(args, "memory_only_write_mode", "standard")
     )
     args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
         getattr(args, "final_llm_memory_payload_mode", "with_metadata")

@@ -126,7 +126,7 @@ validation/
 | Режим | Описание | Команда |
 |-------|----------|---------|
 | `full` | Полный пайплайн: память → финальная LLM → судья | `python validate_longmemeval.py --validation-mode full` |
-| `memory_only` | Только обработка памяти и сохранение переиспользуемого state | `python validate_longmemeval.py --validation-mode memory_only` |
+| `memory_only` | Только обработка памяти и сохранение переиспользуемого state | `python validate_longmemeval.py --validation-mode memory_only --memory-only-write-mode standard` |
 | `final_llm_only` | Загрузка сохранённой памяти → генерация ответов для 1+ стратегий | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records` |
 | `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `python validate_longmemeval.py --validation-mode judge_only --input-answers-path ./results/answers.json` |
 
@@ -167,6 +167,7 @@ python validate_longmemeval.py \
 # Шаг 1: Обработка памяти (один раз)
 python validate_longmemeval.py \
     --validation-mode memory_only \
+    --memory-only-write-mode single_path_only \
     --config ./config_memory_only.json
 
 # Шаг 2: Генерация ответов (можно запускать с разными LLM и стратегиями памяти)

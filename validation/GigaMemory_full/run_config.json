@@ -90,5 +90,10 @@
     "prompt_language": "ru",
 
     "unload_models_before_final_llm": true
+  },
+
+  "validation_mode": {
+    "mode": "full",
+    "memory_only_write_mode": "standard"
   }
 }

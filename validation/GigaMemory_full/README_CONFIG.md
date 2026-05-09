@@ -47,6 +47,11 @@ python validate_longmemeval.py --config ./run_config.json
 - `final_llm_only` — только генерация ответов по сохранённым state (`input_state_dir` обязателен)
 - `judge_only` — только оценка ответов (`input_answers_path` обязателен)
 
+Дополнительно для `memory_only`:
+- `memory_only_write_mode`:
+  - `standard` — обычный путь (`slot_select` + per-slot extraction + fallback при необходимости),
+  - `single_path_only` — форсировать только single-pass extraction (без отдельного этапа выбора слотов и per-slot extraction).
+
 Дополнительно для `final_llm_only`:
 - `final_llm_memory_strategies` — массив стратегий (`full_graph_json`, `relevant_slots_full`, `topk_graph_records`), которые будут запущены на одном и том же `memory_only` state.
 - `final_llm_memory_payload_mode` — режим передачи памяти в final LLM:
@@ -83,6 +88,7 @@ python validate_longmemeval.py --config ./run_config.json
 # 1) Память
 python validate_longmemeval.py \
   --validation-mode memory_only \
+  --memory-only-write-mode single_path_only \
   --config ./config_memory_only.json
 
 # 2) Финальная LLM по сохранённым state
