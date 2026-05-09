@@ -205,3 +205,11 @@ class PipelineConfig:
     #   are unloaded from GPU to free memory for the final LLM.
     #   Ignored when llm_mode="openrouter" or "api" (no local models to unload).
     unload_models_before_final_llm: bool = True
+
+    # -------------------------------------------------------------------
+    # Local LLM JSON-parse retries (slot / triplet / memory gate)
+    # -------------------------------------------------------------------
+    # After a failed JSON parse, subsequent attempts use do_sample=True with
+    # increasing temperature so the model does not repeat the same bad output.
+    llm_parse_retry_temperature: float = 0.65
+    llm_parse_retry_temperature_increment: float = 0.08

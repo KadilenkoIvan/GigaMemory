@@ -48,6 +48,8 @@ class TripletExtractionClient:
         max_retries: int = 1,
         ttl_mode: str = "mode2",
         prompt_language: str = "ru",
+        parse_retry_temperature: float = 0.65,
+        parse_retry_temperature_increment: float = 0.08,
     ):
         self.use_stub = use_stub
         self.serving = serving
@@ -56,6 +58,8 @@ class TripletExtractionClient:
         self.max_retries = max_retries
         self.ttl_mode = ttl_mode
         self.prompt_language = prompt_language
+        self.parse_retry_temperature = float(parse_retry_temperature)
+        self.parse_retry_temperature_increment = float(parse_retry_temperature_increment)
         self._prompt_modules = None
 
         if self.use_stub:
@@ -138,10 +142,16 @@ class TripletExtractionClient:
         tries = self.max_retries + 1
         last = ""
         for attempt in range(1, tries + 1):
-            last = self.serving.generate_chat(
-                messages,
-                generation_config=GenerationConfig(max_new_tokens=512, do_sample=False),
-            )
+            if attempt == 1:
+                gen_cfg = GenerationConfig(max_new_tokens=512, do_sample=False)
+            else:
+                t = min(
+                    1.0,
+                    self.parse_retry_temperature
+                    + self.parse_retry_temperature_increment * float(attempt - 2),
+                )
+                gen_cfg = GenerationConfig(max_new_tokens=512, do_sample=True, temperature=t)
+            last = self.serving.generate_chat(messages, generation_config=gen_cfg)
             slot_label = slot_name if slot_name is not None else "SINGLE_PASS"
             logger.info("Triplet extractor slot=[%s] attempt=%d raw: %s", slot_label, attempt, last[:800])
             parsed = self._parse(last, forced_slot=slot_name, with_deletions=enable_deletion)

@@ -21,6 +21,8 @@ class SlotSelectClient:
         max_slots: int = 5,
         max_retries: int = 1,
         prompt_language: str = "ru",
+        parse_retry_temperature: float = 0.65,
+        parse_retry_temperature_increment: float = 0.08,
     ):
         self.use_stub = use_stub
         self.serving = serving
@@ -28,6 +30,8 @@ class SlotSelectClient:
         self.max_slots = max_slots
         self.max_retries = max_retries
         self.prompt_language = prompt_language
+        self.parse_retry_temperature = float(parse_retry_temperature)
+        self.parse_retry_temperature_increment = float(parse_retry_temperature_increment)
         self._prompt_modules = None
 
     def select_slots(self, user_message: str) -> List[str]:
@@ -42,10 +46,16 @@ class SlotSelectClient:
         )
         tries = self.max_retries + 1
         for attempt in range(1, tries + 1):
-            raw = self.serving.generate_chat(
-                messages,
-                generation_config=GenerationConfig(max_new_tokens=220, do_sample=False),
-            )
+            if attempt == 1:
+                gen_cfg = GenerationConfig(max_new_tokens=220, do_sample=False)
+            else:
+                t = min(
+                    1.0,
+                    self.parse_retry_temperature
+                    + self.parse_retry_temperature_increment * float(attempt - 2),
+                )
+                gen_cfg = GenerationConfig(max_new_tokens=220, do_sample=True, temperature=t)
+            raw = self.serving.generate_chat(messages, generation_config=gen_cfg)
             logger.info("Slot selector raw attempt=%d: %s", attempt, raw[:500])
             parsed = self._parse(raw)
             if parsed is not None:

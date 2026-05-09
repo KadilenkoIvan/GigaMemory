@@ -51,7 +51,7 @@ import time
 import urllib.error
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Add parent directories to path for imports
 repo_root = Path(__file__).resolve().parents[2]
@@ -307,6 +307,73 @@ def _normalize_memory_only_write_mode(raw: Any) -> str:
     return "standard"
 
 
+def _coerce_int_list(raw: Any) -> List[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [int(x) for x in raw]
+    return []
+
+
+def _coerce_str_list(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return []
+
+
+def _normalize_dialogue_id_str(item: Dict[str, Any]) -> str:
+    raw = item.get("dialogue_id")
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def memory_only_row_filter_sets(args: Any) -> Tuple[Optional[Set[int]], Optional[Set[str]]]:
+    """Row indices are positions in the balanced dataset list (same numbering as chunk_XXXX)."""
+    ri = _coerce_int_list(getattr(args, "memory_only_dialogue_row_indices", []))
+    di = _coerce_str_list(getattr(args, "memory_only_dialogue_ids", []))
+    idx_set: Optional[Set[int]] = set(ri) if ri else None
+    id_set: Optional[Set[str]] = set(di) if di else None
+    return idx_set, id_set
+
+
+def memory_only_should_process_row(
+    dialogue_row_index: int,
+    item: Dict[str, Any],
+    row_indices: Optional[Set[int]],
+    dialogue_ids: Optional[Set[str]],
+) -> bool:
+    if row_indices is None and dialogue_ids is None:
+        return True
+    if row_indices is not None and dialogue_row_index in row_indices:
+        return True
+    did = _normalize_dialogue_id_str(item)
+    if dialogue_ids is not None and did and did in dialogue_ids:
+        return True
+    return False
+
+
+def _dialogue_row_index_from_saved_state(row: Dict[str, Any]) -> int:
+    if "_validation_dialogue_row_index" in row:
+        return int(row["_validation_dialogue_row_index"])
+    if "dialogue_row_index" in row:
+        return int(row["dialogue_row_index"])
+    return -1
+
+
+def _load_json_optional(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.warning("Could not read %s: %s", path, exc)
+        return None
+
+
 # ============================================================================
 # Config Loading
 # ============================================================================
@@ -352,6 +419,10 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "memory_only_write_mode": "standard",  # standard | single_path_only
             "final_llm_memory_strategies": [],  # Optional strategies list for final_llm_only
             "final_llm_memory_payload_mode": "with_metadata",  # with_metadata | triplets_only
+            # memory_only: process only these rows (balanced-dataset indices → chunk_XXXX) and/or dialogue_id strings.
+            # Empty lists = process all rows. Merges into existing memory_only_states.json / giga_memory_validation_logs.json.
+            "memory_only_dialogue_row_indices": [],
+            "memory_only_dialogue_ids": [],
         },
     }
 
@@ -436,6 +507,10 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
         val_mode.get("final_llm_memory_payload_mode", "with_metadata")
     )
+    args.memory_only_dialogue_row_indices = _coerce_int_list(
+        val_mode.get("memory_only_dialogue_row_indices")
+    )
+    args.memory_only_dialogue_ids = _coerce_str_list(val_mode.get("memory_only_dialogue_ids"))
 
     # GigaMemory config (for building CLI overrides)
     args.config = "DST_memory/run_config.json"  # Base GigaMemory config
@@ -1934,10 +2009,22 @@ class BatchProcessor:
 
         return None  # Result will be added by batch processing
 
-    def _write_memory_only_states(self) -> None:
-        """Write memory_only states to disk for later processing."""
-        output_path = self.persistence.output_dir / "memory_only_states.json"
-        states_data = []
+    def _memory_only_active_row_indices(self) -> Set[int]:
+        """Row indices present in this run's in-memory buffers (merge replaces these in on-disk JSON)."""
+        out: Set[int] = set()
+        if self.validation_mode != "memory_only":
+            return out
+        for s in self.memory_only_states:
+            if s.dialogue_row_index is not None:
+                out.add(int(s.dialogue_row_index))
+        for d in self.dialogue_logs:
+            ri = d.get("dialogue_row_index")
+            if ri is not None:
+                out.add(int(ri))
+        return out
+
+    def _memory_only_states_to_rows(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
         for state in self.memory_only_states:
             row: Dict[str, Any] = {
                 "global_index": state.global_index,
@@ -1957,19 +2044,40 @@ class BatchProcessor:
                 row["_validation_dialogue_row_index"] = state.dialogue_row_index
             if state.question_date is not None:
                 row["question_date"] = state.question_date
-            states_data.append(row)
+            rows.append(row)
+        return rows
+
+    def _write_memory_only_states(self) -> None:
+        """Write memory_only states to disk for later processing."""
+        output_path = self.persistence.output_dir / "memory_only_states.json"
+        new_rows = self._memory_only_states_to_rows()
+        replaced_rows = self._memory_only_active_row_indices()
+        prev_blob = _load_json_optional(output_path)
+        prev_states = list((prev_blob or {}).get("states") or []) if prev_blob else []
+        kept = [
+            s for s in prev_states
+            if _dialogue_row_index_from_saved_state(s) not in replaced_rows
+        ]
+        merged = kept + new_rows
+        merged.sort(
+            key=lambda r: (
+                _dialogue_row_index_from_saved_state(r),
+                int(r.get("global_index", 0)),
+                str(r.get("question_id", "")),
+            ),
+        )
         timing_stats = self._timing.get_stats() if self._timing is not None else {}
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
             "timing": timing_stats,
             "statistics": {
-                "states_count": len(states_data),
+                "states_count": len(merged),
                 "total_user_message_writes": int(timing_stats.get("total_user_message_writes", 0) or 0),
                 "avg_write_to_memory_seconds": float(
                     (timing_stats.get("time_per_user_message") or {}).get("mean", 0.0) or 0.0
                 ),
             },
-            "states": states_data,
+            "states": merged,
         })
 
     def _flush_final_llm_batch(self):
@@ -2688,9 +2796,29 @@ class BatchProcessor:
 
     def _write_giga_memory_dialogue_logs(self) -> None:
         """Write verbose per-dialogue logs (DST_memory pipeline test *_logs.json style)."""
-        if not self.save_giga_memory_logs or not self.dialogue_logs:
+        if not self.save_giga_memory_logs:
             return
         path = self.persistence.output_dir / "giga_memory_validation_logs.json"
+        replaced_rows = self._memory_only_active_row_indices() if self.validation_mode == "memory_only" else set()
+        prev_blob = _load_json_optional(path)
+        prev_dialogues = list((prev_blob or {}).get("dialogues") or []) if prev_blob else []
+        if self.validation_mode == "memory_only" and replaced_rows:
+            kept = [
+                d for d in prev_dialogues
+                if int(d.get("dialogue_row_index", -1)) not in replaced_rows
+            ]
+            merged_dialogues = kept + list(self.dialogue_logs)
+        else:
+            merged_dialogues = list(self.dialogue_logs) if self.dialogue_logs else prev_dialogues
+        if not merged_dialogues:
+            return
+        merged_dialogues.sort(
+            key=lambda d: (
+                int(d.get("dialogue_row_index", 0)),
+                int(d.get("question_index_in_row", 0)),
+                int(d.get("global_index", 0)),
+            ),
+        )
         _atomic_write_validation_json(
             path,
             {
@@ -2699,7 +2827,7 @@ class BatchProcessor:
                     "Verbose per-dialogue logs: write_logs + answer_without_final_llm "
                     "(same information as DST_memory pipeline test *_logs.json)."
                 ),
-                "dialogues": self.dialogue_logs,
+                "dialogues": merged_dialogues,
             },
         )
         logger.info("Saved GigaMemory validation logs: %s", path)
@@ -2830,6 +2958,9 @@ def run_validation(args: argparse.Namespace) -> None:
         "  force_infinite_ttl: %s",
         getattr(args, "gm_force_infinite_ttl", None),
     )
+    ri_f, id_f = memory_only_row_filter_sets(args)
+    if ri_f is not None or id_f is not None:
+        logger.info("  memory_only row filter: indices=%s dialogue_ids=%s", ri_f, id_f)
 
     # Mode-specific validation
     if args.validation_mode == "final_llm_only" and not args.input_state_dir:
@@ -2870,6 +3001,10 @@ def run_validation(args: argparse.Namespace) -> None:
         "final_llm_memory_payload_mode": str(
             getattr(args, "final_llm_memory_payload_mode", "with_metadata")
         ),
+        "memory_only_dialogue_row_indices": list(
+            getattr(args, "memory_only_dialogue_row_indices", []) or []
+        ),
+        "memory_only_dialogue_ids": list(getattr(args, "memory_only_dialogue_ids", []) or []),
     }
 
     # Initialize persistence
@@ -2938,9 +3073,15 @@ def run_validation(args: argparse.Namespace) -> None:
 
     # Process each item (only for modes that need dataset processing)
     if args.validation_mode in ("full", "memory_only"):
+        row_filter_idx, row_filter_ids = memory_only_row_filter_sets(args)
         flat_q = 0
         for idx, item in enumerate(dataset):
             q_specs = normalize_question_specs(item)
+            if args.validation_mode == "memory_only" and not memory_only_should_process_row(
+                idx, item, row_filter_idx, row_filter_ids
+            ):
+                flat_q += len(q_specs)
+                continue
 
             logger.info("-" * 70)
             logger.info(
@@ -3214,6 +3355,25 @@ Examples:
         default=None,
         choices=list(MEMORY_ONLY_WRITE_MODES),
         help="memory_only write path: standard | single_path_only",
+    )
+    mode_group.add_argument(
+        "--memory-only-dialogue-row-indices",
+        type=str,
+        default=None,
+        help=(
+            "memory_only only: comma-separated row indices in the balanced dataset "
+            "(same numbering as chunk_XXXX). Only those chunks/states are rebuilt; "
+            "existing memory_only_states.json entries for other rows are kept."
+        ),
+    )
+    mode_group.add_argument(
+        "--memory-only-dialogue-ids",
+        type=str,
+        default=None,
+        help=(
+            "memory_only only: comma-separated dialogue_id values matching dataset rows "
+            "(alternative to row indices)."
+        ),
     )
     mode_group.add_argument(
         "--final-llm-memory-strategies",
@@ -3496,6 +3656,16 @@ Examples:
         config["validation_mode"]["final_llm_memory_payload_mode"] = _normalize_memory_payload_mode(
             args.final_llm_memory_payload_mode
         )
+    if getattr(args, "memory_only_dialogue_row_indices", None) is not None:
+        s = str(args.memory_only_dialogue_row_indices).strip()
+        config["validation_mode"]["memory_only_dialogue_row_indices"] = (
+            [int(x.strip()) for x in s.split(",") if x.strip()] if s else []
+        )
+    if getattr(args, "memory_only_dialogue_ids", None) is not None:
+        s = str(args.memory_only_dialogue_ids).strip()
+        config["validation_mode"]["memory_only_dialogue_ids"] = (
+            [x.strip() for x in s.split(",") if x.strip()] if s else []
+        )
 
     # Handle legacy args
     if args.dataset_path:
@@ -3524,6 +3694,21 @@ Examples:
     args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
         getattr(args, "final_llm_memory_payload_mode", "with_metadata")
     )
+
+    _mori = getattr(args, "memory_only_dialogue_row_indices", [])
+    if isinstance(_mori, str):
+        args.memory_only_dialogue_row_indices = (
+            [int(x.strip()) for x in _mori.split(",") if x.strip()] if _mori.strip() else []
+        )
+    else:
+        args.memory_only_dialogue_row_indices = _coerce_int_list(_mori)
+    _moids = getattr(args, "memory_only_dialogue_ids", [])
+    if isinstance(_moids, str):
+        args.memory_only_dialogue_ids = (
+            [x.strip() for x in _moids.split(",") if x.strip()] if _moids.strip() else []
+        )
+    else:
+        args.memory_only_dialogue_ids = _coerce_str_list(_moids)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 

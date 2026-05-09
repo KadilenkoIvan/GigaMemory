@@ -82,6 +82,8 @@ class DSTMemoryPipeline:
             max_retries=1,
             ttl_mode=config.ttl_mode,
             prompt_language=config.prompt_language,
+            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
+            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
         )
         slot_selector = SlotSelectClient(
             use_stub=config.slot_use_stub,
@@ -89,6 +91,8 @@ class DSTMemoryPipeline:
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
             prompt_language=config.prompt_language,
+            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
+            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
         )
         conflict_resolver = TripletConflictClient(
             use_stub=config.slot_use_stub,
@@ -143,6 +147,8 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_retries=1,
             prompt_language=config.prompt_language,
+            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
+            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
         )
         self.final_llm = FinalLLMClient(
             mode=config.llm_mode,
