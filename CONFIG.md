@@ -28,6 +28,8 @@
 | `llm_temperature` | float | температура final LLM |
 | `llm_max_tokens` | int | max tokens final LLM |
 | `llm_max_context_tokens` | int | максимальный размер prompt-контекста в токенах (0 = без ограничения) |
+| `llm_load_dtype` | str | dtype загрузки финальной локальной LLM при `llm_mode=local` (`float16`, `bfloat16`, …) |
+| `llm_load_quantization` | str | BitsAndBytes для **финальной** локальной LLM: `none`, `8bit`, `4bit` (не путать с `slot_llm_load_quantization`) |
 | `openrouter_http_referer` | str | optional Referer header |
 | `openrouter_x_title` | str | optional X-OpenRouter-Title |
 | `no_final_llm` | bool | вернуть только структуру ответа без вызова final LLM |
@@ -35,6 +37,10 @@
 | `slot_use_stub` | bool | включить slot-triplet stub режим |
 | `slot_model_path` | str | путь/id локальной slot LLM |
 | `slot_max_slots_per_message` | int | лимит слотов на сообщение |
+| `slot_model_enable_thinking` | bool | гибридный thinking у Qwen3/3.5 для slot-стека (default `false`) |
+| `slot_llm_inject_no_think_prompt` | bool | при `true` (default) к system добавляется `/no_think`, если thinking выключен; при `false` только `enable_thinking` в chat template |
+| `slot_llm_lm_format_enforcer` | bool | JSON schema через `lm-format-enforcer` для slot selector и triplet extraction (default `false`) |
+| `slot_llm_load_quantization` | str | квантизация BitsAndBytes для **той же** локальной модели, что `slot_model_path` (слоты, триплеты, memory gate, конфликты): `none` (default), `8bit`, `4bit`. Нужны **CUDA** и пакет `bitsandbytes`. Отдельно от `llm_load_quantization` (финальная LLM). |
 | `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
 | `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
 | `ragu_embedder_model` | str | модель эмбеддингов для RAGU |

@@ -5,6 +5,7 @@ import logging
 from typing import Any, List, Optional
 
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology, filter_resolve_slots
+from ..clients.lm_json_schemas import SLOT_SELECT_JSON_SCHEMA
 from ..clients.serving import GenerationConfig, LocalHFServing
 from ..prompts.loader import load_prompt_modules
 
@@ -46,15 +47,29 @@ class SlotSelectClient:
         )
         tries = self.max_retries + 1
         for attempt in range(1, tries + 1):
+            schema = (
+                SLOT_SELECT_JSON_SCHEMA
+                if getattr(self.serving, "use_lm_format_enforcer", False)
+                else None
+            )
             if attempt == 1:
-                gen_cfg = GenerationConfig(max_new_tokens=220, do_sample=False)
+                gen_cfg = GenerationConfig(
+                    max_new_tokens=220,
+                    do_sample=False,
+                    lm_enforcer_json_schema=schema,
+                )
             else:
                 t = min(
                     1.0,
                     self.parse_retry_temperature
                     + self.parse_retry_temperature_increment * float(attempt - 2),
                 )
-                gen_cfg = GenerationConfig(max_new_tokens=220, do_sample=True, temperature=t)
+                gen_cfg = GenerationConfig(
+                    max_new_tokens=220,
+                    do_sample=True,
+                    temperature=t,
+                    lm_enforcer_json_schema=schema,
+                )
             raw = self.serving.generate_chat(messages, generation_config=gen_cfg)
             logger.info("Slot selector raw attempt=%d: %s", attempt, raw[:500])
             parsed = self._parse(raw)

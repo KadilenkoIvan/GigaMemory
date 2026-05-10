@@ -45,7 +45,8 @@
 - `--gm-llm-model`
 - `--gm-llm-api-key`
 - `--gm-llm-load-dtype`
-- `--gm-llm-load-quantization` (`none|8bit|4bit`)
+- `--gm-llm-load-quantization` (`none|8bit|4bit`) — финальная локальная LLM
+- `--gm-slot-llm-load-quantization` (`none|8bit|4bit`) — локальная модель слотов/триплетов (`slot_model_path`), см. `shared.slot_llm_load_quantization` в `DST_memory/run_config.json`
 - `--gm-llm-max-context-tokens`
 - `--gm-llm-tokenizer-model`
 - `--gm-ragu-storage-path`

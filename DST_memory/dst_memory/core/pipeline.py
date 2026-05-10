@@ -72,6 +72,9 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 config.slot_model_path,
                 enable_thinking=config.slot_model_enable_thinking,
+                inject_no_think_prompt=getattr(config, "slot_llm_inject_no_think_prompt", True),
+                use_lm_format_enforcer=getattr(config, "slot_llm_lm_format_enforcer", False),
+                load_quantization=getattr(config, "slot_llm_load_quantization", "none"),
             )
         slot_serving = self._slot_serving
 
@@ -460,6 +463,9 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 self.config.slot_model_path,
                 enable_thinking=self.config.slot_model_enable_thinking,
+                inject_no_think_prompt=getattr(self.config, "slot_llm_inject_no_think_prompt", True),
+                use_lm_format_enforcer=getattr(self.config, "slot_llm_lm_format_enforcer", False),
+                load_quantization=getattr(self.config, "slot_llm_load_quantization", "none"),
             )
 
         # Re-attach serving to clients

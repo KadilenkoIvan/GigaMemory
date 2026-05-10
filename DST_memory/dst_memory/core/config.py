@@ -178,11 +178,21 @@ class PipelineConfig:
     # slot_model_enable_thinking:
     #   Enable or disable the thinking/reasoning phase for models that support it
     #   (Qwen3, Qwen3.5 and similar hybrid-thinking models).
-    #   False (default) — thinking disabled; produces clean, compact JSON output.
+    #   False (default) — thinking disabled; passes enable_thinking=False to apply_chat_template.
     #   True — thinking enabled; model outputs a reasoning chain before the answer.
-    #   When False: passes enable_thinking=False to apply_chat_template AND prepends
-    #   '/no_think' to the system prompt as a fallback for older tokenizer versions.
+    #   Optional `/no_think` injection is controlled separately via slot_llm_inject_no_think_prompt.
     slot_model_enable_thinking: bool = False
+
+    # When False (recommended with Qwen3.5): do not prepend `/no_think`; rely on chat template only.
+    slot_llm_inject_no_think_prompt: bool = True
+
+    # When True: slot selector + triplet extractor pass JSON schemas into lm-format-enforcer during generate.
+    # Requires `pip install lm-format-enforcer`.
+    slot_llm_lm_format_enforcer: bool = False
+
+    # BitsAndBytes load for the slot/triplet/memory-gate local model (same path as llm_load_quantization).
+    # "none" | "8bit" | "4bit" — requires GPU + bitsandbytes.
+    slot_llm_load_quantization: str = "none"
 
     # Prompt UI language for slot/triplet/gate/deletion/conflict/final LLM ("ru" | "en").
     prompt_language: str = "ru"

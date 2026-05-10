@@ -15,6 +15,26 @@ class SlotOntology:
 
     slot_names: List[str]
 
+    @staticmethod
+    def _underscore_token_match(haystack: str, needle: str) -> bool:
+        """
+        True if ``needle`` occurs in ``haystack`` as an underscore-delimited token
+        (prevents WORK matching inside NETWORK).
+        """
+        if not needle or not haystack:
+            return False
+        start = 0
+        nlen = len(needle)
+        while True:
+            pos = haystack.find(needle, start)
+            if pos < 0:
+                return False
+            before_ok = pos == 0 or haystack[pos - 1] == "_"
+            after_ok = pos + nlen == len(haystack) or haystack[pos + nlen] == "_"
+            if before_ok and after_ok:
+                return True
+            start = pos + 1
+
     def normalize(self, name: str) -> str:
         s = (name or "").strip().upper()
         if not s:
@@ -40,6 +60,10 @@ class SlotOntology:
         ru = RU_SLOT_TO_CANONICAL.get(cand)
         if ru and ru in allowed:
             return ru
+        # Model-specific aliases: e.g. MUSIC_PREFERENCES → PREFERENCES (longest canonical token wins).
+        for slot in sorted(self.slot_names, key=lambda s: (-len(s), s)):
+            if self._underscore_token_match(cand, slot):
+                return slot
         return ""
 
     def as_prompt_list(self) -> str:

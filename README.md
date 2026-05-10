@@ -66,6 +66,7 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--graph-top-k-records`
 - `--recent-history-pairs`
 - `--slot-model-path`
+- `--slot-llm-load-quantization` (`none`\|`8bit`\|`4bit`) — BitsAndBytes для локальной slot/triplet модели (CUDA); в JSON: `shared.slot_llm_load_quantization`
 - `--importance-model-path`
 - `--ragu-embedder-model`
 - `--ragu-storage-path`

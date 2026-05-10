@@ -33,6 +33,7 @@ python validate_longmemeval.py --config ./run_config.json
 - `slot_model_path`
 - `memory_strategy`
 - `llm_mode`, `llm_model`, `llm_tokenizer_model`, `llm_load_dtype`, `llm_load_quantization`, `llm_max_context_tokens`
+- `slot_llm_load_quantization` (`none`|`8bit`|`4bit`) — квантизация BitsAndBytes для **slot/triplet** локальной модели (отдельно от финальной LLM); нужны CUDA и `bitsandbytes`
 - `ragu_embedder_model`, `ragu_storage_path`
 - `slot_context_enabled`, `triplet_deletion_mode`
 - `prompt_language`

@@ -8,3 +8,5 @@ safetensors
 pymorphy2
 pymorphy2-dicts-ru
 pyspellchecker
+# Optional: JSON-constrained decoding for slot stack when slot_llm_lm_format_enforcer=true
+lm-format-enforcer

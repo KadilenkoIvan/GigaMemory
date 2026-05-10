@@ -439,6 +439,8 @@ TTL хранится в поле `description` ребра в виде аннот
 - `puter` — OpenAI-compatible endpoint Puter (`https://api.puter.com/puterai/openai/v1`).
 - `local` — локальная HF-модель через `LocalHFServing` (поддерживаются `llm_load_dtype`, `llm_load_quantization`, `llm_max_context_tokens`).
 
+Локальная модель **слотов/триплетов/gate** (`slot_model_path`) настраивается отдельно: `slot_llm_load_quantization` (`none` \| `8bit` \| `4bit`, BitsAndBytes + CUDA), см. `CONFIG.md` и `DST_memory/run.py --slot-llm-load-quantization`.
+
 ---
 
 ## 10. Форматы выходов

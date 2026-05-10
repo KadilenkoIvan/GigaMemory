@@ -75,6 +75,9 @@ def build_pipeline(args: argparse.Namespace):
         deletion_use_pymorphy=getattr(args, "deletion_use_pymorphy", False),
         conflict_allow_multi_relation_same_object=getattr(args, "conflict_allow_multi_relation_same_object", True),
         slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
+        slot_llm_inject_no_think_prompt=getattr(args, "slot_llm_inject_no_think_prompt", True),
+        slot_llm_lm_format_enforcer=getattr(args, "slot_llm_lm_format_enforcer", False),
+        slot_llm_load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
         slot_fallback_on_no_slots=getattr(args, "slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=getattr(args, "triplet_fallback_on_empty", True),
         prompt_language=getattr(args, "prompt_language", "ru"),
@@ -254,6 +257,27 @@ def create_parser(
         help="Enable thinking/reasoning mode for the slot model (Qwen3/3.5). Default: disabled.",
     )
     parser.add_argument(
+        "--no-slot-llm-inject-no-think-prompt",
+        dest="slot_llm_inject_no_think_prompt",
+        action="store_false",
+        default=bool(s.get("slot_llm_inject_no_think_prompt", True)),
+        help="Disable prepending /no_think for the slot stack (use chat-template enable_thinking only).",
+    )
+    parser.add_argument(
+        "--slot-llm-lm-format-enforcer",
+        dest="slot_llm_lm_format_enforcer",
+        action="store_true",
+        default=bool(s.get("slot_llm_lm_format_enforcer", False)),
+        help="JSON-constrain slot selector + triplet extraction via lm-format-enforcer (requires package).",
+    )
+    parser.add_argument(
+        "--slot-llm-load-quantization",
+        type=str,
+        default=str(s.get("slot_llm_load_quantization", "none") or "none"),
+        choices=["none", "8bit", "4bit"],
+        help="BitsAndBytes quantization for slot/triplet local model (nvidia GPU + bitsandbytes).",
+    )
+    parser.add_argument(
         "--no-slot-fallback-on-no-slots",
         dest="slot_fallback_on_no_slots",
         action="store_false",
@@ -330,7 +354,10 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
 
     slot_serving = None
     if not args.slot_use_stub:
-        slot_serving = LocalHFServing(args.slot_model_path)
+        slot_serving = LocalHFServing(
+            args.slot_model_path,
+            load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+        )
     triplet_extractor = TripletExtractionClient(
         use_stub=args.slot_use_stub,
         serving=slot_serving,
@@ -384,7 +411,10 @@ def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
         raise SystemExit("JSON payload must include non-empty 'message'")
     if slot not in set(DEFAULT_USER_SLOTS.slot_names):
         raise SystemExit(f"Invalid slot '{slot}'. Allowed: {', '.join(DEFAULT_USER_SLOTS.slot_names)}")
-    serving = LocalHFServing(args.slot_model_path)
+    serving = LocalHFServing(
+        args.slot_model_path,
+        load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+    )
     client = TripletExtractionClient(
         use_stub=False,
         serving=serving,
@@ -415,7 +445,10 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
     if not isinstance(cases, list) or not cases:
         raise SystemExit("Batch JSON must contain non-empty 'cases' list")
     allowed = set(DEFAULT_USER_SLOTS.slot_names)
-    serving = LocalHFServing(args.slot_model_path)
+    serving = LocalHFServing(
+        args.slot_model_path,
+        load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+    )
     client = TripletExtractionClient(
         use_stub=False,
         serving=serving,

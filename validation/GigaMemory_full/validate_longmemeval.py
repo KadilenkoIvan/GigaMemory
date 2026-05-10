@@ -532,6 +532,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "ttl_semantic_dedup_threshold", "slot_context_enabled",
         "slot_context_max_facts", "triplet_deletion_mode", "deletion_use_pymorphy",
         "conflict_allow_multi_relation_same_object", "slot_model_enable_thinking",
+        "slot_llm_inject_no_think_prompt", "slot_llm_lm_format_enforcer",
+        "slot_llm_load_quantization",
         "slot_fallback_on_no_slots", "triplet_fallback_on_empty", "prompt_language",
         "unload_models_before_final_llm", "use_dataset_datetime", "force_infinite_ttl",
         "llm_enable_thinking",
@@ -1244,6 +1246,9 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
             "conflict_allow_multi_relation_same_object", True
         ),
         slot_model_enable_thinking=shared.get("slot_model_enable_thinking", False),
+        slot_llm_inject_no_think_prompt=bool(shared.get("slot_llm_inject_no_think_prompt", True)),
+        slot_llm_lm_format_enforcer=bool(shared.get("slot_llm_lm_format_enforcer", False)),
+        slot_llm_load_quantization=str(shared.get("slot_llm_load_quantization", "none") or "none"),
         slot_fallback_on_no_slots=shared.get("slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=shared.get("triplet_fallback_on_empty", True),
         prompt_language=shared.get("prompt_language", "ru"),
@@ -3288,6 +3293,10 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if getattr(args, "gm_llm_enable_thinking", None) is not None:
         overrides["llm_enable_thinking"] = bool(args.gm_llm_enable_thinking)
 
+    qslot = getattr(args, "gm_slot_llm_load_quantization", None)
+    if qslot:
+        overrides["slot_llm_load_quantization"] = str(qslot).strip().lower()
+
     return overrides
 
 
@@ -3553,6 +3562,13 @@ Examples:
     gm_group.add_argument("--gm-triplet-deletion-mode", type=str, default="",
                           choices=["", "none", "heuristic", "llm_inline", "llm_separate"],
                           help="Triplet deletion mode")
+    gm_group.add_argument(
+        "--gm-slot-llm-load-quantization",
+        type=str,
+        default="",
+        choices=["", "none", "8bit", "4bit"],
+        help="BitsAndBytes quant for slot/triplet local model (CUDA + bitsandbytes).",
+    )
 
     # Prompt language
     gm_group.add_argument("--gm-prompt-language", type=str, default="",
@@ -3630,6 +3646,10 @@ Examples:
         config.setdefault("giga_memory", {})
         if isinstance(config["giga_memory"], dict):
             config["giga_memory"]["llm_load_quantization"] = args.gm_llm_load_quantization
+    if getattr(args, "gm_slot_llm_load_quantization", None):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["slot_llm_load_quantization"] = args.gm_slot_llm_load_quantization
     if getattr(args, "gm_llm_max_context_tokens", None) is not None:
         config.setdefault("giga_memory", {})
         if isinstance(config["giga_memory"], dict):
