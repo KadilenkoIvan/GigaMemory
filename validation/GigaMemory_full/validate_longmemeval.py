@@ -562,6 +562,31 @@ def setup_logging(level: str, log_file: Optional[str] = None) -> None:
 
 logger = logging.getLogger(__name__)
 
+# Keys in validation JSON ``shared`` that belong only to validate_longmemeval routing/logging,
+# not to DST ``PipelineConfig`` / ``DST_memory/run_config.json`` ``shared``.
+_VALIDATION_SHARED_RESERVED_KEYS = frozenset(
+    {
+        "dataset_path",
+        "output_dir",
+        "num_items_per_type",
+        "question_types",
+        "log_level",
+        "log_file",
+        "save_memory_state",
+        "save_intermediate",
+    }
+)
+
+
+def _pipeline_overrides_from_validation_shared(shared: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extra pipeline keys placed alongside dataset/output params in validation ``shared``.
+
+    They merge into ``build_pipeline_config`` overrides after ``DST_memory/run_config.json``
+    but before ``giga_memory`` / ``--gm-*`` (which win on key collision).
+    """
+    return {k: v for k, v in shared.items() if k not in _VALIDATION_SHARED_RESERVED_KEYS}
+
 
 def _effective_prompt_token_budget(max_context_tokens: int, max_completion_tokens: int) -> int:
     cap = int(max_context_tokens or 0)
@@ -3040,7 +3065,13 @@ def run_validation(args: argparse.Namespace) -> None:
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
     pipeline = None
     if args.validation_mode in ("full", "memory_only", "final_llm_only"):
-        cli_overrides = build_cli_overrides(args)
+        cli_overrides = dict(getattr(args, "_validation_shared_pipeline_overrides", {}) or {})
+        cli_overrides.update(build_cli_overrides(args))
+        if cli_overrides:
+            logger.info(
+                "  DST pipeline overrides (validation shared + giga_memory/--gm-*): %s",
+                cli_overrides,
+            )
         if args.validation_mode == "final_llm_only":
             pipeline = build_final_llm_only_facade(args.config, cli_overrides)
         else:
@@ -3058,6 +3089,23 @@ def run_validation(args: argparse.Namespace) -> None:
             validation_metadata["pipeline_backend"] = "FinalLLMOnlyPipelineFacade"
         else:
             validation_metadata["pipeline_backend"] = "DSTMemoryPipeline"
+
+        if pipeline is not None:
+            cfg = pipeline.config
+            logger.info(
+                "  Effective DST conflict_rule_same_relation_updates: %s",
+                getattr(cfg, "conflict_rule_same_relation_updates", None),
+            )
+            logger.info(
+                "  Effective DST conflict_allow_multi_relation_same_object: %s",
+                getattr(cfg, "conflict_allow_multi_relation_same_object", None),
+            )
+            logger.info(
+                "  Effective DST slot_model_enable_thinking / inject_no_think / lm_format_enforcer: %s / %s / %s",
+                getattr(cfg, "slot_model_enable_thinking", None),
+                getattr(cfg, "slot_llm_inject_no_think_prompt", None),
+                getattr(cfg, "slot_llm_lm_format_enforcer", None),
+            )
 
     # Initialize batch processor
     batch_processor = BatchProcessor(
@@ -3746,6 +3794,10 @@ Examples:
         args.memory_only_dialogue_ids = _coerce_str_list(_moids)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    args._validation_shared_pipeline_overrides = _pipeline_overrides_from_validation_shared(
+        config.get("shared") or {}
+    )
 
     run_validation(args)
 

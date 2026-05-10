@@ -190,13 +190,6 @@ class TripletConflictClient:
         if not llm_existing or not llm_new:
             return ConflictResolution(deactivate_ids=deactivate, skip_new_indices=skip_new)
 
-        logger.info(
-            "Conflict resolver: calling LLM slot=%s subjects=%s (existing=%d new=%d)",
-            slot_name,
-            sorted(subjects_needing_llm),
-            len(llm_existing),
-            len(llm_new),
-        )
         llm_result = self._call_llm(slot_name, llm_existing, llm_new)
         if llm_result:
             deactivate.extend(

@@ -21,7 +21,7 @@ python validate_longmemeval.py --config ./run_config.json
 }
 ```
 
-- `shared` — путь к датасету, выходная директория, типы вопросов, логирование, сохранение промежуточных артефактов. Параметры пайплайна памяти (`conflict_rule_same_relation_updates`, `slot_model_path`, и т.д.) сюда **не подставляются** — их нужно задавать в `giga_memory` (или в `DST_memory/run_config.json` → `shared`, см. `build_pipeline_config` в `validate_longmemeval.py`).
+- `shared` — путь к датасету, выходная директория, типы вопросов, логирование, сохранение промежуточных артефактов. Дополнительно сюда можно класть те же ключи, что в `DST_memory/run_config.json` → `shared` (например `conflict_rule_same_relation_updates`): они подмешиваются в пайплайн после базового `run_config.json`, а переопределения из **`giga_memory`** / **`--gm-*`** имеют приоритет при совпадении ключей. В логе при старте см. строки `DST pipeline overrides ...` и `Effective DST ...`.
 - `batch_processing` — `final_llm_batch_size`, `judge_batch_size`, `calculate_memory_hit_rate`.
 - `judge` — параметры judge LLM (`openrouter|puter|local|none`), включая `max_context_tokens` и `tokenizer_model`.
 - `giga_memory` — runtime-параметры пайплайна памяти (зеркалят `DST_memory/run_config.json`).
