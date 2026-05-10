@@ -172,6 +172,13 @@ class PipelineConfig:
     #   Set to False to always run the LLM check for any same-subject pair.
     conflict_allow_multi_relation_same_object: bool = True
 
+    # conflict_rule_same_relation_updates:
+    #   When True (default): new triplet with same subject+relation as existing but different object
+    #   triggers deterministic deactivation of old edge(s) (no LLM).
+    #   When False: that case is deferred to the LLM conflict resolver only; exact duplicate
+    #   (same S+R+O) still skips insertion via rules.
+    conflict_rule_same_relation_updates: bool = True
+
     # -------------------------------------------------------------------
     # Slot model thinking mode
     # -------------------------------------------------------------------

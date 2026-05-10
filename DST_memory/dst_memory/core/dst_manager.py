@@ -36,8 +36,9 @@ class DSTManager:
     Facts are stored as KG triplets per slot.
 
     Conflict resolution strategy (hybrid):
-      Rule layer  — exact (subject, relation) match → auto-deactivate old record.
-      LLM layer   — same subject, ambiguous relation → TripletConflictClient.
+      Rule layer  — exact (subject, relation) duplicate skips new; optional same S+R+different O
+                     auto-deactivation (toggle `conflict_rule_same_relation_updates` in PipelineConfig).
+      LLM layer   — unresolved same-subject groups → TripletConflictClient.
       Semantic layer — cosine similarity > threshold → deactivate near-duplicate, insert new.
 
     Deletion modes (triplet_deletion_mode):

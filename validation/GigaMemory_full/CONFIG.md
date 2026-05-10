@@ -54,6 +54,7 @@
 - `--gm-slot-use-stub`
 - `--gm-slot-context-enabled`
 - `--gm-triplet-deletion-mode` (`none|heuristic|llm_inline|llm_separate`)
+- `--gm-conflict-rule-same-relation-updates` (`true|false`) — в `DST_memory/run_config.json` ключ `shared.conflict_rule_same_relation_updates`; при `false` нет автодеактивации при том же `subject`+`relation` и другом `object` (только LLM)
 - `--gm-prompt-language` (`ru|en`)
 - `--gm-unload-models-before-final-llm`
 - `--gm-use-dataset-datetime`

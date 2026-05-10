@@ -101,6 +101,7 @@ class DSTMemoryPipeline:
             use_stub=config.slot_use_stub,
             serving=slot_serving,
             max_retries=1,
+            rule_same_relation_updates=config.conflict_rule_same_relation_updates,
             allow_multi_relation_same_object=config.conflict_allow_multi_relation_same_object,
             prompt_language=config.prompt_language,
         )

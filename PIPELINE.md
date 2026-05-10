@@ -250,6 +250,7 @@ dst_memory/
    - если сходство ≥ `ttl_semantic_dedup_threshold` (default 0.9), старый факт деактивируется, новый вставляется (таймер TTL обновляется).
 7. Conflict resolution (`TripletConflictClient`):
    - rule-layer + LLM-layer;
+   - по умолчанию правило: тот же `subject`+`relation`, другой `object` → авто-деактивация старых (см. `conflict_rule_same_relation_updates` в `CONFIG.md`; при `false` только LLM);
    - возможна деактивация старых записей и/или skip новых;
    - `skip_new` в ответе LLM является опциональным: парсер корректно обрабатывает ответы только вида `{"deactivate":[...]}`.
 8. Обновление DST state:

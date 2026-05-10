@@ -531,7 +531,8 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "ragu_embedder_model", "ttl_mode", "ttl_semantic_dedup_enabled",
         "ttl_semantic_dedup_threshold", "slot_context_enabled",
         "slot_context_max_facts", "triplet_deletion_mode", "deletion_use_pymorphy",
-        "conflict_allow_multi_relation_same_object", "slot_model_enable_thinking",
+        "conflict_allow_multi_relation_same_object", "conflict_rule_same_relation_updates",
+        "slot_model_enable_thinking",
         "slot_llm_inject_no_think_prompt", "slot_llm_lm_format_enforcer",
         "slot_llm_load_quantization",
         "slot_fallback_on_no_slots", "triplet_fallback_on_empty", "prompt_language",
@@ -1244,6 +1245,9 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         deletion_use_pymorphy=shared.get("deletion_use_pymorphy", False),
         conflict_allow_multi_relation_same_object=shared.get(
             "conflict_allow_multi_relation_same_object", True
+        ),
+        conflict_rule_same_relation_updates=bool(
+            shared.get("conflict_rule_same_relation_updates", True)
         ),
         slot_model_enable_thinking=shared.get("slot_model_enable_thinking", False),
         slot_llm_inject_no_think_prompt=bool(shared.get("slot_llm_inject_no_think_prompt", True)),
@@ -3297,6 +3301,11 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if qslot:
         overrides["slot_llm_load_quantization"] = str(qslot).strip().lower()
 
+    if getattr(args, "gm_conflict_rule_same_relation_updates", None) is not None:
+        overrides["conflict_rule_same_relation_updates"] = bool(
+            args.gm_conflict_rule_same_relation_updates
+        )
+
     return overrides
 
 
@@ -3562,6 +3571,12 @@ Examples:
     gm_group.add_argument("--gm-triplet-deletion-mode", type=str, default="",
                           choices=["", "none", "heuristic", "llm_inline", "llm_separate"],
                           help="Triplet deletion mode")
+    gm_group.add_argument(
+        "--gm-conflict-rule-same-relation-updates",
+        type=lambda x: x.lower() == "true" if x else None,
+        default=None,
+        help="Deterministic replace when same subject+relation, different object (true/false; false = LLM only)",
+    )
     gm_group.add_argument(
         "--gm-slot-llm-load-quantization",
         type=str,

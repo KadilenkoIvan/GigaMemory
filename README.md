@@ -73,6 +73,7 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--llm-mode` (`openrouter|api|puter|stub|local`)
 - `--no-final-llm`
 - `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict и финальной LLM (в `run_config.json`: `prompt_language`)
+- `--no-conflict-rule-same-relation-updates` — отключить детерминированную замену при том же `subject`+`relation` и другом `object` (решение только через LLM-конфликт); по умолчанию правило включено (`shared.conflict_rule_same_relation_updates`)
 
 Для ограничения входного контекста final LLM используйте `shared.llm_max_context_tokens` в `run_config.json` (или соответствующий `giga_memory.llm_max_context_tokens` в конфиге валидации). Это особенно важно для моделей с меньшим окном контекста (например, 32768).
 

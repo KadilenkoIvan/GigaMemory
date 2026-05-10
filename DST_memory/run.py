@@ -74,6 +74,7 @@ def build_pipeline(args: argparse.Namespace):
         triplet_deletion_mode=getattr(args, "triplet_deletion_mode", "none"),
         deletion_use_pymorphy=getattr(args, "deletion_use_pymorphy", False),
         conflict_allow_multi_relation_same_object=getattr(args, "conflict_allow_multi_relation_same_object", True),
+        conflict_rule_same_relation_updates=getattr(args, "conflict_rule_same_relation_updates", True),
         slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
         slot_llm_inject_no_think_prompt=getattr(args, "slot_llm_inject_no_think_prompt", True),
         slot_llm_lm_format_enforcer=getattr(args, "slot_llm_lm_format_enforcer", False),
@@ -248,6 +249,16 @@ def create_parser(
         const=True,
         default=bool(s.get("deletion_use_pymorphy", False)),
         help="Use pymorphy2 lemmatization in heuristic deletion mode",
+    )
+    parser.add_argument(
+        "--no-conflict-rule-same-relation-updates",
+        dest="conflict_rule_same_relation_updates",
+        action="store_false",
+        default=bool(s.get("conflict_rule_same_relation_updates", True)),
+        help=(
+            "Do not auto-deactivate old triplets when new has same subject+relation but "
+            "different object; defer to LLM conflict resolver (default: rule updates on)"
+        ),
     )
     parser.add_argument(
         "--slot-model-enable-thinking",
