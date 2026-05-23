@@ -22,35 +22,111 @@
 ## 2. Высокоуровневая схема
 
 ```mermaid
-flowchart TD
-    inputMsg[UserMessage] --> writePath[WritePath]
-    writePath --> importance[ImportanceClassifier]
-    importance --> slotSelect[SlotSelect]
-    slotSelect --> contextGather{slot_context_enabled?}
-    contextGather -- "да: gather active facts" --> tripletExtractCtx[TripletExtraction+Context]
-    contextGather -- "нет" --> tripletExtract[TripletExtraction]
-    tripletExtractCtx --> deletionMode{triplet_deletion_mode}
-    tripletExtract --> deletionMode
-    deletionMode -- "llm_inline: delete signals from extraction" --> applyDeletions[ApplyDeletions]
-    deletionMode -- "heuristic: NegationDetector" --> applyDeletions
-    deletionMode -- "llm_separate: TripletDeletionClient" --> applyDeletions
-    deletionMode -- "none" --> semanticDedup[SemanticDedup]
-    applyDeletions --> semanticDedup
-    semanticDedup --> conflictResolve[ConflictResolver]
-    conflictResolve --> dstState[DSTStateUpdate]
-    dstState --> raguSync[RAGUSync]
+---
+config:
+  theme: base
+  look: classic
+  layout: dagre
+  themeVariables:
+    fontSize: 30px
+    fontFamily: Arial
+    primaryColor: '#f3f4f6'
+    primaryTextColor: '#111827'
+    primaryBorderColor: '#374151'
+    lineColor: '#000000'
+    secondaryColor: '#ffffff'
+    tertiaryColor: '#ffffff'
+  flowchart:
+    nodeSpacing: 300
+    rankSpacing: 50
+    curve: basis
+---
+flowchart TB
+    writePath["Механизм записи в память"] --> importance_block["Блок определения важности"]
+    importance_block --> importance{"Сообщение важное?"}
+    importance -- нет --> earlyExit["Память без изменений"]
+    importance -- да --> slotSelect["Блок выбора слотов"]
+    slotSelect --> slotFound{"Слоты найдены?"}
+    slotFound -- нет --> singlePath["Single-pass fallback"]
+    slotFound -- да --> tripletExtract["Блок извлечения триплетов"]
+    tripletExtract --> tripletsFound{"Триплеты найдены?"}
+    tripletsFound -- нет --> singlePath
+    tripletsFound -- да --> semanticDedup["Блок нахождения семантических повторений"]
+    singlePath --> singlePathFound{"Single-pass<br>вернул триплеты?"}
+    singlePathFound -- нет --> earlyExit
+    singlePathFound -- да --> semanticDedup
+    semanticDedup --> semanticDedupPath{"Семантически схожие факты найдены?"}
+    semanticDedupPath -- да --> replaceFact["Деактивация старого и запись нового факта"]
+    semanticDedupPath -- нет --> keepFact["Запись нового факта"]
+    replaceFact --> conflictResolve["Блок разрешения конфликтов"]
+    keepFact --> conflictResolve
+    conflictResolve --> dstState["Обновление состояния памяти"]
+    dstState --> raguSync["Синхронизация с RAGU"]
+    earlyExit --> writeDone["Завершение write-path"]
+    raguSync --> writeDone
 
-    askMsg[QuestionOrInferenceTurn] --> answerPath[AnswerPath]
-    answerPath --> strategy[MemoryStrategy]
-    strategy --> fullGraph[full_graph_json]
-    strategy --> relSlots[relevant_slots_full]
-    strategy --> topk[topk_graph_records]
-    fullGraph --> promptBuild[PromptBuilder]
+     writePath:::process
+     importance_block:::process
+     importance:::decision
+     earlyExit:::terminal
+     slotSelect:::process
+     slotFound:::decision
+     singlePath:::process
+     tripletExtract:::process
+     tripletsFound:::decision
+     semanticDedup:::process
+     singlePathFound:::decision
+     semanticDedupPath:::decision
+     replaceFact:::process
+     keepFact:::process
+     conflictResolve:::process
+     dstState:::process
+     raguSync:::process
+     writeDone:::terminal
+    classDef titleClass fill:none,stroke:none,color:#111827,font-size:120px,font-weight:bold
+    classDef process fill:#ffca86,stroke:#374151,stroke-width:5px,color:#111827
+    classDef decision fill:#f3f4f6,stroke:#374151,stroke-width:5px,color:#111827
+    classDef terminal fill:#ffca86,stroke:#374151,stroke-width:5px,color:#111827
+```
+
+```mermaid
+%%{init: {"theme": "default", "themeVariables": {"fontSize": "22px"}}}%%
+flowchart TD
+
+    writePath[Механизм записи в память] --> importance_block[Блок определения важности]
+    importance_block[Блок определения важности] --> importance{Сообщение важное?}
+    importance -- "нет" --> earlyExit[Память без изменений]
+    importance -- "да" --> slotSelect[Блок выбора слотов]
+    slotSelect --> slotFound{Слоты найдены?}
+    slotFound -- "нет" --> singlePath[Single-pass fallback]
+    slotFound -- "да" --> tripletExtract[Блок извлечение триплетов]
+    tripletExtract --> tripletsFound{Триплеты найдены?}
+    tripletsFound -- "нет" --> singlePath
+    singlePath --> singlePathFound{Single-pass вернул триплеты?}
+    singlePathFound -- "нет" --> earlyExit[Память без изменений]
+    singlePathFound -- "да" --> semanticDedup
+    tripletsFound -- "да" --> semanticDedup[Блок нахождение семантических повторений]
+    semanticDedup[Блок нахождение семантических повторений] --> semanticDedupPath{Семантически схожие факты найдены?}
+    semanticDedupPath -- "да" --> replaceFact[Деактивация старого и запись нового факта]
+    semanticDedupPath -- "нет" --> keepFact[Запись нового факта]
+    replaceFact --> conflictResolve
+    keepFact --> conflictResolve
+    conflictResolve --> dstState[Обновление состояния памяти]
+    dstState --> raguSync[Синхронизация с RAGU]
+    earlyExit --> writeDone[Завершение write-path]
+    raguSync --> writeDone
+
+    askMsg[Вопрос пользователя] --> answerPath[Подготовка ответа]
+    answerPath --> strategy[Выбор стратегии памяти]
+    strategy --> fullGraph[Полный граф памяти]
+    strategy --> relSlots[Релевантные слоты]
+    strategy --> topk[Топ-K записей графа]
+    fullGraph --> promptBuild[Сборка промпта]
     relSlots --> promptBuild
     topk --> promptBuild
-    history[Last5Pairs] --> promptBuild
-    promptBuild --> finalLLM[FinalLLM]
-    finalLLM --> response[AssistantAnswer]
+    history[Последние 10 пар диалога] --> promptBuild
+    promptBuild --> finalLLM[Финальная LLM]
+    finalLLM --> response[Ответ ассистента]
 ```
 
 ---
@@ -174,6 +250,7 @@ dst_memory/
    - если сходство ≥ `ttl_semantic_dedup_threshold` (default 0.9), старый факт деактивируется, новый вставляется (таймер TTL обновляется).
 7. Conflict resolution (`TripletConflictClient`):
    - rule-layer + LLM-layer;
+   - по умолчанию правило: тот же `subject`+`relation`, другой `object` → авто-деактивация старых (см. `conflict_rule_same_relation_updates` в `CONFIG.md`; при `false` только LLM);
    - возможна деактивация старых записей и/или skip новых;
    - `skip_new` в ответе LLM является опциональным: парсер корректно обрабатывает ответы только вида `{"deactivate":[...]}`.
 8. Обновление DST state:
@@ -236,6 +313,18 @@ dst_memory/
 1. Вопрос -> RAGU semantic search по всему графу.
 2. Берется top-k (`graph_top_k_records`, default 20).
 3. В context идет список наиболее релевантных графовых строк.
+
+### 5.4 Stage-валидация (`validation/GigaMemory_full`)
+
+- В `memory_only` сохраняется не "фиксированный final prompt-context", а переиспользуемое состояние памяти:
+  - DST snapshot;
+  - `chunk_*/ragu_storage` (для retrieval);
+  - компактные strategy artifacts (выбор релевантных слотов и retrieval candidates), без дублирования трёх полных memory-context.
+- Для `memory_only` можно включить `single_path_only` режим записи: slot selection bypassed, экстракция идет только single-pass путём.
+- В `final_llm_only` стратегия выбирается при генерации ответа (`--final-llm-memory-strategies`), можно запускать сразу несколько стратегий на одном `memory_only` результате.
+- Дополнительно есть режим payload-а для final LLM:
+  - `with_metadata` (полные записи),
+  - `triplets_only` (только `subject/relation/object`).
 
 ---
 
@@ -350,6 +439,8 @@ TTL хранится в поле `description` ребра в виде аннот
 - `api` — OpenAI-compatible endpoint.
 - `puter` — OpenAI-compatible endpoint Puter (`https://api.puter.com/puterai/openai/v1`).
 - `local` — локальная HF-модель через `LocalHFServing` (поддерживаются `llm_load_dtype`, `llm_load_quantization`, `llm_max_context_tokens`).
+
+Локальная модель **слотов/триплетов/gate** (`slot_model_path`) настраивается отдельно: `slot_llm_load_quantization` (`none` \| `8bit` \| `4bit`, BitsAndBytes + CUDA), см. `CONFIG.md` и `DST_memory/run.py --slot-llm-load-quantization`.
 
 ---
 

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.models import VALID_TTL_VALUES
 from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
+from ..clients.lm_json_schemas import TRIPLET_JSON_SCHEMA, TRIPLET_JSON_SCHEMA_WITH_DELETE
 from ..clients.serving import GenerationConfig, LocalHFServing
 from ..prompts.loader import load_prompt_modules
 
@@ -48,6 +49,8 @@ class TripletExtractionClient:
         max_retries: int = 1,
         ttl_mode: str = "mode2",
         prompt_language: str = "ru",
+        parse_retry_temperature: float = 0.65,
+        parse_retry_temperature_increment: float = 0.08,
     ):
         self.use_stub = use_stub
         self.serving = serving
@@ -56,6 +59,8 @@ class TripletExtractionClient:
         self.max_retries = max_retries
         self.ttl_mode = ttl_mode
         self.prompt_language = prompt_language
+        self.parse_retry_temperature = float(parse_retry_temperature)
+        self.parse_retry_temperature_increment = float(parse_retry_temperature_increment)
         self._prompt_modules = None
 
         if self.use_stub:
@@ -137,11 +142,29 @@ class TripletExtractionClient:
 
         tries = self.max_retries + 1
         last = ""
+        json_schema = None
+        if getattr(self.serving, "use_lm_format_enforcer", False):
+            json_schema = TRIPLET_JSON_SCHEMA_WITH_DELETE if enable_deletion else TRIPLET_JSON_SCHEMA
         for attempt in range(1, tries + 1):
-            last = self.serving.generate_chat(
-                messages,
-                generation_config=GenerationConfig(max_new_tokens=512, do_sample=False),
-            )
+            if attempt == 1:
+                gen_cfg = GenerationConfig(
+                    max_new_tokens=512,
+                    do_sample=False,
+                    lm_enforcer_json_schema=json_schema,
+                )
+            else:
+                t = min(
+                    1.0,
+                    self.parse_retry_temperature
+                    + self.parse_retry_temperature_increment * float(attempt - 2),
+                )
+                gen_cfg = GenerationConfig(
+                    max_new_tokens=512,
+                    do_sample=True,
+                    temperature=t,
+                    lm_enforcer_json_schema=json_schema,
+                )
+            last = self.serving.generate_chat(messages, generation_config=gen_cfg)
             slot_label = slot_name if slot_name is not None else "SINGLE_PASS"
             logger.info("Triplet extractor slot=[%s] attempt=%d raw: %s", slot_label, attempt, last[:800])
             parsed = self._parse(last, forced_slot=slot_name, with_deletions=enable_deletion)

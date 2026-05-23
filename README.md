@@ -66,12 +66,14 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 - `--graph-top-k-records`
 - `--recent-history-pairs`
 - `--slot-model-path`
+- `--slot-llm-load-quantization` (`none`\|`8bit`\|`4bit`) — BitsAndBytes для локальной slot/triplet модели (CUDA); в JSON: `shared.slot_llm_load_quantization`
 - `--importance-model-path`
 - `--ragu-embedder-model`
 - `--ragu-storage-path`
 - `--llm-mode` (`openrouter|api|puter|stub|local`)
 - `--no-final-llm`
 - `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict и финальной LLM (в `run_config.json`: `prompt_language`)
+- `--no-conflict-rule-same-relation-updates` — отключить детерминированную замену при том же `subject`+`relation` и другом `object` (решение только через LLM-конфликт); по умолчанию правило включено (`shared.conflict_rule_same_relation_updates`)
 
 Для ограничения входного контекста final LLM используйте `shared.llm_max_context_tokens` в `run_config.json` (или соответствующий `giga_memory.llm_max_context_tokens` в конфиге валидации). Это особенно важно для моделей с меньшим окном контекста (например, 32768).
 
@@ -126,8 +128,8 @@ validation/
 | Режим | Описание | Команда |
 |-------|----------|---------|
 | `full` | Полный пайплайн: память → финальная LLM → судья | `python validate_longmemeval.py --validation-mode full` |
-| `memory_only` | Только обработка памяти и сохранение состояний | `python validate_longmemeval.py --validation-mode memory_only` |
-| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory` |
+| `memory_only` | Только обработка памяти и сохранение переиспользуемого state | `python validate_longmemeval.py --validation-mode memory_only --memory-only-write-mode standard` |
+| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов для 1+ стратегий | `python validate_longmemeval.py --validation-mode final_llm_only --input-state-dir ./results_memory --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records` |
 | `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `python validate_longmemeval.py --validation-mode judge_only --input-answers-path ./results/answers.json` |
 
 ### 1. GigaMemory Full Validation
@@ -167,12 +169,15 @@ python validate_longmemeval.py \
 # Шаг 1: Обработка памяти (один раз)
 python validate_longmemeval.py \
     --validation-mode memory_only \
+    --memory-only-write-mode single_path_only \
     --config ./config_memory_only.json
 
-# Шаг 2: Генерация ответов (можно запускать с разными LLM)
+# Шаг 2: Генерация ответов (можно запускать с разными LLM и стратегиями памяти)
 python validate_longmemeval.py \
     --validation-mode final_llm_only \
     --input-state-dir ./results_memory_only \
+    --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records \
+    --final-llm-memory-payload-mode triplets_only \
     --gm-llm-model "openai/gpt-4o-mini" \
     --config ./config_final_llm.json
 

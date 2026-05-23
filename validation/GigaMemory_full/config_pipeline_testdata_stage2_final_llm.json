@@ -79,6 +79,8 @@
   "validation_mode": {
     "mode": "final_llm_only",
     "input_state_dir": "./pipeline_test_runs/stage1_memory",
-    "input_answers_path": ""
+    "input_answers_path": "",
+    "final_llm_memory_strategies": ["full_graph_json", "relevant_slots_full", "topk_graph_records"],
+    "final_llm_memory_payload_mode": "with_metadata"
   }
 }

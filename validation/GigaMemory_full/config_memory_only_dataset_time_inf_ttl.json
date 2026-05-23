@@ -78,6 +78,7 @@
 
   "validation_mode": {
     "mode": "memory_only",
+    "memory_only_write_mode": "standard",
     "input_state_dir": "",
     "input_answers_path": ""
   }

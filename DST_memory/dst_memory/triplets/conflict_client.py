@@ -2,8 +2,9 @@
 Client for LLM-based triplet conflict resolution.
 
 Hybrid strategy:
-  1. Rule layer: exact (subject, relation) match → auto-deactivate old record, no LLM call.
-  2. LLM layer: same subject, ambiguous/different relation → ask LLM for deactivate/skip_new.
+  1. Rule layer: exact (subject, relation) duplicate (same object) → skip new; optionally
+     same subject+relation with different object → auto-deactivate old (`rule_same_relation_updates`).
+  2. LLM layer: unresolved same-subject groups → ask LLM for deactivate/skip_new.
 
 The client is called per-slot after triplet extraction and before insertion.
 """
@@ -33,8 +34,15 @@ class TripletConflictClient:
     """
     Resolves conflicts between existing graph triplets and newly extracted ones.
 
-    Rule-based pass runs first (no LLM). LLM is only called when rule pass
-    finds same-subject candidates that were NOT handled by exact-match dedup.
+    Rule-based pass runs first (no LLM unless deferred). LLM runs when rule pass leaves
+    same-subject groups unresolved (different relation ambiguity, or same relation + different
+    object when rule_same_relation_updates=False).
+
+    rule_same_relation_updates:
+        When True (default): same subject AND same relation but different object is treated as a
+        value replacement — existing matching edges are auto-deactivated (no LLM).
+        When False: that case is deferred to the LLM conflict call only (duplicate same S+R+O still
+        skips new via rules).
 
     allow_multi_relation_same_object:
         When True (default), two triplets with the same subject AND the same object
@@ -52,12 +60,14 @@ class TripletConflictClient:
         use_stub: bool,
         serving: Optional[LocalHFServing] = None,
         max_retries: int = 1,
+        rule_same_relation_updates: bool = True,
         allow_multi_relation_same_object: bool = True,
         prompt_language: str = "ru",
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
+        self.rule_same_relation_updates = rule_same_relation_updates
         self.allow_multi_relation_same_object = allow_multi_relation_same_object
         self.prompt_language = prompt_language
         self._prompt_modules = None
@@ -97,15 +107,26 @@ class TripletConflictClient:
                         idx, new_t.subject, new_t.relation, new_t.object,
                     )
                 else:
-                    # Same subject+relation, different object → deactivate old
-                    for e in exact_matches:
-                        deactivate.append(e.record_id)
-                        handled_existing.add(e.record_id)
-                    logger.debug(
-                        "Rule update: deactivate %s for new (%s|%s|%s)",
-                        [e.record_id for e in exact_matches],
-                        new_t.subject, new_t.relation, new_t.object,
-                    )
+                    # Same subject+relation, different object
+                    if self.rule_same_relation_updates:
+                        for e in exact_matches:
+                            deactivate.append(e.record_id)
+                            handled_existing.add(e.record_id)
+                        logger.debug(
+                            "Rule update: deactivate %s for new (%s|%s|%s)",
+                            [e.record_id for e in exact_matches],
+                            new_t.subject, new_t.relation, new_t.object,
+                        )
+                    else:
+                        subjects_needing_llm.add(new_t.subject)
+                        logger.debug(
+                            "Conflict deferred to LLM (same S+R, different O): subj=%s rel=%s "
+                            "new_obj=%r existing_ids=%s",
+                            new_t.subject,
+                            new_t.relation,
+                            new_t.object,
+                            [e.record_id for e in exact_matches],
+                        )
 
         # --- Determine subjects that still need LLM attention ---
         # Any subject in new triplets (not fully handled) that has existing edges

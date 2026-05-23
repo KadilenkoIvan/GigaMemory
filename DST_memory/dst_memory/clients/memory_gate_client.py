@@ -46,11 +46,15 @@ class MemoryGateClient:
         serving: Optional[LocalHFServing] = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
+        parse_retry_temperature: float = 0.65,
+        parse_retry_temperature_increment: float = 0.08,
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
+        self.parse_retry_temperature = float(parse_retry_temperature)
+        self.parse_retry_temperature_increment = float(parse_retry_temperature_increment)
         self._prompt_modules = None
         if self.use_stub:
             logger.info("Memory gate client in STUB mode (эвристика по маркерам)")
@@ -86,10 +90,16 @@ class MemoryGateClient:
         )
         tries = self.max_retries + 1
         for attempt in range(1, tries + 1):
-            raw = self.serving.generate_chat(
-                messages,
-                generation_config=GenerationConfig(max_new_tokens=200, do_sample=False),
-            )
+            if attempt == 1:
+                gen_cfg = GenerationConfig(max_new_tokens=200, do_sample=False)
+            else:
+                t = min(
+                    1.0,
+                    self.parse_retry_temperature
+                    + self.parse_retry_temperature_increment * float(attempt - 2),
+                )
+                gen_cfg = GenerationConfig(max_new_tokens=200, do_sample=True, temperature=t)
+            raw = self.serving.generate_chat(messages, generation_config=gen_cfg)
             logger.info("Memory gate raw attempt=%d: %s", attempt, raw[:500])
             parsed = self._parse_response(raw)
             if parsed is None:

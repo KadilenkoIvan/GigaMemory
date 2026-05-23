@@ -28,6 +28,8 @@
 | `llm_temperature` | float | температура final LLM |
 | `llm_max_tokens` | int | max tokens final LLM |
 | `llm_max_context_tokens` | int | максимальный размер prompt-контекста в токенах (0 = без ограничения) |
+| `llm_load_dtype` | str | dtype загрузки финальной локальной LLM при `llm_mode=local` (`float16`, `bfloat16`, …) |
+| `llm_load_quantization` | str | BitsAndBytes для **финальной** локальной LLM: `none`, `8bit`, `4bit` (не путать с `slot_llm_load_quantization`) |
 | `openrouter_http_referer` | str | optional Referer header |
 | `openrouter_x_title` | str | optional X-OpenRouter-Title |
 | `no_final_llm` | bool | вернуть только структуру ответа без вызова final LLM |
@@ -35,6 +37,10 @@
 | `slot_use_stub` | bool | включить slot-triplet stub режим |
 | `slot_model_path` | str | путь/id локальной slot LLM |
 | `slot_max_slots_per_message` | int | лимит слотов на сообщение |
+| `slot_model_enable_thinking` | bool | гибридный thinking у Qwen3/3.5 для slot-стека (default `false`) |
+| `slot_llm_inject_no_think_prompt` | bool | при `true` (default) к system добавляется `/no_think`, если thinking выключен; при `false` только `enable_thinking` в chat template |
+| `slot_llm_lm_format_enforcer` | bool | JSON schema через `lm-format-enforcer` для slot selector и triplet extraction (default `false`) |
+| `slot_llm_load_quantization` | str | квантизация BitsAndBytes для **той же** локальной модели, что `slot_model_path` (слоты, триплеты, memory gate, конфликты): `none` (default), `8bit`, `4bit`. Нужны **CUDA** и пакет `bitsandbytes`. Отдельно от `llm_load_quantization` (финальная LLM). |
 | `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
 | `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
 | `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
@@ -104,6 +110,7 @@
 | key | type | description |
 |---|---|---|
 | `conflict_allow_multi_relation_same_object` | bool | Если `true` (default): два факта с одинаковым `subject` + одинаковым `object` но разными `relation` считаются **дополняющими** и LLM-вызов конфликт-резолвера для них пропускается. Пример: `есть партнёр` и `живёт вместе с` одного и того же объекта — оба факта сохраняются. Установи `false` чтобы всегда вызывать LLM при любом `same-subject` совпадении. |
+| `conflict_rule_same_relation_updates` | bool | Если `true` (default): при **том же** `subject` и **той же** `relation`, но **другом** `object`, старые рёбра деактивируются **детерминированно** (без LLM), как смена значения предиката (`works at`). Если `false` — это правило отключено; такой кейс уходит **только в LLM** конфликт-резолвер. Точный дубликат (совпадение S+R+O) по-прежнему отсекается правилом без LLM. CLI: `--no-conflict-rule-same-relation-updates`. При прогоне `validate_longmemeval.py`: ключ можно задать в **`shared`** валидационного JSON (рядом с `dataset_path`), в **`giga_memory`**, в `DST_memory/run_config.json`, или через **`--gm-conflict-rule-same-relation-updates`** — см. приоритет в `README_CONFIG.md`. После старта проверьте в логе `Effective DST conflict_rule_same_relation_updates: ...`. На уровне **INFO** при вызове модели в лог пишется строка `Conflict resolver: calling LLM slot=... subjects=...`; при отложенном кейсе (same S+R, different O) при **DEBUG** — `Conflict deferred to LLM (same S+R, different O): ...`. |
 
 Формат ответа LLM-конфликт-резолвера:
 - Поддерживаются оба варианта JSON: `{"deactivate":[...], "skip_new":[...]}` и сокращённый `{"deactivate":[...]}`.
@@ -151,6 +158,17 @@ Final LLM получает полный JSON активной памяти:
 1. RAGU semantic search по всему графу.
 2. Возвращаются top-k строк-графовых записей (`graph_top_k_records`).
 3. Этот список идет в final LLM.
+
+### Важно для валидации `validation/GigaMemory_full`
+
+В stage-режиме:
+- `memory_only` сохраняет состояние памяти (DST + RAGU + компактные strategy artifacts) без хранения трёх полных memory-context;
+- `memory_only_write_mode=single_path_only` форсирует single-pass extraction (без `slot_select` и per-slot extraction) для A/B-сравнения write-path;
+- `final_llm_only` может запускаться по одной или нескольким стратегиям на одном и том же state (без повторного `write_to_memory`);
+- в `final_llm_only` можно выбрать формат передачи памяти в final LLM:
+  - `with_metadata` — с метаданными записей;
+  - `triplets_only` — только триплеты (`subject/relation/object`);
+- RAGU state для retrieval берётся из `chunk_*/ragu_storage`, поэтому `topk_graph_records` использует тот же сохранённый граф.
 
 ## История последних пар
 

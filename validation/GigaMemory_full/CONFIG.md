@@ -21,6 +21,19 @@
 - `--judge-batch-size`
 - `--calculate-memory-hit-rate`
 
+## memory_only: только часть диалогов
+
+Чтобы после CUDA OOM не терять уже сохранённые `chunk_*` и строки в `memory_only_states.json`, можно перезапускать только нужные строки:
+
+- `--memory-only-dialogue-row-indices` — индексы строк в **сбалансированном** списке (тот же номер, что в `chunk_XXXX`, например `7` → `chunk_0007`).
+- `--memory-only-dialogue-ids` — значения поля `dialogue_id` в датасете (можно вместо или вместе с индексами; строка попадает в прогон, если совпал индекс **или** id).
+
+В JSON (`validation_mode`): `memory_only_dialogue_row_indices`, `memory_only_dialogue_ids`.
+
+При записи новые состояния **сливаются** с уже лежащим в `--output-dir` `memory_only_states.json` и `giga_memory_validation_logs.json`: строки для перезаписанных `dialogue_row_index` заменяются, остальные сохраняются. Папки `chunk_*` для необработанных строк не трогаются.
+
+В конфиге пайплайна (`PipelineConfig` / `giga_memory`): для повторных попыток парсинга JSON после слота / триплетов / memory gate со второй попытки включается сэмплирование с повышением температуры (`llm_parse_retry_temperature`, `llm_parse_retry_temperature_increment`).
+
 ## Ключевые `--gm-*` override
 
 - `--gm-importance-model-path`
@@ -32,7 +45,8 @@
 - `--gm-llm-model`
 - `--gm-llm-api-key`
 - `--gm-llm-load-dtype`
-- `--gm-llm-load-quantization` (`none|8bit|4bit`)
+- `--gm-llm-load-quantization` (`none|8bit|4bit`) — финальная локальная LLM
+- `--gm-slot-llm-load-quantization` (`none|8bit|4bit`) — локальная модель слотов/триплетов (`slot_model_path`), см. `shared.slot_llm_load_quantization` в `DST_memory/run_config.json`
 - `--gm-llm-max-context-tokens`
 - `--gm-llm-tokenizer-model`
 - `--gm-ragu-storage-path`
@@ -40,6 +54,7 @@
 - `--gm-slot-use-stub`
 - `--gm-slot-context-enabled`
 - `--gm-triplet-deletion-mode` (`none|heuristic|llm_inline|llm_separate`)
+- `--gm-conflict-rule-same-relation-updates` (`true|false`) — в `DST_memory/run_config.json` ключ `shared.conflict_rule_same_relation_updates`; при `false` нет автодеактивации при том же `subject`+`relation` и другом `object` (только LLM)
 - `--gm-prompt-language` (`ru|en`)
 - `--gm-unload-models-before-final-llm`
 - `--gm-use-dataset-datetime`

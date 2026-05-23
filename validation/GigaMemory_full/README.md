@@ -11,8 +11,8 @@
 | Режим | Описание | Выходные файлы |
 |-------|----------|----------------|
 | `full` | Полный пайплайн: память → финальная LLM → судья | `validation_results.json` |
-| `memory_only` | Только обработка памяти и сохранение состояний | `memory_only_states.json`, `chunk_*/` |
-| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов | `intermediate_answers.json` |
+| `memory_only` | Только обработка памяти и сохранение состояний (без фиксированного final context) | `memory_only_states.json`, `chunk_*/` |
+| `final_llm_only` | Загрузка сохранённой памяти → генерация ответов с выбранными стратегиями | `<strategy>/intermediate_answers.json` |
 | `judge_only` | Оценка сохранённых ответов с Memory Hit Rate | `validation_results.json` |
 
 ### Когда использовать разные режимы
@@ -23,6 +23,7 @@
 - Хотите разделить процесс на этапы для экономии ресурсов
 - Нужно сохранить промежуточные состояния памяти для анализа
 - Планируете запускать финальную LLM позже с другими параметрами
+- Нужно сравнить multi-stage write-path и `single_path_only`
 
 **`final_llm_only`** - используйте когда:
 - Уже обработали диалоги в режиме `memory_only`
@@ -49,6 +50,11 @@
         v                       v                       v
 memory_only_states.json  intermediate_answers.json  validation_results.json
 ```
+
+`memory_only` теперь сохраняет именно состояние памяти, пригодное для повторного использования:
+- полный DST snapshot + `chunk_*/ragu_storage` (состояние RAGU retrieval);
+- компактные артефакты стратегий (`strategy_state_by_strategy`: релевантные слоты и retrieval-кандидаты), без хранения трёх полных memory-context;
+- timing блок со средним временем `write_to_memory` на сообщение.
 
 ## Возможности
 
@@ -124,6 +130,14 @@ memory_only_states.json  intermediate_answers.json  validation_results.json
 - после обрезки (`after_clamp`).
 
 Агрегаты по запуску попадают в `statistics`, а значения по каждому примеру — в `results`/`intermediate_answers`.
+
+### 10. Размер исходного диалога vs переданный контекст
+
+Дополнительно сохраняются:
+- `dialogue_context_chars` — общий размер исходного диалога (все реплики) в символах;
+- `final_llm_prompt_chars_after_clamp` — сколько символов реально ушло в final LLM после ограничений контекста.
+
+Эти поля есть в `intermediate_answers.json` (`final_llm_only`) и дублируются в итоговых метриках `judge_only`.
 
 ### 10. Полная конфигурация через CLI
 
@@ -225,6 +239,7 @@ python validate_longmemeval.py \
     --output-dir ./results_memory_only \
     --num-items-per-type 10 \
     --validation-mode memory_only \
+    --memory-only-write-mode single_path_only \
     --config ../../DST_memory/run_config.json
 ```
 
@@ -255,6 +270,7 @@ python validate_longmemeval.py \
     --validation-mode final_llm_only \
     --input-state-dir ./results_memory_only \
     --output-dir ./results_final_llm \
+    --final-llm-memory-strategies full_graph_json,relevant_slots_full,topk_graph_records \
     --final-llm-batch-size 5 \
     --config ../../DST_memory/run_config.json
 ```
@@ -262,11 +278,15 @@ python validate_longmemeval.py \
 **Параметры:**
 - `--input-state-dir` - директория с результатами `memory_only` (обязательно)
 - `--final-llm-batch-size` - размер батча для финальной LLM
+- `--final-llm-memory-strategies` - список стратегий через запятую (если не указан, используется `giga_memory.memory_strategy`)
+- `--final-llm-memory-payload-mode` - формат памяти для final LLM: `with_metadata` или `triplets_only`
 
 **Выходные файлы:**
 ```
 results_final_llm/
-└── intermediate_answers.json     # Сгенерированные ответы
+├── full_graph_json/intermediate_answers.json
+├── relevant_slots_full/intermediate_answers.json
+└── topk_graph_records/intermediate_answers.json
 ```
 
 #### Этап 3: Оценка судьёй (`judge_only`)
@@ -495,8 +515,11 @@ output-dir/
 |----------|----------|-------------------|
 | `--validation-mode` | Режим валидации | `full`, `memory_only`, `final_llm_only`, `judge_only` |
 | `--input-state-dir` | Директория с состояниями (для `final_llm_only` и `judge_only`) | `./results_memory_only` |
-| `--input-answers-path` | Путь к ответам (для `judge_only`) | `./results/intermediate_answers.json` |
+| `--input-answers-path` | Путь к ответам (для `judge_only`) | `./results/full_graph_json/intermediate_answers.json` |
 | `--memory-only-output-suffix` | Суффикс для выходных директорий | `_memory_only` |
+| `--memory-only-write-mode` | Режим записи памяти в `memory_only` | `standard` \| `single_path_only` |
+| `--final-llm-memory-strategies` | Список стратегий памяти для `final_llm_only` | `full_graph_json,relevant_slots_full` |
+| `--final-llm-memory-payload-mode` | Формат памяти для final LLM | `with_metadata` \| `triplets_only` |
 
 ### Параметры GigaMemory
 

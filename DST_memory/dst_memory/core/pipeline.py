@@ -72,6 +72,9 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 config.slot_model_path,
                 enable_thinking=config.slot_model_enable_thinking,
+                inject_no_think_prompt=getattr(config, "slot_llm_inject_no_think_prompt", True),
+                use_lm_format_enforcer=getattr(config, "slot_llm_lm_format_enforcer", False),
+                load_quantization=getattr(config, "slot_llm_load_quantization", "none"),
             )
         slot_serving = self._slot_serving
 
@@ -82,6 +85,8 @@ class DSTMemoryPipeline:
             max_retries=1,
             ttl_mode=config.ttl_mode,
             prompt_language=config.prompt_language,
+            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
+            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
         )
         slot_selector = SlotSelectClient(
             use_stub=config.slot_use_stub,
@@ -89,11 +94,14 @@ class DSTMemoryPipeline:
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
             prompt_language=config.prompt_language,
+            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
+            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
         )
         conflict_resolver = TripletConflictClient(
             use_stub=config.slot_use_stub,
             serving=slot_serving,
             max_retries=1,
+            rule_same_relation_updates=config.conflict_rule_same_relation_updates,
             allow_multi_relation_same_object=config.conflict_allow_multi_relation_same_object,
             prompt_language=config.prompt_language,
         )
@@ -143,6 +151,8 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_retries=1,
             prompt_language=config.prompt_language,
+            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
+            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
         )
         self.final_llm = FinalLLMClient(
             mode=config.llm_mode,
@@ -454,6 +464,9 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 self.config.slot_model_path,
                 enable_thinking=self.config.slot_model_enable_thinking,
+                inject_no_think_prompt=getattr(self.config, "slot_llm_inject_no_think_prompt", True),
+                use_lm_format_enforcer=getattr(self.config, "slot_llm_lm_format_enforcer", False),
+                load_quantization=getattr(self.config, "slot_llm_load_quantization", "none"),
             )
 
         # Re-attach serving to clients

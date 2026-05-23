@@ -172,17 +172,34 @@ class PipelineConfig:
     #   Set to False to always run the LLM check for any same-subject pair.
     conflict_allow_multi_relation_same_object: bool = True
 
+    # conflict_rule_same_relation_updates:
+    #   When True (default): new triplet with same subject+relation as existing but different object
+    #   triggers deterministic deactivation of old edge(s) (no LLM).
+    #   When False: that case is deferred to the LLM conflict resolver only; exact duplicate
+    #   (same S+R+O) still skips insertion via rules.
+    conflict_rule_same_relation_updates: bool = True
+
     # -------------------------------------------------------------------
     # Slot model thinking mode
     # -------------------------------------------------------------------
     # slot_model_enable_thinking:
     #   Enable or disable the thinking/reasoning phase for models that support it
     #   (Qwen3, Qwen3.5 and similar hybrid-thinking models).
-    #   False (default) — thinking disabled; produces clean, compact JSON output.
+    #   False (default) — thinking disabled; passes enable_thinking=False to apply_chat_template.
     #   True — thinking enabled; model outputs a reasoning chain before the answer.
-    #   When False: passes enable_thinking=False to apply_chat_template AND prepends
-    #   '/no_think' to the system prompt as a fallback for older tokenizer versions.
+    #   Optional `/no_think` injection is controlled separately via slot_llm_inject_no_think_prompt.
     slot_model_enable_thinking: bool = False
+
+    # When False (recommended with Qwen3.5): do not prepend `/no_think`; rely on chat template only.
+    slot_llm_inject_no_think_prompt: bool = True
+
+    # When True: slot selector + triplet extractor pass JSON schemas into lm-format-enforcer during generate.
+    # Requires `pip install lm-format-enforcer`.
+    slot_llm_lm_format_enforcer: bool = False
+
+    # BitsAndBytes load for the slot/triplet/memory-gate local model (same path as llm_load_quantization).
+    # "none" | "8bit" | "4bit" — requires GPU + bitsandbytes.
+    slot_llm_load_quantization: str = "none"
 
     # Prompt UI language for slot/triplet/gate/deletion/conflict/final LLM ("ru" | "en").
     prompt_language: str = "ru"
@@ -205,3 +222,11 @@ class PipelineConfig:
     #   are unloaded from GPU to free memory for the final LLM.
     #   Ignored when llm_mode="openrouter" or "api" (no local models to unload).
     unload_models_before_final_llm: bool = True
+
+    # -------------------------------------------------------------------
+    # Local LLM JSON-parse retries (slot / triplet / memory gate)
+    # -------------------------------------------------------------------
+    # After a failed JSON parse, subsequent attempts use do_sample=True with
+    # increasing temperature so the model does not repeat the same bad output.
+    llm_parse_retry_temperature: float = 0.65
+    llm_parse_retry_temperature_increment: float = 0.08

@@ -1,7 +1,8 @@
 import gc
+import json
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -33,6 +34,8 @@ class GenerationConfig:
     # Default 1.0 avoids confusing "temperature=0" semantics.
     temperature: float = 1.0
     top_p: float = 1.0
+    # When LocalHFServing.use_lm_format_enforcer is True, pass a JSON Schema dict to constrain decoding.
+    lm_enforcer_json_schema: Optional[Dict[str, Any]] = None
 
 
 class LocalHFServing:
@@ -43,10 +46,16 @@ class LocalHFServing:
     enable_thinking:
         Controls the thinking/reasoning mode for models that support it
         (Qwen3, Qwen3.5 and similar hybrid-thinking models).
-        False (default) — disable thinking. Passed as enable_thinking=False to
-        apply_chat_template; also injects '/no_think' into the system prompt as
-        a belt-and-suspenders fallback for older tokenizer versions.
+        False — passes enable_thinking=False to apply_chat_template.
         True — let the model think (may produce verbose reasoning output).
+
+    inject_no_think_prompt:
+        When True (legacy default) and enable_thinking is False, prepends ``/no_think``
+        via :meth:`_inject_no_think`. Set False to rely on chat-template ``enable_thinking`` only.
+
+    use_lm_format_enforcer:
+        When True, :meth:`generate_chat` may apply ``lm-format-enforcer`` if
+        :class:`GenerationConfig` includes ``lm_enforcer_json_schema`` (requires optional dependency).
     """
 
     def __init__(
@@ -55,19 +64,34 @@ class LocalHFServing:
         torch_dtype: torch.dtype = torch.float16,
         enable_thinking: bool = False,
         load_quantization: str = "none",
+        inject_no_think_prompt: bool = True,
+        use_lm_format_enforcer: bool = False,
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_thinking = enable_thinking
+        self.inject_no_think_prompt = bool(inject_no_think_prompt)
+        self.use_lm_format_enforcer = bool(use_lm_format_enforcer)
+        self._lm_enforcer_prefix_cache: Dict[str, Any] = {}
         self._quant = _normalize_load_quantization(load_quantization)
+        if self.use_lm_format_enforcer:
+            try:
+                import lmformatenforcer  # noqa: F401
+            except ImportError as e:
+                raise ImportError(
+                    "LocalHFServing(use_lm_format_enforcer=True) requires `pip install lm-format-enforcer`."
+                ) from e
         resolved = resolve_slot_model_path(model_path_or_id)
         logger.info(
-            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s enable_thinking=%s",
+            "Serving loading model=%s (resolved=%s) device=%s dtype=%s quant=%s enable_thinking=%s "
+            "inject_no_think_prompt=%s use_lm_format_enforcer=%s",
             model_path_or_id,
             resolved,
             self.device,
             torch_dtype,
             self._quant,
             enable_thinking,
+            self.inject_no_think_prompt,
+            self.use_lm_format_enforcer,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
 
@@ -121,6 +145,7 @@ class LocalHFServing:
     def release(self) -> None:
         """Drop weights from VRAM/RAM (call before loading another large local model)."""
         logger.info("LocalHFServing.release() — dropping model and tokenizer")
+        self._lm_enforcer_prefix_cache.clear()
         try:
             del self.model
         except Exception:
@@ -156,6 +181,18 @@ class LocalHFServing:
         msgs.insert(0, {"role": "system", "content": "/no_think"})
         return msgs
 
+    def _prefix_allowed_tokens_fn_for_schema(self, schema: Dict[str, Any]):
+        key = json.dumps(schema, sort_keys=True, ensure_ascii=False)
+        if key in self._lm_enforcer_prefix_cache:
+            return self._lm_enforcer_prefix_cache[key]
+        from lmformatenforcer import JsonSchemaParser
+        from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+
+        parser = JsonSchemaParser(schema)
+        fn = build_transformers_prefix_allowed_tokens_fn(self.tokenizer, parser)
+        self._lm_enforcer_prefix_cache[key] = fn
+        return fn
+
     def generate_chat(
         self,
         messages: List[Dict[str, str]],
@@ -165,11 +202,10 @@ class LocalHFServing:
             generation_config = GenerationConfig()
 
         # --- Thinking mode control ---
-        # Primary: pass enable_thinking to apply_chat_template (Qwen3/3.5 tokenizers support this).
-        # Fallback: inject /no_think into the system prompt for older tokenizer versions.
-        msgs = messages
-        if not self.enable_thinking:
+        if not self.enable_thinking and self.inject_no_think_prompt:
             msgs = self._inject_no_think(messages)
+        else:
+            msgs = messages
 
         try:
             text = self.tokenizer.apply_chat_template(
@@ -204,6 +240,9 @@ class LocalHFServing:
         if generation_config.do_sample:
             gen_kwargs["temperature"] = generation_config.temperature
             gen_kwargs["top_p"] = generation_config.top_p
+        schema = getattr(generation_config, "lm_enforcer_json_schema", None)
+        if self.use_lm_format_enforcer and schema:
+            gen_kwargs["prefix_allowed_tokens_fn"] = self._prefix_allowed_tokens_fn_for_schema(schema)
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,

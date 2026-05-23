@@ -3,8 +3,8 @@
   "_pipeline": {
     "next_config": "config_pipeline_testdata_stage2_final_llm.json",
     "notes": [
-      "memory_strategy applies ONLY here — it shapes memory_context saved into memory_only_states.json.",
-      "After changing memory_strategy (or graph_top_k_records, retrieval_top_k), re-run stage 1, then 2, then 3.",
+      "memory_only сохраняет DST/RAGU и компактные strategy artifacts (без дублирования 3 полных memory_context).",
+      "Для смены стратегии в stage2 достаточно --final-llm-memory-strategies; stage1 пересчитывать не нужно (если не менялись сами write-path параметры).",
       "minimal_test.json: 2 dataset rows → 3 evaluation questions (2 + 1)."
     ]
   },

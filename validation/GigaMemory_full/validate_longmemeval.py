@@ -51,7 +51,7 @@ import time
 import urllib.error
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Add parent directories to path for imports
 repo_root = Path(__file__).resolve().parents[2]
@@ -222,6 +222,156 @@ QUESTION_TYPES = {
 }
 
 RELEVANT_TYPES = list(QUESTION_TYPES.keys())
+MEMORY_STRATEGIES = ("full_graph_json", "relevant_slots_full", "topk_graph_records")
+MEMORY_PAYLOAD_MODES = ("with_metadata", "triplets_only")
+MEMORY_ONLY_WRITE_MODES = ("standard", "single_path_only")
+
+
+def _normalize_memory_strategies(raw: Any) -> List[str]:
+    """Normalize configured memory strategies list preserving order."""
+    if raw is None:
+        return []
+    items: List[str] = []
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.split(",") if p.strip()]
+    elif isinstance(raw, (list, tuple)):
+        for v in raw:
+            s = str(v).strip()
+            if s:
+                items.append(s)
+    else:
+        s = str(raw).strip()
+        if s:
+            items = [s]
+
+    seen = set()
+    out: List[str] = []
+    for s in items:
+        if s in MEMORY_STRATEGIES and s not in seen:
+            out.append(s)
+            seen.add(s)
+    return out
+
+
+def _normalize_memory_payload_mode(raw: Any) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in MEMORY_PAYLOAD_MODES:
+        return mode
+    return "with_metadata"
+
+
+def _memory_context_for_payload_mode(memory_context: Any, payload_mode: str) -> Any:
+    """Optionally strip metadata and pass only triplets to final LLM."""
+    mode = _normalize_memory_payload_mode(payload_mode)
+    if mode != "triplets_only":
+        return memory_context
+
+    if not isinstance(memory_context, dict):
+        return memory_context
+
+    slots = memory_context.get("slots")
+    if isinstance(slots, list):
+        out_slots: List[Dict[str, Any]] = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            slot_name = str(slot.get("slot", "") or "").strip()
+            triplets: List[Dict[str, str]] = []
+            for msg in slot.get("messages") or []:
+                if not isinstance(msg, dict):
+                    continue
+                subj = str(msg.get("subject", "") or "").strip()
+                rel = str(msg.get("relation", "") or "").strip()
+                obj = str(msg.get("object", "") or "").strip()
+                if subj or rel or obj:
+                    triplets.append({
+                        "subject": subj,
+                        "relation": rel,
+                        "object": obj,
+                    })
+            out_slots.append({"slot": slot_name, "triplets": triplets})
+        return {"slots": out_slots}
+
+    records = memory_context.get("records")
+    if isinstance(records, list):
+        # topk_graph_records is already a compact list of graph records
+        return {"records": list(records)}
+
+    return memory_context
+
+
+def _normalize_memory_only_write_mode(raw: Any) -> str:
+    mode = str(raw or "").strip().lower()
+    if mode in MEMORY_ONLY_WRITE_MODES:
+        return mode
+    return "standard"
+
+
+def _coerce_int_list(raw: Any) -> List[int]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [int(x) for x in raw]
+    return []
+
+
+def _coerce_str_list(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return []
+
+
+def _normalize_dialogue_id_str(item: Dict[str, Any]) -> str:
+    raw = item.get("dialogue_id")
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def memory_only_row_filter_sets(args: Any) -> Tuple[Optional[Set[int]], Optional[Set[str]]]:
+    """Row indices are positions in the balanced dataset list (same numbering as chunk_XXXX)."""
+    ri = _coerce_int_list(getattr(args, "memory_only_dialogue_row_indices", []))
+    di = _coerce_str_list(getattr(args, "memory_only_dialogue_ids", []))
+    idx_set: Optional[Set[int]] = set(ri) if ri else None
+    id_set: Optional[Set[str]] = set(di) if di else None
+    return idx_set, id_set
+
+
+def memory_only_should_process_row(
+    dialogue_row_index: int,
+    item: Dict[str, Any],
+    row_indices: Optional[Set[int]],
+    dialogue_ids: Optional[Set[str]],
+) -> bool:
+    if row_indices is None and dialogue_ids is None:
+        return True
+    if row_indices is not None and dialogue_row_index in row_indices:
+        return True
+    did = _normalize_dialogue_id_str(item)
+    if dialogue_ids is not None and did and did in dialogue_ids:
+        return True
+    return False
+
+
+def _dialogue_row_index_from_saved_state(row: Dict[str, Any]) -> int:
+    if "_validation_dialogue_row_index" in row:
+        return int(row["_validation_dialogue_row_index"])
+    if "dialogue_row_index" in row:
+        return int(row["dialogue_row_index"])
+    return -1
+
+
+def _load_json_optional(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.warning("Could not read %s: %s", path, exc)
+        return None
 
 
 # ============================================================================
@@ -266,6 +416,13 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             "input_state_dir": "",  # For final_llm_only: directory with saved memory states
             "input_answers_path": "",  # For judge_only: path to intermediate_answers.json
             "memory_only_output_suffix": "_memory_only",  # Suffix for memory_only output dirs
+            "memory_only_write_mode": "standard",  # standard | single_path_only
+            "final_llm_memory_strategies": [],  # Optional strategies list for final_llm_only
+            "final_llm_memory_payload_mode": "with_metadata",  # with_metadata | triplets_only
+            # memory_only: process only these rows (balanced-dataset indices → chunk_XXXX) and/or dialogue_id strings.
+            # Empty lists = process all rows. Merges into existing memory_only_states.json / giga_memory_validation_logs.json.
+            "memory_only_dialogue_row_indices": [],
+            "memory_only_dialogue_ids": [],
         },
     }
 
@@ -341,6 +498,19 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.input_state_dir = val_mode.get("input_state_dir", "")
     args.input_answers_path = val_mode.get("input_answers_path", "")
     args.memory_only_output_suffix = val_mode.get("memory_only_output_suffix", "_memory_only")
+    args.memory_only_write_mode = _normalize_memory_only_write_mode(
+        val_mode.get("memory_only_write_mode", "standard")
+    )
+    args.final_llm_memory_strategies = _normalize_memory_strategies(
+        val_mode.get("final_llm_memory_strategies", [])
+    )
+    args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
+        val_mode.get("final_llm_memory_payload_mode", "with_metadata")
+    )
+    args.memory_only_dialogue_row_indices = _coerce_int_list(
+        val_mode.get("memory_only_dialogue_row_indices")
+    )
+    args.memory_only_dialogue_ids = _coerce_str_list(val_mode.get("memory_only_dialogue_ids"))
 
     # GigaMemory config (for building CLI overrides)
     args.config = "DST_memory/run_config.json"  # Base GigaMemory config
@@ -361,7 +531,10 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         "ragu_embedder_model", "ttl_mode", "ttl_semantic_dedup_enabled",
         "ttl_semantic_dedup_threshold", "slot_context_enabled",
         "slot_context_max_facts", "triplet_deletion_mode", "deletion_use_pymorphy",
-        "conflict_allow_multi_relation_same_object", "slot_model_enable_thinking",
+        "conflict_allow_multi_relation_same_object", "conflict_rule_same_relation_updates",
+        "slot_model_enable_thinking",
+        "slot_llm_inject_no_think_prompt", "slot_llm_lm_format_enforcer",
+        "slot_llm_load_quantization",
         "slot_fallback_on_no_slots", "triplet_fallback_on_empty", "prompt_language",
         "unload_models_before_final_llm", "use_dataset_datetime", "force_infinite_ttl",
         "llm_enable_thinking",
@@ -388,6 +561,31 @@ def setup_logging(level: str, log_file: Optional[str] = None) -> None:
 
 
 logger = logging.getLogger(__name__)
+
+# Keys in validation JSON ``shared`` that belong only to validate_longmemeval routing/logging,
+# not to DST ``PipelineConfig`` / ``DST_memory/run_config.json`` ``shared``.
+_VALIDATION_SHARED_RESERVED_KEYS = frozenset(
+    {
+        "dataset_path",
+        "output_dir",
+        "num_items_per_type",
+        "question_types",
+        "log_level",
+        "log_file",
+        "save_memory_state",
+        "save_intermediate",
+    }
+)
+
+
+def _pipeline_overrides_from_validation_shared(shared: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extra pipeline keys placed alongside dataset/output params in validation ``shared``.
+
+    They merge into ``build_pipeline_config`` overrides after ``DST_memory/run_config.json``
+    but before ``giga_memory`` / ``--gm-*`` (which win on key collision).
+    """
+    return {k: v for k, v in shared.items() if k not in _VALIDATION_SHARED_RESERVED_KEYS}
 
 
 def _effective_prompt_token_budget(max_context_tokens: int, max_completion_tokens: int) -> int:
@@ -1073,7 +1271,13 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         conflict_allow_multi_relation_same_object=shared.get(
             "conflict_allow_multi_relation_same_object", True
         ),
+        conflict_rule_same_relation_updates=bool(
+            shared.get("conflict_rule_same_relation_updates", True)
+        ),
         slot_model_enable_thinking=shared.get("slot_model_enable_thinking", False),
+        slot_llm_inject_no_think_prompt=bool(shared.get("slot_llm_inject_no_think_prompt", True)),
+        slot_llm_lm_format_enforcer=bool(shared.get("slot_llm_lm_format_enforcer", False)),
+        slot_llm_load_quantization=str(shared.get("slot_llm_load_quantization", "none") or "none"),
         slot_fallback_on_no_slots=shared.get("slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=shared.get("triplet_fallback_on_empty", True),
         prompt_language=shared.get("prompt_language", "ru"),
@@ -1298,6 +1502,8 @@ class AccumulatedAnswer:
     question_type: str
     predicted_answer: str
     memory_context: Dict[str, Any]
+    memory_strategy: str = ""
+    dialogue_context_chars: int = 0
     final_llm_prompt_chars_before_clamp: int = 0
     final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
@@ -1333,6 +1539,8 @@ class IntermediateAnswer:
     predicted_answer: str
     memory_context: Dict[str, Any]
     memory_state_path: str  # Path for Memory Hit Rate calculation
+    memory_strategy: str = ""
+    dialogue_context_chars: int = 0
     final_llm_prompt_chars_before_clamp: int = 0
     final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
@@ -1370,6 +1578,8 @@ def build_judge_statistics_export(
     final_llm_calls = int(stats.get("final_llm_calls", 0) or 0)
     chars_before_total = int(stats.get("final_llm_prompt_chars_before_clamp_total", 0) or 0)
     chars_after_total = int(stats.get("final_llm_prompt_chars_after_clamp_total", 0) or 0)
+    dialogue_chars_total = int(stats.get("dialogue_context_chars_total", 0) or 0)
+    dialogue_chars_count = int(stats.get("dialogue_context_chars_count", 0) or 0)
 
     mhe_by_type: Dict[str, Any] = {}
     for qt, st in by_type_raw.items():
@@ -1406,12 +1616,52 @@ def build_judge_statistics_export(
             "before_clamp_avg": (chars_before_total / final_llm_calls) if final_llm_calls > 0 else 0.0,
             "after_clamp_avg": (chars_after_total / final_llm_calls) if final_llm_calls > 0 else 0.0,
         },
+        "dialogue_context_chars": {
+            "count": dialogue_chars_count,
+            "total": dialogue_chars_total,
+            "avg": (dialogue_chars_total / dialogue_chars_count) if dialogue_chars_count > 0 else 0.0,
+        },
     }
 
 
 def _is_full_dst_pipeline(pipeline: Any) -> bool:
     if pipeline is None:
         return False
+
+
+def _enable_memory_only_single_path_mode(pipeline: Any) -> None:
+    """
+    Force memory writes to use single-path extraction only in validation memory_only.
+
+    Implementation detail: monkey-patch slot selector to return no slots, which
+    deterministically activates existing DSTManager single-pass fallback path.
+    """
+    if not _is_full_dst_pipeline(pipeline):
+        logger.warning("[MemoryOnly] single_path_only requested, but pipeline is not DSTMemoryPipeline")
+        return
+    dst = getattr(pipeline, "dst", None)
+    if dst is None:
+        logger.warning("[MemoryOnly] single_path_only requested, but pipeline.dst is missing")
+        return
+    slot_selector = getattr(dst, "slot_selector", None)
+    if slot_selector is None or not hasattr(slot_selector, "select_slots"):
+        logger.warning("[MemoryOnly] single_path_only requested, but slot_selector is missing")
+        return
+    if getattr(slot_selector, "_validation_single_path_forced", False):
+        return
+
+    original = slot_selector.select_slots
+
+    def _select_slots_single_path_only(_user_text: str) -> List[str]:
+        return []
+
+    setattr(slot_selector, "_validation_original_select_slots", original)
+    slot_selector.select_slots = _select_slots_single_path_only  # type: ignore[method-assign]
+    setattr(slot_selector, "_validation_single_path_forced", True)
+    # Ensure fallback route is enabled.
+    if hasattr(dst, "slot_fallback_on_no_slots"):
+        dst.slot_fallback_on_no_slots = True
+    logger.info("[MemoryOnly] single_path_only enabled: slot selection bypassed, using only single-pass extraction")
     try:
         from dst_memory.core.pipeline import DSTMemoryPipeline
 
@@ -1447,6 +1697,8 @@ class BatchProcessor:
         validation_mode: str = "full",
         input_state_dir: Optional[Path] = None,
         input_answers_path: Optional[Path] = None,
+        final_llm_memory_strategies: Optional[List[str]] = None,
+        final_llm_memory_payload_mode: str = "with_metadata",
         save_giga_memory_logs: bool = True,
     ):
         self.pipeline = pipeline
@@ -1462,6 +1714,10 @@ class BatchProcessor:
         self.input_state_dir = input_state_dir
         self.input_answers_path = input_answers_path
         self.save_giga_memory_logs = save_giga_memory_logs
+        cfg_strategy = getattr(self.pipeline.config, "memory_strategy", "full_graph_json") if self.pipeline else "full_graph_json"
+        selected = _normalize_memory_strategies(final_llm_memory_strategies or [])
+        self.final_llm_memory_strategies = selected or [cfg_strategy]
+        self.final_llm_memory_payload_mode = _normalize_memory_payload_mode(final_llm_memory_payload_mode)
         # When local judge follows local final LLM on full DST pipeline, defer slot reload until judge finishes.
         self._pending_slot_reload_after_judge = False
 
@@ -1488,6 +1744,8 @@ class BatchProcessor:
             "final_llm_calls": 0,
             "final_llm_prompt_chars_before_clamp_total": 0,
             "final_llm_prompt_chars_after_clamp_total": 0,
+            "dialogue_context_chars_total": 0,
+            "dialogue_context_chars_count": 0,
             "memory_hit": 0,
             "memory_miss": 0,
             "by_type": {
@@ -1502,6 +1760,30 @@ class BatchProcessor:
                 for qt in QUESTION_TYPES.keys()
             },
         }
+
+    def _capture_memory_state_for_all_strategies(
+        self,
+        dialogue_id: str,
+        question: str,
+    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        """
+        Capture answer_without_final_llm payload per memory strategy.
+
+        This is used in memory_only mode so final_llm_only can later switch
+        strategy without rebuilding memory.
+        """
+        details_by_strategy: Dict[str, Dict[str, Any]] = {}
+        contexts: Dict[str, Dict[str, Any]] = {}
+        original = getattr(self.pipeline.config, "memory_strategy", "full_graph_json")
+        try:
+            for strategy in MEMORY_STRATEGIES:
+                self.pipeline.config.memory_strategy = strategy
+                details = self.pipeline.answer_without_final_llm(dialogue_id, question)
+                details_by_strategy[strategy] = details
+                contexts[strategy] = details.get("memory_context_for_final_llm", {}) or {}
+        finally:
+            self.pipeline.config.memory_strategy = original
+        return details_by_strategy, contexts
 
     def process_single_item(
         self,
@@ -1556,6 +1838,15 @@ class BatchProcessor:
         clock_disp = optional_clock_display_for_validation(use_dataset_dt, qdate)
 
         user_messages = extract_user_messages_from_sessions(sessions)
+        dialogue_context_chars = 0
+        for session in sessions:
+            if not isinstance(session, list):
+                continue
+            for turn in session:
+                if not isinstance(turn, dict):
+                    continue
+                content = str(turn.get("content") or "")
+                dialogue_context_chars += len(content)
 
         logger.info(
             "[Batch] Row %d: one memory pass, %d question(s), %d sessions, %d user messages, type=%s",
@@ -1639,7 +1930,15 @@ class BatchProcessor:
                 (question[:200] + "…") if len(question) > 200 else question,
             )
 
-            answer_details = self.pipeline.answer_without_final_llm(dialogue_id, question)
+            strategy_details: Dict[str, Dict[str, Any]] = {}
+            if self.validation_mode == "memory_only":
+                strategy_details, _ = self._capture_memory_state_for_all_strategies(
+                    dialogue_id, question
+                )
+                current_strategy = str(getattr(self.pipeline.config, "memory_strategy", "full_graph_json"))
+                answer_details = strategy_details.get(current_strategy) or strategy_details.get("full_graph_json", {})
+            else:
+                answer_details = self.pipeline.answer_without_final_llm(dialogue_id, question)
 
             if self.save_giga_memory_logs:
                 self.dialogue_logs.append({
@@ -1660,6 +1959,22 @@ class BatchProcessor:
                 })
 
             if self.validation_mode == "memory_only":
+                strategy_state_by_strategy: Dict[str, Dict[str, Any]] = {}
+                for strategy, details in strategy_details.items():
+                    mc = details.get("memory_context_for_final_llm", {}) or {}
+                    selected_slots = []
+                    if isinstance(mc, dict):
+                        for s in (mc.get("slots") or []):
+                            if isinstance(s, dict):
+                                sn = str(s.get("slot") or "").strip()
+                                if sn:
+                                    selected_slots.append(sn)
+                    strategy_state_by_strategy[strategy] = {
+                        "selected_slot_names": selected_slots,
+                        "memory_gate": details.get("memory_gate", {}),
+                        "topk_records": list((mc.get("records") if isinstance(mc, dict) else []) or []),
+                        "use_memory": details.get("use_memory", False),
+                    }
                 memory_state = MemoryOnlyState(
                     global_index=flat_gix,
                     dialogue_id=dialogue_id,
@@ -1677,6 +1992,7 @@ class BatchProcessor:
                     question_date=qdate,
                     pipeline_state={
                         "write_logs": write_logs,
+                        "dialogue_context_chars": dialogue_context_chars,
                         "memory_slots": answer_details.get("memory_slots", []),
                         "memory_gate": answer_details.get("memory_gate", {}),
                         "retrieved": answer_details.get("retrieved", []),
@@ -1685,6 +2001,7 @@ class BatchProcessor:
                         "deleted_facts_with_reasons": answer_details.get("deleted_facts_with_reasons", []),
                         "use_memory": answer_details.get("use_memory", False),
                         "memory_context": answer_details.get("memory_context_for_final_llm", {}),
+                        "strategy_state_by_strategy": strategy_state_by_strategy,
                         "final_llm_prompt": answer_details.get("final_llm_prompt", []),
                     },
                 )
@@ -1705,6 +2022,7 @@ class BatchProcessor:
                     final_llm_clock_display=clock_disp,
                     pipeline_state={
                         "write_logs": write_logs,
+                        "dialogue_context_chars": dialogue_context_chars,
                         "memory_slots": answer_details.get("memory_slots", []),
                         "memory_gate": answer_details.get("memory_gate", {}),
                         "retrieved": answer_details.get("retrieved", []),
@@ -1725,10 +2043,22 @@ class BatchProcessor:
 
         return None  # Result will be added by batch processing
 
-    def _write_memory_only_states(self) -> None:
-        """Write memory_only states to disk for later processing."""
-        output_path = self.persistence.output_dir / "memory_only_states.json"
-        states_data = []
+    def _memory_only_active_row_indices(self) -> Set[int]:
+        """Row indices present in this run's in-memory buffers (merge replaces these in on-disk JSON)."""
+        out: Set[int] = set()
+        if self.validation_mode != "memory_only":
+            return out
+        for s in self.memory_only_states:
+            if s.dialogue_row_index is not None:
+                out.add(int(s.dialogue_row_index))
+        for d in self.dialogue_logs:
+            ri = d.get("dialogue_row_index")
+            if ri is not None:
+                out.add(int(ri))
+        return out
+
+    def _memory_only_states_to_rows(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
         for state in self.memory_only_states:
             row: Dict[str, Any] = {
                 "global_index": state.global_index,
@@ -1739,6 +2069,7 @@ class BatchProcessor:
                 "question_type": state.question_type,
                 "memory_state_path": state.memory_state_path,
                 "ragu_storage_path": state.ragu_storage_path,
+                "dialogue_context_chars": int((state.pipeline_state or {}).get("dialogue_context_chars", 0) or 0),
                 "pipeline_state": state.pipeline_state,
             }
             if state.dataset_ordinal is not None:
@@ -1747,10 +2078,40 @@ class BatchProcessor:
                 row["_validation_dialogue_row_index"] = state.dialogue_row_index
             if state.question_date is not None:
                 row["question_date"] = state.question_date
-            states_data.append(row)
+            rows.append(row)
+        return rows
+
+    def _write_memory_only_states(self) -> None:
+        """Write memory_only states to disk for later processing."""
+        output_path = self.persistence.output_dir / "memory_only_states.json"
+        new_rows = self._memory_only_states_to_rows()
+        replaced_rows = self._memory_only_active_row_indices()
+        prev_blob = _load_json_optional(output_path)
+        prev_states = list((prev_blob or {}).get("states") or []) if prev_blob else []
+        kept = [
+            s for s in prev_states
+            if _dialogue_row_index_from_saved_state(s) not in replaced_rows
+        ]
+        merged = kept + new_rows
+        merged.sort(
+            key=lambda r: (
+                _dialogue_row_index_from_saved_state(r),
+                int(r.get("global_index", 0)),
+                str(r.get("question_id", "")),
+            ),
+        )
+        timing_stats = self._timing.get_stats() if self._timing is not None else {}
         _atomic_write_validation_json(output_path, {
             "metadata": self._validation_metadata,
-            "states": states_data,
+            "timing": timing_stats,
+            "statistics": {
+                "states_count": len(merged),
+                "total_user_message_writes": int(timing_stats.get("total_user_message_writes", 0) or 0),
+                "avg_write_to_memory_seconds": float(
+                    (timing_stats.get("time_per_user_message") or {}).get("mean", 0.0) or 0.0
+                ),
+            },
+            "states": merged,
         })
 
     def _flush_final_llm_batch(self):
@@ -1789,10 +2150,14 @@ class BatchProcessor:
             predicted_answer = "[no_final_llm]"
             prompt_chars_before = 0
             prompt_chars_after = 0
+            dialogue_context_chars = int(acc.pipeline_state.get("dialogue_context_chars", 0) or 0)
 
             if self.pipeline.config.llm_mode != "stub":
                 # Rebuild memory context
-                memory_context = acc.pipeline_state["memory_context"]
+                memory_context = _memory_context_for_payload_mode(
+                    acc.pipeline_state["memory_context"],
+                    self.final_llm_memory_payload_mode,
+                )
                 recent_pairs = list(acc.pipeline_state.get("recent_pairs") or [])
 
                 # Call final LLM
@@ -1828,7 +2193,8 @@ class BatchProcessor:
                 reference_answer=acc.reference_answer,
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
-                memory_context=acc.pipeline_state["memory_context"],
+                memory_context=memory_context if self.pipeline.config.llm_mode != "stub" else acc.pipeline_state["memory_context"],
+                dialogue_context_chars=dialogue_context_chars,
                 final_llm_prompt_chars_before_clamp=prompt_chars_before,
                 final_llm_prompt_chars_after_clamp=prompt_chars_after,
                 dataset_ordinal=acc.dataset_ordinal,
@@ -1845,8 +2211,9 @@ class BatchProcessor:
                 reference_answer=acc.reference_answer,
                 question_type=acc.question_type,
                 predicted_answer=predicted_answer,
-                memory_context=acc.pipeline_state["memory_context"],
+                memory_context=memory_context if self.pipeline.config.llm_mode != "stub" else acc.pipeline_state["memory_context"],
                 memory_state_path="",  # Not available in full mode
+                dialogue_context_chars=dialogue_context_chars,
                 final_llm_prompt_chars_before_clamp=prompt_chars_before,
                 final_llm_prompt_chars_after_clamp=prompt_chars_after,
                 dataset_ordinal=acc.dataset_ordinal,
@@ -1941,78 +2308,118 @@ class BatchProcessor:
                 memory_state_path = state_data.get("memory_state_path", "")
                 qd = state_data.get("question_date")
 
-                # Get memory context from saved state
-                memory_context = pipeline_state.get("memory_context", {})
-                recent_pairs = list(pipeline_state.get("recent_pairs") or [])
-
-                predicted_answer = "[no_final_llm]"
-                prompt_chars_before = 0
-                prompt_chars_after = 0
-
                 clock = optional_clock_display_for_validation(
                     bool(getattr(self.pipeline.config, "use_dataset_datetime", False)),
                     qd,
                 )
-
-                if self.pipeline.config.llm_mode != "stub":
-                    try:
-                        predicted_answer = self.pipeline.final_llm.generate(
-                            question=question,
-                            memory_context=memory_context,
-                            recent_pairs=recent_pairs,
-                            clock_display=clock,
-                        )
-                        char_stats = self.pipeline.final_llm.get_last_prompt_char_stats()
-                        prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
-                        prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
-                        self.stats["final_llm_calls"] += 1
-                        self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
-                        self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
-                        logger.info(
-                            "[FinalLLMOnly] Final LLM answer for item %d: %s...",
-                            global_index, predicted_answer[:100]
-                        )
-                    except Exception as e:
-                        logger.error(
-                            "[FinalLLMOnly] Final LLM failed for item %d: %s",
-                            global_index, e
-                        )
-                        predicted_answer = f"[error: {e}]"
-                        self.stats["errors_final_llm"] += 1
-
-                # Create intermediate answer
-                intermediate = IntermediateAnswer(
-                    global_index=global_index,
-                    question_id=question_id,
-                    question=question,
-                    reference_answer=reference_answer,
-                    question_type=question_type,
-                    predicted_answer=predicted_answer,
-                    memory_context=memory_context,
-                    memory_state_path=memory_state_path,
-                    final_llm_prompt_chars_before_clamp=prompt_chars_before,
-                    final_llm_prompt_chars_after_clamp=prompt_chars_after,
-                    dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
-                    dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
-                    question_date=qd,
+                recent_pairs = list(pipeline_state.get("recent_pairs") or [])
+                strategy_state_map = (
+                    pipeline_state.get("strategy_state_by_strategy")
+                    or {}
                 )
-                self.intermediate_answers.append(intermediate)
+                legacy_context = pipeline_state.get("memory_context", {}) or {}
+                full_context = self._load_memory_context_from_state(memory_state_path) or legacy_context
+                dialogue_context_chars = int(pipeline_state.get("dialogue_context_chars", 0) or 0)
 
-                # Also add to answer buffer for judge
-                acc_answer = AccumulatedAnswer(
-                    global_index=global_index,
-                    question_id=question_id,
-                    question=question,
-                    reference_answer=reference_answer,
-                    question_type=question_type,
-                    predicted_answer=predicted_answer,
-                    memory_context=memory_context,
-                    final_llm_prompt_chars_before_clamp=prompt_chars_before,
-                    final_llm_prompt_chars_after_clamp=prompt_chars_after,
-                    dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
-                    dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
-                )
-                self.answer_buffer.append(acc_answer)
+                for strategy in self.final_llm_memory_strategies:
+                    if strategy == "full_graph_json":
+                        memory_context = full_context
+                    elif strategy == "relevant_slots_full":
+                        slot_state = (strategy_state_map.get("relevant_slots_full") or {})
+                        slots_raw = slot_state.get("selected_slot_names", [])
+                        selected_slots = set()
+                        for s in slots_raw:
+                            if isinstance(s, dict):
+                                sn = str(s.get("slot") or "").strip()
+                            else:
+                                sn = str(s or "").strip()
+                            if sn:
+                                selected_slots.add(sn)
+                        if selected_slots and isinstance(full_context, dict):
+                            memory_context = {
+                                "slots": [
+                                    x for x in (full_context.get("slots") or [])
+                                    if str((x or {}).get("slot", "")).strip() in selected_slots
+                                ]
+                            }
+                        else:
+                            memory_context = full_context
+                    elif strategy == "topk_graph_records":
+                        topk_state = (strategy_state_map.get("topk_graph_records") or {})
+                        retrieved = list(topk_state.get("topk_records", []) or [])
+                        k = int(getattr(self.pipeline.config, "graph_top_k_records", 20) or 20)
+                        memory_context = {"records": retrieved[: max(0, k)]}
+                    else:
+                        memory_context = legacy_context
+                    memory_context = _memory_context_for_payload_mode(
+                        memory_context,
+                        self.final_llm_memory_payload_mode,
+                    )
+                    predicted_answer = "[no_final_llm]"
+                    prompt_chars_before = 0
+                    prompt_chars_after = 0
+
+                    if self.pipeline.config.llm_mode != "stub":
+                        try:
+                            predicted_answer = self.pipeline.final_llm.generate(
+                                question=question,
+                                memory_context=memory_context,
+                                recent_pairs=recent_pairs,
+                                clock_display=clock,
+                            )
+                            char_stats = self.pipeline.final_llm.get_last_prompt_char_stats()
+                            prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
+                            prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
+                            self.stats["final_llm_calls"] += 1
+                            self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
+                            self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
+                            logger.info(
+                                "[FinalLLMOnly] Final LLM answer for item %d strategy=%s: %s...",
+                                global_index, strategy, predicted_answer[:100]
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "[FinalLLMOnly] Final LLM failed for item %d strategy=%s: %s",
+                                global_index, strategy, e
+                            )
+                            predicted_answer = f"[error: {e}]"
+                            self.stats["errors_final_llm"] += 1
+
+                    intermediate = IntermediateAnswer(
+                        global_index=global_index,
+                        question_id=question_id,
+                        question=question,
+                        reference_answer=reference_answer,
+                        question_type=question_type,
+                        predicted_answer=predicted_answer,
+                        memory_context=memory_context,
+                        memory_strategy=strategy,
+                        memory_state_path=memory_state_path,
+                        dialogue_context_chars=dialogue_context_chars,
+                        final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                        final_llm_prompt_chars_after_clamp=prompt_chars_after,
+                        dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
+                        dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
+                        question_date=qd,
+                    )
+                    self.intermediate_answers.append(intermediate)
+
+                    acc_answer = AccumulatedAnswer(
+                        global_index=global_index,
+                        question_id=question_id,
+                        question=question,
+                        reference_answer=reference_answer,
+                        question_type=question_type,
+                        predicted_answer=predicted_answer,
+                        memory_context=memory_context,
+                        memory_strategy=strategy,
+                        dialogue_context_chars=dialogue_context_chars,
+                        final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                        final_llm_prompt_chars_after_clamp=prompt_chars_after,
+                        dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
+                        dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
+                    )
+                    self.answer_buffer.append(acc_answer)
 
             # Write intermediate answers after each batch
             self._write_intermediate_answers()
@@ -2040,41 +2447,59 @@ class BatchProcessor:
 
     def _write_intermediate_answers(self) -> None:
         """Write intermediate answers to disk for later judge processing."""
-        output_path = self.persistence.output_dir / "intermediate_answers.json"
-        answers_data = []
+        grouped: Dict[str, List[IntermediateAnswer]] = {}
         for ans in self.intermediate_answers:
-            row_a: Dict[str, Any] = {
-                "global_index": ans.global_index,
-                "question_id": ans.question_id,
-                "question": ans.question,
-                "reference_answer": ans.reference_answer,
-                "question_type": ans.question_type,
-                "predicted_answer": ans.predicted_answer,
-                "memory_context": ans.memory_context,
-                "memory_state_path": ans.memory_state_path,
-                "final_llm_prompt_chars_before_clamp": ans.final_llm_prompt_chars_before_clamp,
-                "final_llm_prompt_chars_after_clamp": ans.final_llm_prompt_chars_after_clamp,
-            }
-            if ans.dataset_ordinal is not None:
-                row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
-            if ans.dialogue_row_index is not None:
-                row_a["_validation_dialogue_row_index"] = ans.dialogue_row_index
-            if ans.question_date is not None:
-                row_a["question_date"] = ans.question_date
-            answers_data.append(row_a)
-        _atomic_write_validation_json(output_path, {
-            "metadata": self._validation_metadata,
-            "statistics": {
-                "final_llm_calls": int(self.stats.get("final_llm_calls", 0)),
-                "final_llm_prompt_chars_before_clamp_total": int(
-                    self.stats.get("final_llm_prompt_chars_before_clamp_total", 0)
-                ),
-                "final_llm_prompt_chars_after_clamp_total": int(
-                    self.stats.get("final_llm_prompt_chars_after_clamp_total", 0)
-                ),
-            },
-            "answers": answers_data,
-        })
+            strategy = ans.memory_strategy or "full_graph_json"
+            grouped.setdefault(strategy, []).append(ans)
+
+        for strategy, answers in grouped.items():
+            output_path = self.persistence.output_dir / strategy / "intermediate_answers.json"
+            answers_data = []
+            for ans in answers:
+                row_a: Dict[str, Any] = {
+                    "global_index": ans.global_index,
+                    "question_id": ans.question_id,
+                    "question": ans.question,
+                    "reference_answer": ans.reference_answer,
+                    "question_type": ans.question_type,
+                    "predicted_answer": ans.predicted_answer,
+                    "memory_context": ans.memory_context,
+                    "memory_strategy": strategy,
+                    "dialogue_context_chars": int(ans.dialogue_context_chars or 0),
+                    "memory_state_path": ans.memory_state_path,
+                    "final_llm_prompt_chars_before_clamp": ans.final_llm_prompt_chars_before_clamp,
+                    "final_llm_prompt_chars_after_clamp": ans.final_llm_prompt_chars_after_clamp,
+                }
+                if ans.dataset_ordinal is not None:
+                    row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
+                if ans.dialogue_row_index is not None:
+                    row_a["_validation_dialogue_row_index"] = ans.dialogue_row_index
+                if ans.question_date is not None:
+                    row_a["question_date"] = ans.question_date
+                answers_data.append(row_a)
+            _atomic_write_validation_json(output_path, {
+                "metadata": {
+                    **(self._validation_metadata or {}),
+                    "memory_strategy": strategy,
+                },
+                "statistics": {
+                    "answers_count": len(answers_data),
+                    "dialogue_context_chars_total": int(sum(int(a.dialogue_context_chars or 0) for a in answers)),
+                    "dialogue_context_chars_avg": (
+                        float(sum(int(a.dialogue_context_chars or 0) for a in answers) / len(answers))
+                        if answers
+                        else 0.0
+                    ),
+                    "final_llm_calls_total": int(self.stats.get("final_llm_calls", 0)),
+                    "final_llm_prompt_chars_before_clamp_total": int(
+                        self.stats.get("final_llm_prompt_chars_before_clamp_total", 0)
+                    ),
+                    "final_llm_prompt_chars_after_clamp_total": int(
+                        self.stats.get("final_llm_prompt_chars_after_clamp_total", 0)
+                    ),
+                },
+                "answers": answers_data,
+            })
 
     def _flush_judge_batch(self):
         """Process accumulated answers through judge."""
@@ -2164,6 +2589,8 @@ class BatchProcessor:
             "reference_answer": acc.reference_answer,
             "predicted_answer": acc.predicted_answer,
             "question_type": acc.question_type,
+            "memory_strategy": acc.memory_strategy,
+            "dialogue_context_chars": int(acc.dialogue_context_chars or 0),
             "score": score,
             "reasoning": reasoning,
             "judge_error": judge_error,
@@ -2182,6 +2609,8 @@ class BatchProcessor:
         # Update stats
         self.stats["total"] += 1
         self.stats["total_score"] += score
+        self.stats["dialogue_context_chars_total"] += int(acc.dialogue_context_chars or 0)
+        self.stats["dialogue_context_chars_count"] += 1
         if judge_error:
             self.stats["errors_judge"] += 1
 
@@ -2280,6 +2709,11 @@ class BatchProcessor:
                     states_map[global_index] = {
                         "memory_context": memory_context,
                         "memory_state_path": state.get("memory_state_path", ""),
+                        "dialogue_context_chars": int(
+                            state.get("dialogue_context_chars")
+                            or (pipeline_state.get("dialogue_context_chars", 0) if isinstance(pipeline_state, dict) else 0)
+                            or 0
+                        ),
                     }
         except Exception as e:
             logger.warning("[JudgeOnly] Failed to load memory states map: %s", e)
@@ -2327,6 +2761,7 @@ class BatchProcessor:
                 # input_state_dir only fills gaps — avoids mismatched runs overwriting context.
                 memory_context = ans_data.get("memory_context") or {}
                 memory_state_path = ans_data.get("memory_state_path", "")
+                dialogue_context_chars = int(ans_data.get("dialogue_context_chars", 0) or 0)
 
                 if self.input_state_dir and self.calculate_memory_hit_rate:
                     map_data = memory_states_map.get(global_index)
@@ -2340,6 +2775,8 @@ class BatchProcessor:
                             )
                         if not memory_state_path:
                             memory_state_path = map_data.get("memory_state_path", "") or memory_state_path
+                        if not dialogue_context_chars:
+                            dialogue_context_chars = int(map_data.get("dialogue_context_chars", 0) or 0)
                 
                 acc = AccumulatedAnswer(
                     global_index=global_index,
@@ -2349,6 +2786,8 @@ class BatchProcessor:
                     question_type=ans_data.get("question_type", ""),
                     predicted_answer=ans_data["predicted_answer"],
                     memory_context=memory_context,
+                    memory_strategy=str(ans_data.get("memory_strategy", "") or ""),
+                    dialogue_context_chars=dialogue_context_chars,
                     final_llm_prompt_chars_before_clamp=int(
                         ans_data.get("final_llm_prompt_chars_before_clamp", 0) or 0
                     ),
@@ -2391,9 +2830,29 @@ class BatchProcessor:
 
     def _write_giga_memory_dialogue_logs(self) -> None:
         """Write verbose per-dialogue logs (DST_memory pipeline test *_logs.json style)."""
-        if not self.save_giga_memory_logs or not self.dialogue_logs:
+        if not self.save_giga_memory_logs:
             return
         path = self.persistence.output_dir / "giga_memory_validation_logs.json"
+        replaced_rows = self._memory_only_active_row_indices() if self.validation_mode == "memory_only" else set()
+        prev_blob = _load_json_optional(path)
+        prev_dialogues = list((prev_blob or {}).get("dialogues") or []) if prev_blob else []
+        if self.validation_mode == "memory_only" and replaced_rows:
+            kept = [
+                d for d in prev_dialogues
+                if int(d.get("dialogue_row_index", -1)) not in replaced_rows
+            ]
+            merged_dialogues = kept + list(self.dialogue_logs)
+        else:
+            merged_dialogues = list(self.dialogue_logs) if self.dialogue_logs else prev_dialogues
+        if not merged_dialogues:
+            return
+        merged_dialogues.sort(
+            key=lambda d: (
+                int(d.get("dialogue_row_index", 0)),
+                int(d.get("question_index_in_row", 0)),
+                int(d.get("global_index", 0)),
+            ),
+        )
         _atomic_write_validation_json(
             path,
             {
@@ -2402,7 +2861,7 @@ class BatchProcessor:
                     "Verbose per-dialogue logs: write_logs + answer_without_final_llm "
                     "(same information as DST_memory pipeline test *_logs.json)."
                 ),
-                "dialogues": self.dialogue_logs,
+                "dialogues": merged_dialogues,
             },
         )
         logger.info("Saved GigaMemory validation logs: %s", path)
@@ -2519,6 +2978,12 @@ def run_validation(args: argparse.Namespace) -> None:
     logger.info("  Calculate memory hit rate: %s", args.calculate_memory_hit_rate)
     logger.info("  Judge mode: %s", args.judge_mode)
     logger.info("  GigaMemory config: %s", args.config)
+    logger.info("  final_llm_memory_strategies: %s", getattr(args, "final_llm_memory_strategies", []))
+    logger.info("  memory_only_write_mode: %s", getattr(args, "memory_only_write_mode", "standard"))
+    logger.info(
+        "  final_llm_memory_payload_mode: %s",
+        getattr(args, "final_llm_memory_payload_mode", "with_metadata"),
+    )
     logger.info(
         "  use_dataset_datetime: %s",
         getattr(args, "gm_use_dataset_datetime", None),
@@ -2527,6 +2992,9 @@ def run_validation(args: argparse.Namespace) -> None:
         "  force_infinite_ttl: %s",
         getattr(args, "gm_force_infinite_ttl", None),
     )
+    ri_f, id_f = memory_only_row_filter_sets(args)
+    if ri_f is not None or id_f is not None:
+        logger.info("  memory_only row filter: indices=%s dialogue_ids=%s", ri_f, id_f)
 
     # Mode-specific validation
     if args.validation_mode == "final_llm_only" and not args.input_state_dir:
@@ -2562,6 +3030,15 @@ def run_validation(args: argparse.Namespace) -> None:
         "timestamp": run_timestamp,
         "input_state_dir": args.input_state_dir or "",
         "input_answers_path": args.input_answers_path or "",
+        "memory_only_write_mode": str(getattr(args, "memory_only_write_mode", "standard")),
+        "final_llm_memory_strategies": list(getattr(args, "final_llm_memory_strategies", []) or []),
+        "final_llm_memory_payload_mode": str(
+            getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+        ),
+        "memory_only_dialogue_row_indices": list(
+            getattr(args, "memory_only_dialogue_row_indices", []) or []
+        ),
+        "memory_only_dialogue_ids": list(getattr(args, "memory_only_dialogue_ids", []) or []),
     }
 
     # Initialize persistence
@@ -2588,11 +3065,22 @@ def run_validation(args: argparse.Namespace) -> None:
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
     pipeline = None
     if args.validation_mode in ("full", "memory_only", "final_llm_only"):
-        cli_overrides = build_cli_overrides(args)
+        cli_overrides = dict(getattr(args, "_validation_shared_pipeline_overrides", {}) or {})
+        cli_overrides.update(build_cli_overrides(args))
+        if cli_overrides:
+            logger.info(
+                "  DST pipeline overrides (validation shared + giga_memory/--gm-*): %s",
+                cli_overrides,
+            )
         if args.validation_mode == "final_llm_only":
             pipeline = build_final_llm_only_facade(args.config, cli_overrides)
         else:
             pipeline = build_pipeline_from_config(args.config, cli_overrides)
+            if (
+                args.validation_mode == "memory_only"
+                and str(getattr(args, "memory_only_write_mode", "standard")) == "single_path_only"
+            ):
+                _enable_memory_only_single_path_mode(pipeline)
         validation_metadata["giga_memory_memory_strategy"] = getattr(
             pipeline.config, "memory_strategy", ""
         )
@@ -2601,6 +3089,23 @@ def run_validation(args: argparse.Namespace) -> None:
             validation_metadata["pipeline_backend"] = "FinalLLMOnlyPipelineFacade"
         else:
             validation_metadata["pipeline_backend"] = "DSTMemoryPipeline"
+
+        if pipeline is not None:
+            cfg = pipeline.config
+            logger.info(
+                "  Effective DST conflict_rule_same_relation_updates: %s",
+                getattr(cfg, "conflict_rule_same_relation_updates", None),
+            )
+            logger.info(
+                "  Effective DST conflict_allow_multi_relation_same_object: %s",
+                getattr(cfg, "conflict_allow_multi_relation_same_object", None),
+            )
+            logger.info(
+                "  Effective DST slot_model_enable_thinking / inject_no_think / lm_format_enforcer: %s / %s / %s",
+                getattr(cfg, "slot_model_enable_thinking", None),
+                getattr(cfg, "slot_llm_inject_no_think_prompt", None),
+                getattr(cfg, "slot_llm_lm_format_enforcer", None),
+            )
 
     # Initialize batch processor
     batch_processor = BatchProcessor(
@@ -2616,14 +3121,24 @@ def run_validation(args: argparse.Namespace) -> None:
         validation_mode=args.validation_mode,
         input_state_dir=Path(args.input_state_dir) if args.input_state_dir else None,
         input_answers_path=Path(args.input_answers_path) if args.input_answers_path else None,
+        final_llm_memory_strategies=list(getattr(args, "final_llm_memory_strategies", []) or []),
+        final_llm_memory_payload_mode=str(
+            getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+        ),
         save_giga_memory_logs=bool(getattr(args, "save_intermediate", True)),
     )
 
     # Process each item (only for modes that need dataset processing)
     if args.validation_mode in ("full", "memory_only"):
+        row_filter_idx, row_filter_ids = memory_only_row_filter_sets(args)
         flat_q = 0
         for idx, item in enumerate(dataset):
             q_specs = normalize_question_specs(item)
+            if args.validation_mode == "memory_only" and not memory_only_should_process_row(
+                idx, item, row_filter_idx, row_filter_ids
+            ):
+                flat_q += len(q_specs)
+                continue
 
             logger.info("-" * 70)
             logger.info(
@@ -2680,7 +3195,12 @@ def run_validation(args: argparse.Namespace) -> None:
         logger.info("Final LLM Processing Complete")
         logger.info("=" * 70)
         logger.info("Output files:")
-        logger.info("  Answers: %s", persistence.output_dir / "intermediate_answers.json")
+        logger.info("  Answers by strategy:")
+        summary_strategies = list(getattr(args, "final_llm_memory_strategies", []) or [])
+        if not summary_strategies and pipeline is not None:
+            summary_strategies = [str(getattr(pipeline.config, "memory_strategy", "full_graph_json"))]
+        for strategy in summary_strategies:
+            logger.info("    %s: %s", strategy, persistence.output_dir / strategy / "intermediate_answers.json")
         logger.info(
             "  Final LLM prompt chars: before_clamp_total=%d after_clamp_total=%d calls=%d",
             int(stats.get("final_llm_prompt_chars_before_clamp_total", 0)),
@@ -2825,6 +3345,15 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if getattr(args, "gm_llm_enable_thinking", None) is not None:
         overrides["llm_enable_thinking"] = bool(args.gm_llm_enable_thinking)
 
+    qslot = getattr(args, "gm_slot_llm_load_quantization", None)
+    if qslot:
+        overrides["slot_llm_load_quantization"] = str(qslot).strip().lower()
+
+    if getattr(args, "gm_conflict_rule_same_relation_updates", None) is not None:
+        overrides["conflict_rule_same_relation_updates"] = bool(
+            args.gm_conflict_rule_same_relation_updates
+        )
+
     return overrides
 
 
@@ -2886,6 +3415,48 @@ Examples:
     mode_group.add_argument("--memory-only-output-suffix", type=str,
                            default=None,
                            help="Suffix for memory_only output dirs; omit = from config")
+    mode_group.add_argument(
+        "--memory-only-write-mode",
+        type=str,
+        default=None,
+        choices=list(MEMORY_ONLY_WRITE_MODES),
+        help="memory_only write path: standard | single_path_only",
+    )
+    mode_group.add_argument(
+        "--memory-only-dialogue-row-indices",
+        type=str,
+        default=None,
+        help=(
+            "memory_only only: comma-separated row indices in the balanced dataset "
+            "(same numbering as chunk_XXXX). Only those chunks/states are rebuilt; "
+            "existing memory_only_states.json entries for other rows are kept."
+        ),
+    )
+    mode_group.add_argument(
+        "--memory-only-dialogue-ids",
+        type=str,
+        default=None,
+        help=(
+            "memory_only only: comma-separated dialogue_id values matching dataset rows "
+            "(alternative to row indices)."
+        ),
+    )
+    mode_group.add_argument(
+        "--final-llm-memory-strategies",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated memory strategies for final_llm_only. "
+            "Allowed: full_graph_json,relevant_slots_full,topk_graph_records"
+        ),
+    )
+    mode_group.add_argument(
+        "--final-llm-memory-payload-mode",
+        type=str,
+        default=None,
+        choices=list(MEMORY_PAYLOAD_MODES),
+        help="Payload mode for memory in final LLM: with_metadata | triplets_only",
+    )
 
     # Validation parameters (override config file)
     val_group = parser.add_argument_group("Validation Config Overrides (--val-*)")
@@ -3048,6 +3619,19 @@ Examples:
     gm_group.add_argument("--gm-triplet-deletion-mode", type=str, default="",
                           choices=["", "none", "heuristic", "llm_inline", "llm_separate"],
                           help="Triplet deletion mode")
+    gm_group.add_argument(
+        "--gm-conflict-rule-same-relation-updates",
+        type=lambda x: x.lower() == "true" if x else None,
+        default=None,
+        help="Deterministic replace when same subject+relation, different object (true/false; false = LLM only)",
+    )
+    gm_group.add_argument(
+        "--gm-slot-llm-load-quantization",
+        type=str,
+        default="",
+        choices=["", "none", "8bit", "4bit"],
+        help="BitsAndBytes quant for slot/triplet local model (CUDA + bitsandbytes).",
+    )
 
     # Prompt language
     gm_group.add_argument("--gm-prompt-language", type=str, default="",
@@ -3125,6 +3709,10 @@ Examples:
         config.setdefault("giga_memory", {})
         if isinstance(config["giga_memory"], dict):
             config["giga_memory"]["llm_load_quantization"] = args.gm_llm_load_quantization
+    if getattr(args, "gm_slot_llm_load_quantization", None):
+        config.setdefault("giga_memory", {})
+        if isinstance(config["giga_memory"], dict):
+            config["giga_memory"]["slot_llm_load_quantization"] = args.gm_slot_llm_load_quantization
     if getattr(args, "gm_llm_max_context_tokens", None) is not None:
         config.setdefault("giga_memory", {})
         if isinstance(config["giga_memory"], dict):
@@ -3139,6 +3727,28 @@ Examples:
         config["validation_mode"]["input_answers_path"] = args.input_answers_path
     if args.memory_only_output_suffix is not None:
         config["validation_mode"]["memory_only_output_suffix"] = args.memory_only_output_suffix
+    if args.memory_only_write_mode is not None:
+        config["validation_mode"]["memory_only_write_mode"] = _normalize_memory_only_write_mode(
+            args.memory_only_write_mode
+        )
+    if args.final_llm_memory_strategies is not None:
+        config["validation_mode"]["final_llm_memory_strategies"] = _normalize_memory_strategies(
+            args.final_llm_memory_strategies
+        )
+    if args.final_llm_memory_payload_mode is not None:
+        config["validation_mode"]["final_llm_memory_payload_mode"] = _normalize_memory_payload_mode(
+            args.final_llm_memory_payload_mode
+        )
+    if getattr(args, "memory_only_dialogue_row_indices", None) is not None:
+        s = str(args.memory_only_dialogue_row_indices).strip()
+        config["validation_mode"]["memory_only_dialogue_row_indices"] = (
+            [int(x.strip()) for x in s.split(",") if x.strip()] if s else []
+        )
+    if getattr(args, "memory_only_dialogue_ids", None) is not None:
+        s = str(args.memory_only_dialogue_ids).strip()
+        config["validation_mode"]["memory_only_dialogue_ids"] = (
+            [x.strip() for x in s.split(",") if x.strip()] if s else []
+        )
 
     # Handle legacy args
     if args.dataset_path:
@@ -3158,8 +3768,36 @@ Examples:
     # Now parse CLI args again, using config_args as defaults
     parser.set_defaults(**vars(config_args))
     args = parser.parse_args()
+    args.final_llm_memory_strategies = _normalize_memory_strategies(
+        getattr(args, "final_llm_memory_strategies", [])
+    )
+    args.memory_only_write_mode = _normalize_memory_only_write_mode(
+        getattr(args, "memory_only_write_mode", "standard")
+    )
+    args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
+        getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+    )
+
+    _mori = getattr(args, "memory_only_dialogue_row_indices", [])
+    if isinstance(_mori, str):
+        args.memory_only_dialogue_row_indices = (
+            [int(x.strip()) for x in _mori.split(",") if x.strip()] if _mori.strip() else []
+        )
+    else:
+        args.memory_only_dialogue_row_indices = _coerce_int_list(_mori)
+    _moids = getattr(args, "memory_only_dialogue_ids", [])
+    if isinstance(_moids, str):
+        args.memory_only_dialogue_ids = (
+            [x.strip() for x in _moids.split(",") if x.strip()] if _moids.strip() else []
+        )
+    else:
+        args.memory_only_dialogue_ids = _coerce_str_list(_moids)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    args._validation_shared_pipeline_overrides = _pipeline_overrides_from_validation_shared(
+        config.get("shared") or {}
+    )
 
     run_validation(args)
 
