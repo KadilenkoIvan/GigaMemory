@@ -1,0 +1,27 @@
+services:
+  gigamemory:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Override to "cpu" for CPU-only: TORCH_EXTRA=cpu docker compose up --build
+        TORCH_EXTRA: ${TORCH_EXTRA:-cuda}
+    image: gigamemory:latest
+    volumes:
+      # Persist graph storage between runs
+      - ragu_storage:/app/DST_memory/ragu_storage
+    environment:
+      - PYTHONPATH=/app/DST_memory
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+    # GPU passthrough — remove this section for CPU-only deployments
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  ragu_storage:

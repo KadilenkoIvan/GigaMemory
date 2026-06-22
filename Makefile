@@ -84,21 +84,17 @@ smoke: ## Quick pipeline smoke-test in stub mode (no GPU/LLM)
 
 # ─── Docker ───────────────────────────────────────────────────────────────────
 
-docker-build: ## Build Docker image with CUDA support (default cu126)
-	docker build \
-		--build-arg PYTORCH_INDEX_URL=https://download.pytorch.org/whl/$(CUDA_VERSION) \
-		-t gigamemory:latest .
+docker-build: ## Build Docker image with CUDA support (default)
+	docker build --build-arg TORCH_EXTRA=cuda -t gigamemory:latest .
 
-docker-build-cpu: ## Build Docker image CPU-only (faster, for CI/testing)
-	docker build \
-		--build-arg PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu \
-		-t gigamemory:cpu .
+docker-build-cpu: ## Build Docker image CPU-only (for CI/testing)
+	docker build --build-arg TORCH_EXTRA=cpu -t gigamemory:cpu .
 
 docker-up: ## Start pipeline with docker compose (CUDA)
 	docker compose up --build
 
 docker-up-cpu: ## Start pipeline with docker compose (CPU-only)
-	PYTORCH_INDEX_URL=https://download.pytorch.org/whl/cpu docker compose up --build
+	TORCH_EXTRA=cpu docker compose up --build
 
 docker-down: ## Stop and remove containers
 	docker compose down

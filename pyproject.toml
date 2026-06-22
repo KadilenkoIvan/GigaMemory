@@ -80,16 +80,16 @@ explicit = true
 graph-ragu = { path = "./RAGU", editable = true }
 # PyTorch: CUDA wheels when [cuda] extra is requested, CPU otherwise
 torch = [
-    { index = "pytorch-cuda", marker = "extra == 'cuda'" },
-    { index = "pytorch-cpu", marker = "extra == 'cpu'" },
+    { index = "pytorch-cuda", extra = "cuda" },
+    { index = "pytorch-cpu", extra = "cpu" },
 ]
 torchvision = [
-    { index = "pytorch-cuda", marker = "extra == 'cuda'" },
-    { index = "pytorch-cpu", marker = "extra == 'cpu'" },
+    { index = "pytorch-cuda", extra = "cuda" },
+    { index = "pytorch-cpu", extra = "cpu" },
 ]
 torchaudio = [
-    { index = "pytorch-cuda", marker = "extra == 'cuda'" },
-    { index = "pytorch-cpu", marker = "extra == 'cpu'" },
+    { index = "pytorch-cuda", extra = "cuda" },
+    { index = "pytorch-cpu", extra = "cpu" },
 ]
 
 # ─── Ruff ─────────────────────────────────────────────────────────────────────
