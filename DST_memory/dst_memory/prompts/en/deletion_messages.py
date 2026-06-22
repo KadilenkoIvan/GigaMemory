@@ -9,12 +9,13 @@ Always receives current facts context.
 Slot ids in prompts are canonical English (LOCATION, WORK, …).
 Fact lines and JSON use English lemmas when prompt_language is en.
 """
+
 from __future__ import annotations
 
 import json
 from typing import Any, Dict, List
 
-_DELETION_FEWSHOTS: List[tuple[str, str, str, str]] = [
+_DELETION_FEWSHOTS: list[tuple[str, str, str, str]] = [
     (
         "LOCATION",
         "user | residence | moscow",
@@ -51,8 +52,8 @@ _DELETION_FEWSHOTS: List[tuple[str, str, str, str]] = [
 def build_deletion_messages(
     user_message: str,
     slot_name: str,
-    existing_triplets: List[str],
-) -> List[Dict[str, Any]]:
+    existing_triplets: list[str],
+) -> list[dict[str, Any]]:
     facts_block = "\n".join(existing_triplets) if existing_triplets else "(no facts)"
 
     system = (
@@ -80,13 +81,20 @@ def build_deletion_messages(
             "Which facts should be removed?"
         )
 
-    few_shots: List[Dict[str, Any]] = []
+    few_shots: list[dict[str, Any]] = []
     for fs_slot, fs_facts, fs_msg, fs_ans in _DELETION_FEWSHOTS:
-        few_shots.append({"role": "user", "content": _user_turn(fs_slot, fs_facts, fs_msg)})
+        few_shots.append(
+            {"role": "user", "content": _user_turn(fs_slot, fs_facts, fs_msg)}
+        )
         few_shots.append({"role": "assistant", "content": fs_ans})
 
     return (
         [{"role": "system", "content": system}]
         + few_shots
-        + [{"role": "user", "content": _user_turn(slot_name, facts_block, user_message)}]
+        + [
+            {
+                "role": "user",
+                "content": _user_turn(slot_name, facts_block, user_message),
+            }
+        ]
     )

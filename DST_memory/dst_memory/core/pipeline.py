@@ -1,17 +1,17 @@
+import logging
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
-import logging
 
 from ..clients.classifier import ImportanceClassifier
-from .config import PipelineConfig
-from ..triplets.conflict_client import TripletConflictClient
-from .dst_manager import DSTManager
 from ..clients.llm_client import FinalLLMClient
 from ..clients.memory_gate_client import MemoryGateClient
-from .models import Message
 from ..clients.serving import LocalHFServing
 from ..slots.slot_select_client import SlotSelectClient
+from ..triplets.conflict_client import TripletConflictClient
 from ..triplets.triplet_client import TripletExtractionClient
+from .config import PipelineConfig
+from .dst_manager import DSTManager
+from .models import Message
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class DSTMemoryPipeline:
     def __init__(
         self,
         config: PipelineConfig,
-        ragu_processor: Optional[Any] = None,
+        ragu_processor: Any | None = None,
     ):
         """
         Parameters
@@ -72,8 +72,12 @@ class DSTMemoryPipeline:
             self._slot_serving = LocalHFServing(
                 config.slot_model_path,
                 enable_thinking=config.slot_model_enable_thinking,
-                inject_no_think_prompt=getattr(config, "slot_llm_inject_no_think_prompt", True),
-                use_lm_format_enforcer=getattr(config, "slot_llm_lm_format_enforcer", False),
+                inject_no_think_prompt=getattr(
+                    config, "slot_llm_inject_no_think_prompt", True
+                ),
+                use_lm_format_enforcer=getattr(
+                    config, "slot_llm_lm_format_enforcer", False
+                ),
                 load_quantization=getattr(config, "slot_llm_load_quantization", "none"),
             )
         slot_serving = self._slot_serving
@@ -85,8 +89,12 @@ class DSTMemoryPipeline:
             max_retries=1,
             ttl_mode=config.ttl_mode,
             prompt_language=config.prompt_language,
-            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
-            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
+            parse_retry_temperature=getattr(
+                config, "llm_parse_retry_temperature", 0.65
+            ),
+            parse_retry_temperature_increment=getattr(
+                config, "llm_parse_retry_temperature_increment", 0.08
+            ),
         )
         slot_selector = SlotSelectClient(
             use_stub=config.slot_use_stub,
@@ -94,8 +102,12 @@ class DSTMemoryPipeline:
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
             prompt_language=config.prompt_language,
-            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
-            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
+            parse_retry_temperature=getattr(
+                config, "llm_parse_retry_temperature", 0.65
+            ),
+            parse_retry_temperature_increment=getattr(
+                config, "llm_parse_retry_temperature_increment", 0.08
+            ),
         )
         conflict_resolver = TripletConflictClient(
             use_stub=config.slot_use_stub,
@@ -112,13 +124,18 @@ class DSTMemoryPipeline:
 
         if config.triplet_deletion_mode == "heuristic":
             from ..triplets.negation_detector import NegationDeletionDetector
+
             negation_detector = NegationDeletionDetector(
                 use_pymorphy=config.deletion_use_pymorphy
             )
-            logger.info("NegationDeletionDetector enabled pymorphy=%s", config.deletion_use_pymorphy)
+            logger.info(
+                "NegationDeletionDetector enabled pymorphy=%s",
+                config.deletion_use_pymorphy,
+            )
 
         elif config.triplet_deletion_mode == "llm_separate":
             from ..triplets.deletion_client import TripletDeletionClient
+
             deletion_client = TripletDeletionClient(
                 use_stub=config.slot_use_stub,
                 serving=slot_serving,
@@ -151,8 +168,12 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_retries=1,
             prompt_language=config.prompt_language,
-            parse_retry_temperature=getattr(config, "llm_parse_retry_temperature", 0.65),
-            parse_retry_temperature_increment=getattr(config, "llm_parse_retry_temperature_increment", 0.08),
+            parse_retry_temperature=getattr(
+                config, "llm_parse_retry_temperature", 0.65
+            ),
+            parse_retry_temperature_increment=getattr(
+                config, "llm_parse_retry_temperature_increment", 0.08
+            ),
         )
         self.final_llm = FinalLLMClient(
             mode=config.llm_mode,
@@ -171,7 +192,9 @@ class DSTMemoryPipeline:
             max_context_tokens=getattr(config, "llm_max_context_tokens", 128 * 1024),
         )
 
-    def set_dialogue_dataset_clock(self, dialogue_id: str, question_date_raw: Any) -> None:
+    def set_dialogue_dataset_clock(
+        self, dialogue_id: str, question_date_raw: Any
+    ) -> None:
         """
         For LongMemEval rows: parse ``question_date`` once per dialogue row.
 
@@ -202,7 +225,7 @@ class DSTMemoryPipeline:
             iso,
         )
 
-    def final_llm_clock_display_for_dialogue(self, dialogue_id: str) -> Optional[str]:
+    def final_llm_clock_display_for_dialogue(self, dialogue_id: str) -> str | None:
         """Return ``YYYY-MM-DD HH:MM`` for final LLM prompts, or None to use machine time."""
         if not getattr(self.config, "use_dataset_datetime", False):
             return None
@@ -221,8 +244,8 @@ class DSTMemoryPipeline:
         self,
         dialogue_id: str,
         message: Message,
-        fact_created_at_iso: Optional[str] = None,
-    ) -> Dict:
+        fact_created_at_iso: str | None = None,
+    ) -> dict:
         logger.info(
             "write_to_memory dialogue_id=%s role=%s content_len=%d fact_created_at_iso=%s",
             dialogue_id,
@@ -236,7 +259,9 @@ class DSTMemoryPipeline:
         cls = self.classifier.predict(message.content)
         logger.info(
             "classifier result dialogue_id=%s p_important=%.4f is_important=%s",
-            dialogue_id, cls["p_important"], cls["is_important"],
+            dialogue_id,
+            cls["p_important"],
+            cls["is_important"],
         )
         if not bool(cls["is_important"]):
             return {
@@ -269,26 +294,38 @@ class DSTMemoryPipeline:
             "new_facts": [asdict(f) for f in new_facts],
         }
 
-    def add_recent_pair(self, dialogue_id: str, user_text: str, assistant_text: str) -> None:
+    def add_recent_pair(
+        self, dialogue_id: str, user_text: str, assistant_text: str
+    ) -> None:
         state = self.dst.get_state(dialogue_id)
         if not user_text.strip() or not assistant_text.strip():
             return
-        state.recent_pairs.append({"user": user_text.strip(), "assistant": assistant_text.strip()})
+        state.recent_pairs.append(
+            {"user": user_text.strip(), "assistant": assistant_text.strip()}
+        )
         keep = max(1, int(self.config.recent_history_pairs))
         if len(state.recent_pairs) > keep:
             state.recent_pairs = state.recent_pairs[-keep:]
 
-    def recent_pairs(self, dialogue_id: str) -> List[Dict[str, str]]:
+    def recent_pairs(self, dialogue_id: str) -> list[dict[str, str]]:
         state = self.dst.get_state(dialogue_id)
-        return list(state.recent_pairs[-max(1, int(self.config.recent_history_pairs)):])
+        return list(
+            state.recent_pairs[-max(1, int(self.config.recent_history_pairs)) :]
+        )
 
     def _memory_context_for_question(
         self, dialogue_id: str, question: str
-    ) -> Tuple[Any, Dict]:
-        strategy = (self.config.memory_strategy or "relevant_slots_full").strip().lower()
-        if strategy not in ("full_graph_json", "relevant_slots_full", "topk_graph_records"):
+    ) -> tuple[Any, dict]:
+        strategy = (
+            (self.config.memory_strategy or "relevant_slots_full").strip().lower()
+        )
+        if strategy not in (
+            "full_graph_json",
+            "relevant_slots_full",
+            "topk_graph_records",
+        ):
             strategy = "relevant_slots_full"
-        meta_base: Dict[str, Any] = {
+        meta_base: dict[str, Any] = {
             "memory_strategy": strategy,
             "graph_top_k_records": int(self.config.graph_top_k_records),
         }
@@ -325,7 +362,9 @@ class DSTMemoryPipeline:
                     "selected_slots": selected,
                     "mode": "relevant_slots_full_gate_disabled",
                 }
-            sel = self.memory_gate.select_slots(question, slot_names, for_vector_context=False)
+            sel = self.memory_gate.select_slots(
+                question, slot_names, for_vector_context=False
+            )
             selected = list(sel.slot_names) if sel.slot_names else []
             if not sel.use_memory or not selected:
                 return {"slots": []}, {
@@ -356,7 +395,9 @@ class DSTMemoryPipeline:
             "mode": "topk_graph_records",
         }
 
-    def _slots_payload(self, dialogue_id: str, selected_slots: List[str]) -> List[Dict[str, Any]]:
+    def _slots_payload(
+        self, dialogue_id: str, selected_slots: list[str]
+    ) -> list[dict[str, Any]]:
         selected = set(selected_slots)
         out = []
         for slot in self.dst.slots_with_messages(dialogue_id):
@@ -365,10 +406,14 @@ class DSTMemoryPipeline:
                 out.append(slot)
         return out
 
-    def answer_without_final_llm(self, dialogue_id: str, question: str) -> Dict:
+    def answer_without_final_llm(self, dialogue_id: str, question: str) -> dict:
         logger.info("answer_without_final_llm dialogue_id=%s", dialogue_id)
-        memory_context, gate_meta = self._memory_context_for_question(dialogue_id, question)
-        selected_slots = gate_meta.get("selected_slots") or self.dst.active_slot_names(dialogue_id)
+        memory_context, gate_meta = self._memory_context_for_question(
+            dialogue_id, question
+        )
+        selected_slots = gate_meta.get("selected_slots") or self.dst.active_slot_names(
+            dialogue_id
+        )
         retrieved = self.ragu_processor.search_memory(
             query=question,
             slot_names=list(selected_slots) if selected_slots else None,
@@ -400,7 +445,9 @@ class DSTMemoryPipeline:
             "retrieved": retrieved,
             "memory_slots": self.dst.slots_with_messages(dialogue_id),
             "expired_facts": self.dst.expired_facts(dialogue_id),
-            "deleted_facts_with_reasons": self.dst.deleted_facts_with_reasons(dialogue_id),
+            "deleted_facts_with_reasons": self.dst.deleted_facts_with_reasons(
+                dialogue_id
+            ),
         }
 
     def unload_local_models(self) -> None:
@@ -409,6 +456,7 @@ class DSTMemoryPipeline:
         Called before loading final LLM to free GPU memory.
         """
         import gc
+
         logger.info("Unloading local models from memory...")
 
         if hasattr(self.final_llm, "release_local_serving"):
@@ -424,14 +472,14 @@ class DSTMemoryPipeline:
         # Clear any cached components that might hold model references
         # The clients hold references to serving, but they should be weak
         # We'll clear the triplet_extractor, slot_selector, conflict_resolver, etc.
-        if hasattr(self.dst, 'triplet_extractor'):
-            if hasattr(self.dst.triplet_extractor, '_serving'):
+        if hasattr(self.dst, "triplet_extractor"):
+            if hasattr(self.dst.triplet_extractor, "_serving"):
                 self.dst.triplet_extractor._serving = None
-        if hasattr(self.dst, 'slot_selector'):
-            if hasattr(self.dst.slot_selector, '_serving'):
+        if hasattr(self.dst, "slot_selector"):
+            if hasattr(self.dst.slot_selector, "_serving"):
                 self.dst.slot_selector._serving = None
-        if hasattr(self.dst, 'conflict_resolver'):
-            if hasattr(self.dst.conflict_resolver, '_serving'):
+        if hasattr(self.dst, "conflict_resolver"):
+            if hasattr(self.dst.conflict_resolver, "_serving"):
                 self.dst.conflict_resolver._serving = None
 
         # Force garbage collection
@@ -440,6 +488,7 @@ class DSTMemoryPipeline:
         # Clear CUDA cache if available
         try:
             import torch
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
@@ -461,23 +510,30 @@ class DSTMemoryPipeline:
 
         if not self.config.slot_use_stub and self._slot_serving is None:
             from ..clients.serving import LocalHFServing
+
             self._slot_serving = LocalHFServing(
                 self.config.slot_model_path,
                 enable_thinking=self.config.slot_model_enable_thinking,
-                inject_no_think_prompt=getattr(self.config, "slot_llm_inject_no_think_prompt", True),
-                use_lm_format_enforcer=getattr(self.config, "slot_llm_lm_format_enforcer", False),
-                load_quantization=getattr(self.config, "slot_llm_load_quantization", "none"),
+                inject_no_think_prompt=getattr(
+                    self.config, "slot_llm_inject_no_think_prompt", True
+                ),
+                use_lm_format_enforcer=getattr(
+                    self.config, "slot_llm_lm_format_enforcer", False
+                ),
+                load_quantization=getattr(
+                    self.config, "slot_llm_load_quantization", "none"
+                ),
             )
 
         # Re-attach serving to clients
-        if hasattr(self.dst, 'triplet_extractor'):
-            if hasattr(self.dst.triplet_extractor, '_serving'):
+        if hasattr(self.dst, "triplet_extractor"):
+            if hasattr(self.dst.triplet_extractor, "_serving"):
                 self.dst.triplet_extractor._serving = self._slot_serving
-        if hasattr(self.dst, 'slot_selector'):
-            if hasattr(self.dst.slot_selector, '_serving'):
+        if hasattr(self.dst, "slot_selector"):
+            if hasattr(self.dst.slot_selector, "_serving"):
                 self.dst.slot_selector._serving = self._slot_serving
-        if hasattr(self.dst, 'conflict_resolver'):
-            if hasattr(self.dst.conflict_resolver, '_serving'):
+        if hasattr(self.dst, "conflict_resolver"):
+            if hasattr(self.dst.conflict_resolver, "_serving"):
                 self.dst.conflict_resolver._serving = self._slot_serving
 
         # Re-attach to memory gate
@@ -486,7 +542,9 @@ class DSTMemoryPipeline:
 
         logger.info("Local models reloaded")
 
-    def answer(self, dialogue_id: str, question: str, *, _unload_models: bool = False) -> str:
+    def answer(
+        self, dialogue_id: str, question: str, *, _unload_models: bool = False
+    ) -> str:
         """
         Generate answer using final LLM.
 
@@ -502,16 +560,18 @@ class DSTMemoryPipeline:
 
         # Determine if we should unload models before final LLM
         should_unload = (
-            getattr(self.config, 'unload_models_before_final_llm', True) and
-            self.config.llm_mode == 'local' and
-            _unload_models
+            getattr(self.config, "unload_models_before_final_llm", True)
+            and self.config.llm_mode == "local"
+            and _unload_models
         )
 
         if should_unload:
             logger.info("Unloading models before final LLM (local mode)...")
             self.unload_local_models()
 
-        memory_context, gate_meta = self._memory_context_for_question(dialogue_id, question)
+        memory_context, gate_meta = self._memory_context_for_question(
+            dialogue_id, question
+        )
         logger.info(
             "answer memory context ready mode=%s active_slots=%s",
             gate_meta.get("mode"),
@@ -528,7 +588,9 @@ class DSTMemoryPipeline:
             recent_pairs=self.recent_pairs(dialogue_id),
             clock_display=clock_display,
         )
-        logger.info("Final LLM answer dialogue_id=%s: %s", dialogue_id, answer_text[:500])
+        logger.info(
+            "Final LLM answer dialogue_id=%s: %s", dialogue_id, answer_text[:500]
+        )
         return answer_text
 
     def clear_memory(self, dialogue_id: str) -> None:

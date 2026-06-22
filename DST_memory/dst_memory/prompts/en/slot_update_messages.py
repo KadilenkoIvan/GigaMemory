@@ -2,6 +2,7 @@
 Slot content update (add/update/delete by record_id) — English UI.
 Principle: one record per entity/topic.
 """
+
 from __future__ import annotations
 
 import json
@@ -66,10 +67,10 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"add","value":"семейное положение: женат 20 лет"},'
-                       '{"op":"add","value":"сын: Ромка"},'
-                       '{"op":"add","value":"дочь: Аня"}'
-                       ']}',
+            '{"op":"add","value":"семейное положение: женат 20 лет"},'
+            '{"op":"add","value":"сын: Ромка"},'
+            '{"op":"add","value":"дочь: Аня"}'
+            "]}",
         },
         {
             "role": "user",
@@ -98,9 +99,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"update","id":1,"value":"жена: Людмила, работает учителем в школе"},'
-                       '{"op":"update","id":2,"value":"сын: Ромка, учится в институте"}'
-                       ']}',
+            '{"op":"update","id":1,"value":"жена: Людмила, работает учителем в школе"},'
+            '{"op":"update","id":2,"value":"сын: Ромка, учится в институте"}'
+            "]}",
         },
         {
             "role": "user",
@@ -119,7 +120,10 @@ def build_update_messages(
                 "I really don't get Chekhov though",
                 [
                     {"id": 1, "value": "рыбалка: с детства, раз в неделю, даже зимой"},
-                    {"id": 2, "value": "чтение: любит читать, любимый автор — Достоевский"},
+                    {
+                        "id": 2,
+                        "value": "чтение: любит читать, любимый автор — Достоевский",
+                    },
                 ],
             ),
         },
@@ -133,8 +137,14 @@ def build_update_messages(
                 "Went to Lyube — total disappointment, Rastorguev is not what he was",
                 [
                     {"id": 1, "value": "рыбалка: с детства, раз в неделю, даже зимой"},
-                    {"id": 2, "value": "чтение: любит читать, любимый автор — Достоевский"},
-                    {"id": 3, "value": "концерты: Аукцыон с сыном; органный с женой — не понравился"},
+                    {
+                        "id": 2,
+                        "value": "чтение: любит читать, любимый автор — Достоевский",
+                    },
+                    {
+                        "id": 3,
+                        "value": "концерты: Аукцыон с сыном; органный с женой — не понравился",
+                    },
                 ],
             ),
         },
@@ -156,9 +166,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"update","id":1,"value":"маршруты: Тверь с семьёй, Кострома с семьёй"},'
-                       '{"op":"update","id":3,"value":"планы: Казань с семьёй"}'
-                       ']}',
+            '{"op":"update","id":1,"value":"маршруты: Тверь с семьёй, Кострома с семьёй"},'
+            '{"op":"update","id":3,"value":"планы: Казань с семьёй"}'
+            "]}",
         },
         {
             "role": "user",
@@ -173,9 +183,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"update","id":1,"value":"машина: ford focus"},'
-                       '{"op":"add","value":"самокат: для коротких поездок"}'
-                       ']}',
+            '{"op":"update","id":1,"value":"машина: ford focus"},'
+            '{"op":"add","value":"самокат: для коротких поездок"}'
+            "]}",
         },
         {
             "role": "user",
@@ -187,9 +197,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"delete","id":1},'
-                       '{"op":"add","value":"спорт: плавание в бассейне"}'
-                       ']}',
+            '{"op":"delete","id":1},'
+            '{"op":"add","value":"спорт: плавание в бассейне"}'
+            "]}",
         },
         {
             "role": "user",

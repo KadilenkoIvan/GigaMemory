@@ -17,7 +17,7 @@ DEFAULT_MAX_CONTEXT_TOKENS = 128 * 1024
 
 def count_prompt_tokens_chat(
     tokenizer,
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
     *,
     enable_thinking: bool = False,
 ) -> int:
@@ -42,11 +42,11 @@ def count_prompt_tokens_chat(
 
 def truncate_baseline_dialogue_turns(
     question: str,
-    context: List[Dict[str, str]],
-    build_messages: Callable[[str, List[Dict[str, str]]], List[Dict[str, str]]],
+    context: list[dict[str, str]],
+    build_messages: Callable[[str, list[dict[str, str]]], list[dict[str, str]]],
     tokenizer,
     max_prompt_tokens: int,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Drop oldest user/assistant turns until the full chat template is <= max_prompt_tokens.
     If one huge turn remains, shrinks that turn's text from the left in coarse steps.
@@ -54,7 +54,7 @@ def truncate_baseline_dialogue_turns(
     if max_prompt_tokens <= 0:
         return list(context)
 
-    full_ctx: List[Dict[str, str]] = [dict(t) for t in context]
+    full_ctx: list[dict[str, str]] = [dict(t) for t in context]
 
     def _count_for_start(start_idx: int) -> int:
         return count_prompt_tokens_chat(
@@ -83,7 +83,11 @@ def truncate_baseline_dialogue_turns(
 
     start = lo
     ctx = full_ctx[start:] if start < len(full_ctx) else [dict(full_ctx[-1])]
-    n = _count_for_start(start) if start < len(full_ctx) else _count_for_start(len(full_ctx) - 1)
+    n = (
+        _count_for_start(start)
+        if start < len(full_ctx)
+        else _count_for_start(len(full_ctx) - 1)
+    )
     dropped = min(start, len(full_ctx) - 1)
 
     if dropped > 0:
@@ -125,11 +129,11 @@ def truncate_baseline_dialogue_turns(
 
 def clamp_chat_messages_to_max_tokens(
     tokenizer,
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
     max_prompt_tokens: int,
     *,
     enable_thinking: bool = False,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """
     Shorten the last user message from the left until the template fits in max_prompt_tokens.
     Used for GigaMemory final-LLM messages (system + long user with memory JSON).
@@ -137,8 +141,10 @@ def clamp_chat_messages_to_max_tokens(
     if max_prompt_tokens <= 0 or len(messages) < 2:
         return [dict(m) for m in messages]
 
-    out: List[Dict[str, str]] = [dict(m) for m in messages]
-    user_idx = next((i for i in range(len(out) - 1, -1, -1) if out[i].get("role") == "user"), -1)
+    out: list[dict[str, str]] = [dict(m) for m in messages]
+    user_idx = next(
+        (i for i in range(len(out) - 1, -1, -1) if out[i].get("role") == "user"), -1
+    )
     if user_idx < 0:
         return out
 
@@ -164,5 +170,9 @@ def clamp_chat_messages_to_max_tokens(
 
     n = count_prompt_tokens_chat(tokenizer, out, enable_thinking=enable_thinking)
     if n > max_prompt_tokens:
-        logger.error("Could not fit prompt under max_prompt_tokens=%d (still ~%d)", max_prompt_tokens, n)
+        logger.error(
+            "Could not fit prompt under max_prompt_tokens=%d (still ~%d)",
+            max_prompt_tokens,
+            n,
+        )
     return out

@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, List
 
 
-def parse_conflict_response(text: str) -> Dict[str, List[int]]:
+def parse_conflict_response(text: str) -> dict[str, list[int]]:
     """Parse model response → {deactivate: [...], skip_new: [...]}."""
     text = text.strip()
     if text.startswith("```"):
@@ -25,7 +25,7 @@ def parse_conflict_response(text: str) -> Dict[str, List[int]]:
     }
 
 
-def parse_deletion_response(text: str) -> List[Dict[str, str]]:
+def parse_deletion_response(text: str) -> list[dict[str, str]]:
     """
     Parse LLM response into objects for deletion.
 

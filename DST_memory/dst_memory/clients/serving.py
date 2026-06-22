@@ -12,10 +12,22 @@ from ..slots.slot_model_path import resolve_slot_model_path
 logger = logging.getLogger(__name__)
 
 
-def _normalize_load_quantization(raw: Optional[str]) -> str:
+def _normalize_load_quantization(raw: str | None) -> str:
     """Return one of: none, 8bit, 4bit."""
     q = (raw or "none").lower().strip()
-    if q in ("", "none", "off", "false", "no", "fp16", "float16", "bf16", "bfloat16", "fp32", "float32"):
+    if q in (
+        "",
+        "none",
+        "off",
+        "false",
+        "no",
+        "fp16",
+        "float16",
+        "bf16",
+        "bfloat16",
+        "fp32",
+        "float32",
+    ):
         return "none"
     if q in ("8bit", "int8", "8-bit", "bnb8"):
         return "8bit"
@@ -35,7 +47,7 @@ class GenerationConfig:
     temperature: float = 1.0
     top_p: float = 1.0
     # When LocalHFServing.use_lm_format_enforcer is True, pass a JSON Schema dict to constrain decoding.
-    lm_enforcer_json_schema: Optional[Dict[str, Any]] = None
+    lm_enforcer_json_schema: dict[str, Any] | None = None
 
 
 class LocalHFServing:
@@ -71,7 +83,7 @@ class LocalHFServing:
         self.enable_thinking = enable_thinking
         self.inject_no_think_prompt = bool(inject_no_think_prompt)
         self.use_lm_format_enforcer = bool(use_lm_format_enforcer)
-        self._lm_enforcer_prefix_cache: Dict[str, Any] = {}
+        self._lm_enforcer_prefix_cache: dict[str, Any] = {}
         self._quant = _normalize_load_quantization(load_quantization)
         if self.use_lm_format_enforcer:
             try:
@@ -104,7 +116,11 @@ class LocalHFServing:
                     "install bitsandbytes (and a compatible GPU driver)."
                 ) from e
 
-            compute = torch_dtype if torch_dtype in (torch.float16, torch.bfloat16) else torch.float16
+            compute = (
+                torch_dtype
+                if torch_dtype in (torch.float16, torch.bfloat16)
+                else torch.float16
+            )
             if self._quant == "8bit":
                 bnb = BitsAndBytesConfig(load_in_8bit=True)
             else:
@@ -165,7 +181,7 @@ class LocalHFServing:
             pass
 
     @staticmethod
-    def _inject_no_think(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def _inject_no_think(messages: list[dict[str, str]]) -> list[dict[str, str]]:
         """
         Prepend '/no_think' to the first system message (or create one) so that
         Qwen3/3.5 models that respect the prompt-level directive skip their thinking
@@ -181,12 +197,14 @@ class LocalHFServing:
         msgs.insert(0, {"role": "system", "content": "/no_think"})
         return msgs
 
-    def _prefix_allowed_tokens_fn_for_schema(self, schema: Dict[str, Any]):
+    def _prefix_allowed_tokens_fn_for_schema(self, schema: dict[str, Any]):
         key = json.dumps(schema, sort_keys=True, ensure_ascii=False)
         if key in self._lm_enforcer_prefix_cache:
             return self._lm_enforcer_prefix_cache[key]
         from lmformatenforcer import JsonSchemaParser
-        from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+        from lmformatenforcer.integrations.transformers import (
+            build_transformers_prefix_allowed_tokens_fn,
+        )
 
         parser = JsonSchemaParser(schema)
         fn = build_transformers_prefix_allowed_tokens_fn(self.tokenizer, parser)
@@ -195,8 +213,8 @@ class LocalHFServing:
 
     def generate_chat(
         self,
-        messages: List[Dict[str, str]],
-        generation_config: Optional[GenerationConfig] = None,
+        messages: list[dict[str, str]],
+        generation_config: GenerationConfig | None = None,
     ) -> str:
         if generation_config is None:
             generation_config = GenerationConfig()
@@ -242,13 +260,15 @@ class LocalHFServing:
             gen_kwargs["top_p"] = generation_config.top_p
         schema = getattr(generation_config, "lm_enforcer_json_schema", None)
         if self.use_lm_format_enforcer and schema:
-            gen_kwargs["prefix_allowed_tokens_fn"] = self._prefix_allowed_tokens_fn_for_schema(schema)
+            gen_kwargs["prefix_allowed_tokens_fn"] = (
+                self._prefix_allowed_tokens_fn_for_schema(schema)
+            )
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
                 **gen_kwargs,
             )
         result = self.tokenizer.decode(
-            outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+            outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
         )
         return result.strip()

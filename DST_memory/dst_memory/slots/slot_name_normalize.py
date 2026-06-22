@@ -252,7 +252,9 @@ def normalize_slot_label_cached(text: str) -> str:
     return normalize_slot_label(text)
 
 
-def resolve_slot_key_to_existing(existing_slot_names: Sequence[str], normalized: str) -> str:
+def resolve_slot_key_to_existing(
+    existing_slot_names: Sequence[str], normalized: str
+) -> str:
     """
     Если нормализованное имя совпадает с нормализацией одного из уже
     существующих ключей — возвращаем тот ключ как в состоянии (без дублей).

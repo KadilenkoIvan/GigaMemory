@@ -1,5 +1,5 @@
-from typing import Dict
 import logging
+from typing import Dict
 
 import torch
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -17,13 +17,15 @@ class ImportanceClassifier:
             threshold,
             self.device,
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path, trust_remote_code=True
+        )
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_path, trust_remote_code=True
         ).to(self.device)
         self.model.eval()
 
-    def predict(self, text: str) -> Dict[str, float]:
+    def predict(self, text: str) -> dict[str, float]:
         logger.debug("Classifier predict text_len=%d", len(text))
         inputs = self.tokenizer(
             "query: " + text,

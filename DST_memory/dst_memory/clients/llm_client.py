@@ -36,7 +36,7 @@ def _normalize_assistant_message_text(message: Any) -> str:
     if isinstance(raw, str):
         return raw.strip()
     if isinstance(raw, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for p in raw:
             if not isinstance(p, dict):
                 continue
@@ -66,11 +66,13 @@ def _torch_dtype_from_string(name: str):
     return torch.float32
 
 
-def _messages_char_count(messages: List[Dict[str, str]]) -> int:
+def _messages_char_count(messages: list[dict[str, str]]) -> int:
     return sum(len(str(m.get("content", ""))) for m in messages)
 
 
-def _effective_prompt_token_budget(max_context_tokens: int, max_completion_tokens: int) -> int:
+def _effective_prompt_token_budget(
+    max_context_tokens: int, max_completion_tokens: int
+) -> int:
     cap = int(max_context_tokens or 0)
     if cap <= 0:
         return 0
@@ -124,7 +126,7 @@ class FinalLLMClient:
         )
         # Last sent messages (system + user) — populated on every generate() call.
         # Used for logging to *_logs.json.
-        self._last_prompt_messages: List[Dict[str, str]] = []
+        self._last_prompt_messages: list[dict[str, str]] = []
         self._last_prompt_chars_before_clamp: int = 0
         self._last_prompt_chars_after_clamp: int = 0
         self._local_serving: Any = None
@@ -166,7 +168,9 @@ class FinalLLMClient:
 
     def _tokenizer_for_prompt_limit(self):
         """Tokenizer used only to measure/clamp prompt length (lighter than full model load)."""
-        if self._local_serving is not None and getattr(self._local_serving, "tokenizer", None):
+        if self._local_serving is not None and getattr(
+            self._local_serving, "tokenizer", None
+        ):
             return self._local_serving.tokenizer
         if self._tokenizer_limit is False:
             return None
@@ -193,9 +197,9 @@ class FinalLLMClient:
         self,
         question: str,
         memory_context: Any,
-        recent_pairs: Optional[List[Dict[str, str]]] = None,
-        clock_display: Optional[str] = None,
-    ) -> List[Dict[str, str]]:
+        recent_pairs: list[dict[str, str]] | None = None,
+        clock_display: str | None = None,
+    ) -> list[dict[str, str]]:
         """Build the chat messages list without sending. Exposed for logging."""
         import datetime
 
@@ -223,8 +227,8 @@ class FinalLLMClient:
         self,
         question: str,
         memory_context: Any,
-        recent_pairs: Optional[List[Dict[str, str]]] = None,
-        clock_display: Optional[str] = None,
+        recent_pairs: list[dict[str, str]] | None = None,
+        clock_display: str | None = None,
     ) -> str:
         messages = self.build_messages(
             question, memory_context, recent_pairs or [], clock_display=clock_display
@@ -261,7 +265,11 @@ class FinalLLMClient:
         )
 
         if self.mode == "stub":
-            compact = json.dumps(memory_context, ensure_ascii=False)[:300] if memory_context else "no-memory"
+            compact = (
+                json.dumps(memory_context, ensure_ascii=False)[:300]
+                if memory_context
+                else "no-memory"
+            )
             return f"[STUB_ANSWER] q='{question}' | memory='{compact}'"
 
         if self.mode == "local":
@@ -288,16 +296,20 @@ class FinalLLMClient:
             gen_cfg = GenerationConfig(
                 max_new_tokens=int(self.max_tokens),
                 do_sample=float(self.temperature) > 0.0,
-                temperature=float(self.temperature) if float(self.temperature) > 0.0 else 1.0,
+                temperature=(
+                    float(self.temperature) if float(self.temperature) > 0.0 else 1.0
+                ),
             )
-            return self._local_serving.generate_chat(messages, generation_config=gen_cfg)
+            return self._local_serving.generate_chat(
+                messages, generation_config=gen_cfg
+            )
 
         if self.mode in ("api", "openrouter", "puter"):
             return self._openai_compatible_chat(messages)
 
         raise ValueError(f"Unknown llm_mode: {self.mode}")
 
-    def get_last_prompt_char_stats(self) -> Dict[str, int]:
+    def get_last_prompt_char_stats(self) -> dict[str, int]:
         return {
             "before_clamp_chars": int(self._last_prompt_chars_before_clamp),
             "after_clamp_chars": int(self._last_prompt_chars_after_clamp),
@@ -313,17 +325,21 @@ class FinalLLMClient:
             return base
         return f"{base.rstrip('/')}/chat/completions"
 
-    def _openai_compatible_chat(self, messages: List[Dict[str, str]], max_retries: int = 3) -> str:
+    def _openai_compatible_chat(
+        self, messages: list[dict[str, str]], max_retries: int = 3
+    ) -> str:
         """Call API with retry logic for transient errors."""
-        import time
         import random
+        import time
 
         if not self.api_key.strip():
             raise ValueError(
                 "llm_api_key is empty; set it in run_config.json or OPENROUTER_API_KEY."
             )
         if not self.model.strip():
-            raise ValueError("llm_model is empty; set it in run_config.json or --llm-model.")
+            raise ValueError(
+                "llm_model is empty; set it in run_config.json or --llm-model."
+            )
 
         body = {
             "model": self.model,
@@ -357,7 +373,11 @@ class FinalLLMClient:
                 data = json.loads(raw)
                 err = data.get("error")
                 if err:
-                    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                    msg = (
+                        err.get("message", str(err))
+                        if isinstance(err, dict)
+                        else str(err)
+                    )
                     raise RuntimeError(f"Final LLM API error: {msg}")
 
                 choices = data.get("choices") or []
@@ -377,9 +397,14 @@ class FinalLLMClient:
             except urllib.error.HTTPError as e:
                 last_exception = e
                 if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
-                    logger.warning("Final LLM HTTP %d, retrying in %.1fs (attempt %d/%d)",
-                                   e.code, wait_time, attempt + 1, max_retries)
+                    wait_time = (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "Final LLM HTTP %d, retrying in %.1fs (attempt %d/%d)",
+                        e.code,
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                    )
                     time.sleep(wait_time)
                     continue
                 detail = e.read().decode("utf-8", errors="replace")
@@ -388,9 +413,14 @@ class FinalLLMClient:
             except urllib.error.URLError as e:
                 last_exception = e
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
-                    logger.warning("Final LLM URL error, retrying in %.1fs (attempt %d/%d): %s",
-                                   wait_time, attempt + 1, max_retries, e)
+                    wait_time = (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "Final LLM URL error, retrying in %.1fs (attempt %d/%d): %s",
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                        e,
+                    )
                     time.sleep(wait_time)
                     continue
                 logger.error("Final LLM URL error: %s", e)
@@ -398,11 +428,20 @@ class FinalLLMClient:
             except Exception as e:
                 last_exception = e
                 if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
-                    logger.warning("Final LLM error, retrying in %.1fs (attempt %d/%d): %s",
-                                   wait_time, attempt + 1, max_retries, e)
+                    wait_time = (2**attempt) + random.uniform(0, 1)
+                    logger.warning(
+                        "Final LLM error, retrying in %.1fs (attempt %d/%d): %s",
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                        e,
+                    )
                     time.sleep(wait_time)
                     continue
                 raise
 
-        raise last_exception if last_exception else RuntimeError("Final LLM failed after retries")
+        raise (
+            last_exception
+            if last_exception
+            else RuntimeError("Final LLM failed after retries")
+        )

@@ -2,33 +2,32 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict
 
-
 # Default TTL values per slot (used for Mode 1 and as fallback in Mode 2/3).
 # Values must be from models.VALID_TTL_VALUES: 1d 3d 10d 2w 3w 1m 3m 6m 1y inf
-SLOT_DEFAULT_TTL: Dict[str, str] = {
-    "IDENTITY":     "inf",
-    "FAMILY":       "inf",
-    "FRIENDS":      "inf",
-    "ROMANCE":      "1y",
-    "WORK":         "1y",
-    "EDUCATION":    "1y",
-    "FINANCE":      "3m",
-    "HEALTH":       "1y",
-    "MENTAL_HEALTH":"6m",
-    "HABITS":       "inf",
-    "PREFERENCES":  "6m",
-    "HOBBIES":      "6m",
-    "SPORTS":       "6m",
-    "FOOD":         "1m",
-    "HOME":         "1y",
-    "LOCATION":     "1y",
-    "TRAVEL":       "3m",
-    "PETS":         "inf",
-    "TECH":         "6m",
-    "VEHICLES":     "1y",
-    "SCHEDULE":     "1m",
-    "GOALS":        "3m",
-    "EVENTS":       "2w",
+SLOT_DEFAULT_TTL: dict[str, str] = {
+    "IDENTITY": "inf",
+    "FAMILY": "inf",
+    "FRIENDS": "inf",
+    "ROMANCE": "1y",
+    "WORK": "1y",
+    "EDUCATION": "1y",
+    "FINANCE": "3m",
+    "HEALTH": "1y",
+    "MENTAL_HEALTH": "6m",
+    "HABITS": "inf",
+    "PREFERENCES": "6m",
+    "HOBBIES": "6m",
+    "SPORTS": "6m",
+    "FOOD": "1m",
+    "HOME": "1y",
+    "LOCATION": "1y",
+    "TRAVEL": "3m",
+    "PETS": "inf",
+    "TECH": "6m",
+    "VEHICLES": "1y",
+    "SCHEDULE": "1m",
+    "GOALS": "3m",
+    "EVENTS": "2w",
 }
 
 
@@ -103,7 +102,7 @@ class PipelineConfig:
 
     # Fallback TTL when mode2 model omits the ttl field, or for mode1.
     # Keys are canonical slot names; override any slot from SLOT_DEFAULT_TTL.
-    ttl_slot_overrides: Dict[str, str] = field(default_factory=dict)
+    ttl_slot_overrides: dict[str, str] = field(default_factory=dict)
 
     # -------------------------------------------------------------------
     # Semantic deduplication

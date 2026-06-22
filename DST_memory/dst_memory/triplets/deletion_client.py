@@ -5,14 +5,15 @@
 Вызывается ПОСЛЕ обычной экстракции триплетов (без контекста слота).
 Получает текущие факты + сообщение → возвращает список DeletionSignal.
 """
+
 from __future__ import annotations
 
 import logging
 from typing import List, Optional
 
+from ..clients.serving import GenerationConfig, LocalHFServing
 from ..prompts.loader import load_prompt_modules
 from ..prompts.parsers import parse_deletion_response
-from ..clients.serving import GenerationConfig, LocalHFServing
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class TripletDeletionClient:
         self,
         *,
         use_stub: bool,
-        serving: Optional[LocalHFServing] = None,
+        serving: LocalHFServing | None = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
     ):
@@ -40,7 +41,9 @@ class TripletDeletionClient:
         self._prompt_modules = None
 
         if not use_stub and serving is None:
-            raise ValueError("TripletDeletionClient requires serving when use_stub is False")
+            raise ValueError(
+                "TripletDeletionClient requires serving when use_stub is False"
+            )
         if use_stub:
             logger.info("TripletDeletionClient: STUB mode (no deletions)")
         else:
@@ -52,8 +55,8 @@ class TripletDeletionClient:
         self,
         user_message: str,
         slot_name: str,
-        existing_triplets: List[str],
-    ) -> "List":
+        existing_triplets: list[str],
+    ) -> list:
         """
         Определить какие факты нужно удалить на основе нового сообщения.
 
@@ -87,7 +90,9 @@ class TripletDeletionClient:
             raw = self.serving.generate_chat(messages, cfg)
             logger.info(
                 "DeletionClient slot=%s attempt=%d raw: %s",
-                slot_name, attempt, raw[:400],
+                slot_name,
+                attempt,
+                raw[:400],
             )
             try:
                 items = parse_deletion_response(raw)
@@ -101,13 +106,17 @@ class TripletDeletionClient:
                 ]
                 logger.info(
                     "DeletionClient slot=%s: %d deletion(s) detected",
-                    slot_name, len(result),
+                    slot_name,
+                    len(result),
                 )
                 return result
             except Exception as exc:
                 logger.warning(
                     "DeletionClient parse failed attempt=%d slot=%s: %s | raw=%r",
-                    attempt, slot_name, exc, raw[:200],
+                    attempt,
+                    slot_name,
+                    exc,
+                    raw[:200],
                 )
 
         logger.warning("DeletionClient: all attempts failed, returning empty deletions")

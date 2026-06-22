@@ -1,19 +1,30 @@
+import logging
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-import logging
 
+from ..slots.slot_select_client import SlotSelectClient
 from ..triplets.conflict_client import TripletConflictClient
+from ..triplets.triplet_client import (
+    DeletionSignal,
+    ExtractedTriplet,
+    TripletExtractionClient,
+)
 from .config import SLOT_DEFAULT_TTL
 from .graph_backend import GraphEdge
-from .models import DialogueMemoryState, FactRecord, MemoryFact, DeletedFact, is_expired, now_iso
-from ..slots.slot_select_client import SlotSelectClient
-from ..triplets.triplet_client import DeletionSignal, ExtractedTriplet, TripletExtractionClient
+from .models import (
+    DeletedFact,
+    DialogueMemoryState,
+    FactRecord,
+    MemoryFact,
+    is_expired,
+    now_iso,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _cosine_similarity(v1: List[float], v2: List[float]) -> float:
+def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     if not v1 or not v2:
         return 0.0
@@ -62,30 +73,38 @@ class DSTManager:
         triplet_extractor: TripletExtractionClient,
         slot_selector: SlotSelectClient,
         *,
-        conflict_resolver: Optional[TripletConflictClient] = None,
+        conflict_resolver: TripletConflictClient | None = None,
         single_pass_fallback: bool = False,  # legacy; kept for back-compat only
         slot_fallback_on_no_slots: bool = True,
         triplet_fallback_on_empty: bool = True,
-        ragu_processor: Optional[Any] = None,
+        ragu_processor: Any | None = None,
         ttl_mode: str = "mode2",
-        ttl_slot_overrides: Optional[Dict[str, str]] = None,
+        ttl_slot_overrides: dict[str, str] | None = None,
         semantic_dedup_enabled: bool = True,
         semantic_dedup_threshold: float = 0.9,
         # --- Deletion / context ---
         slot_context_enabled: bool = False,
         slot_context_max_facts: int = 10,
         triplet_deletion_mode: str = "none",
-        negation_detector: Optional[Any] = None,
-        deletion_client: Optional[Any] = None,
+        negation_detector: Any | None = None,
+        deletion_client: Any | None = None,
         force_infinite_ttl: bool = False,
     ):
-        self._states: Dict[str, DialogueMemoryState] = {}
+        self._states: dict[str, DialogueMemoryState] = {}
         self.triplet_extractor = triplet_extractor
         self.slot_selector = slot_selector
         self.conflict_resolver = conflict_resolver
         # Legacy single_pass_fallback sets both granular flags when True
-        self.slot_fallback_on_no_slots = slot_fallback_on_no_slots if not single_pass_fallback else (slot_fallback_on_no_slots or single_pass_fallback)
-        self.triplet_fallback_on_empty = triplet_fallback_on_empty if not single_pass_fallback else (triplet_fallback_on_empty or single_pass_fallback)
+        self.slot_fallback_on_no_slots = (
+            slot_fallback_on_no_slots
+            if not single_pass_fallback
+            else (slot_fallback_on_no_slots or single_pass_fallback)
+        )
+        self.triplet_fallback_on_empty = (
+            triplet_fallback_on_empty
+            if not single_pass_fallback
+            else (triplet_fallback_on_empty or single_pass_fallback)
+        )
         self.ragu_processor = ragu_processor
         self.ttl_mode = ttl_mode
         self.semantic_dedup_enabled = semantic_dedup_enabled
@@ -106,12 +125,12 @@ class DSTManager:
             self.slot_context_enabled = True
 
         # Build effective TTL map: defaults + overrides
-        self._slot_ttl: Dict[str, str] = dict(SLOT_DEFAULT_TTL)
+        self._slot_ttl: dict[str, str] = dict(SLOT_DEFAULT_TTL)
         if ttl_slot_overrides:
             self._slot_ttl.update(ttl_slot_overrides)
 
     @staticmethod
-    def _as_of_datetime_for_state(state: DialogueMemoryState) -> Optional[datetime]:
+    def _as_of_datetime_for_state(state: DialogueMemoryState) -> datetime | None:
         raw = getattr(state, "dataset_clock_iso", None) or None
         if not raw:
             return None
@@ -123,7 +142,7 @@ class DSTManager:
     @staticmethod
     def _new_fact_created_at_iso(
         state: DialogueMemoryState,
-        override_iso: Optional[str] = None,
+        override_iso: str | None = None,
     ) -> str:
         if override_iso and str(override_iso).strip():
             return str(override_iso).strip()
@@ -144,13 +163,13 @@ class DSTManager:
         # mode1 or fallback: use slot default
         return self._slot_ttl.get(triplet.slot, "inf")
 
-    def _expire_slot(self, state: DialogueMemoryState, slot: str) -> List[int]:
+    def _expire_slot(self, state: DialogueMemoryState, slot: str) -> list[int]:
         """
         Soft-delete expired records in a slot.
         Returns list of deactivated record_ids (for RAGU sync).
         Also tracks deleted facts with reason 'ttl_expired'.
         """
-        deactivated: List[int] = []
+        deactivated: list[int] = []
         as_of = self._as_of_datetime_for_state(state)
         for rec in state.slots.get(slot, []):
             if rec.is_active and rec.is_expired(as_of=as_of):
@@ -169,36 +188,44 @@ class DSTManager:
                     created_at_step=rec.created_at_step,
                     created_at_datetime=rec.created_at_datetime,
                     deleted_at_step=state.step,
-                    deletion_reason='ttl_expired',
-                    deletion_source='ttl_checker',
-                    deletion_details={'ttl': rec.ttl}
+                    deletion_reason="ttl_expired",
+                    deletion_source="ttl_checker",
+                    deletion_details={"ttl": rec.ttl},
                 )
                 state.deleted_facts.append(deleted_fact)
                 logger.info(
                     "TTL expired: deactivated record_id=%d slot=%s ttl=%s created=%s",
-                    rec.record_id, slot, rec.ttl, rec.created_at_datetime,
+                    rec.record_id,
+                    slot,
+                    rec.ttl,
+                    rec.created_at_datetime,
                 )
         return deactivated
 
-    def _expire_all(self, state: DialogueMemoryState) -> Dict[str, List[int]]:
+    def _expire_all(self, state: DialogueMemoryState) -> dict[str, list[int]]:
         """Expire all slots. Returns {slot: [deactivated_ids]}."""
-        result: Dict[str, List[int]] = {}
+        result: dict[str, list[int]] = {}
         for slot in list(state.slots.keys()):
             deactivated = self._expire_slot(state, slot)
             if deactivated:
                 result[slot] = deactivated
         return result
 
-    def _sync_expirations_to_ragu(self, dialogue_id: str, expired_by_slot: Dict[str, List[int]]) -> None:
+    def _sync_expirations_to_ragu(
+        self, dialogue_id: str, expired_by_slot: dict[str, list[int]]
+    ) -> None:
         if self.ragu_processor is None:
             return
         from ..storage.ragu_graph_processor import GraphTripletDelete
+
         all_deletes = []
         for slot, rids in expired_by_slot.items():
             for rid in rids:
-                all_deletes.append(GraphTripletDelete(
-                    record_id=rid, dialogue_id=dialogue_id, slot=slot
-                ))
+                all_deletes.append(
+                    GraphTripletDelete(
+                        record_id=rid, dialogue_id=dialogue_id, slot=slot
+                    )
+                )
         if all_deletes:
             self.ragu_processor.delete_triplet_deltas(all_deletes)
 
@@ -207,9 +234,9 @@ class DSTManager:
         dialogue_id: str,
         state: DialogueMemoryState,
         slot: str,
-        signals: List[DeletionSignal],
-        deletion_source: str = 'unknown',  # 'llm_inline', 'llm_separate', 'heuristic'
-    ) -> List[int]:
+        signals: list[DeletionSignal],
+        deletion_source: str = "unknown",  # 'llm_inline', 'llm_separate', 'heuristic'
+    ) -> list[int]:
         """
         Применить сигналы удаления к активным записям слота.
 
@@ -224,34 +251,55 @@ class DSTManager:
         if not signals:
             return []
 
-        deactivated: List[int] = []
+        deactivated: list[int] = []
         seen: set = set()
-        deleted_records_info: List[Tuple[int, str, str, str, str, str]] = []  # record info for tracking
+        deleted_records_info: list[tuple[int, str, str, str, str, str]] = (
+            []
+        )  # record info for tracking
 
         # Проход 1: точное совпадение
         for sig in signals:
             for rec in state.slots.get(slot, []):
                 if rec.record_id in seen or not rec.is_active:
                     continue
-                if rec.subject == sig.subject and rec.relation == sig.relation and rec.object == sig.object:
+                if (
+                    rec.subject == sig.subject
+                    and rec.relation == sig.relation
+                    and rec.object == sig.object
+                ):
                     rec.is_active = False
                     rec.updated_at_step = state.step
                     deactivated.append(rec.record_id)
                     seen.add(rec.record_id)
-                    deleted_records_info.append((
-                        rec.record_id, rec.subject, rec.relation, rec.object,
-                        rec.value, rec.source_text, rec.created_at_step, rec.created_at_datetime
-                    ))
+                    deleted_records_info.append(
+                        (
+                            rec.record_id,
+                            rec.subject,
+                            rec.relation,
+                            rec.object,
+                            rec.value,
+                            rec.source_text,
+                            rec.created_at_step,
+                            rec.created_at_datetime,
+                        )
+                    )
                     logger.info(
                         "DeletionSignal exact match: deactivated record_id=%d slot=%s [%s|%s|%s]",
-                        rec.record_id, slot, sig.subject, sig.relation, sig.object,
+                        rec.record_id,
+                        slot,
+                        sig.subject,
+                        sig.relation,
+                        sig.object,
                     )
 
         # Проход 2 (каскад): subject + relation если точных совпадений не нашли
         unmatched_signals = [
-            sig for sig in signals
+            sig
+            for sig in signals
             if not any(
-                rec.subject == sig.subject and rec.relation == sig.relation and rec.object == sig.object
+                rec.subject == sig.subject
+                and rec.relation == sig.relation
+                and rec.object == sig.object
                 and rec.record_id in seen
                 for rec in state.slots.get(slot, [])
             )
@@ -265,18 +313,39 @@ class DSTManager:
                     rec.updated_at_step = state.step
                     deactivated.append(rec.record_id)
                     seen.add(rec.record_id)
-                    deleted_records_info.append((
-                        rec.record_id, rec.subject, rec.relation, rec.object,
-                        rec.value, rec.source_text, rec.created_at_step, rec.created_at_datetime
-                    ))
+                    deleted_records_info.append(
+                        (
+                            rec.record_id,
+                            rec.subject,
+                            rec.relation,
+                            rec.object,
+                            rec.value,
+                            rec.source_text,
+                            rec.created_at_step,
+                            rec.created_at_datetime,
+                        )
+                    )
                     logger.info(
                         "DeletionSignal cascade (subj+rel): deactivated record_id=%d slot=%s [%s|%s|%s]",
-                        rec.record_id, slot, rec.subject, rec.relation, rec.object,
+                        rec.record_id,
+                        slot,
+                        rec.subject,
+                        rec.relation,
+                        rec.object,
                     )
 
         # Track deletions with reason
         for record_info in deleted_records_info:
-            rid, subject, relation, obj, value, source_text, created_step, created_dt = record_info
+            (
+                rid,
+                subject,
+                relation,
+                obj,
+                value,
+                source_text,
+                created_step,
+                created_dt,
+            ) = record_info
             deleted_fact = DeletedFact(
                 slot=slot,
                 record_id=rid,
@@ -288,26 +357,42 @@ class DSTManager:
                 created_at_step=created_step,
                 created_at_datetime=created_dt,
                 deleted_at_step=state.step,
-                deletion_reason='deletion_signal',
+                deletion_reason="deletion_signal",
                 deletion_source=deletion_source,
-                deletion_details={'match_type': 'exact' if any(s.subject == subject and s.relation == relation and s.object == obj for s in signals) else 'cascade'}
+                deletion_details={
+                    "match_type": (
+                        "exact"
+                        if any(
+                            s.subject == subject
+                            and s.relation == relation
+                            and s.object == obj
+                            for s in signals
+                        )
+                        else "cascade"
+                    )
+                },
             )
             state.deleted_facts.append(deleted_fact)
 
         if deactivated and self.ragu_processor is not None:
             from ..storage.ragu_graph_processor import GraphTripletDelete
-            self.ragu_processor.delete_triplet_deltas([
-                GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
-                for rid in deactivated
-            ])
+
+            self.ragu_processor.delete_triplet_deltas(
+                [
+                    GraphTripletDelete(
+                        record_id=rid, dialogue_id=dialogue_id, slot=slot
+                    )
+                    for rid in deactivated
+                ]
+            )
 
         return deactivated
 
     def _semantic_dedup(
         self,
         new_triplet: ExtractedTriplet,
-        existing_active: List[FactRecord],
-    ) -> Optional[FactRecord]:
+        existing_active: list[FactRecord],
+    ) -> FactRecord | None:
         """
         Find an existing active record semantically similar to new_triplet.
         Returns the closest record if cosine similarity >= threshold, else None.
@@ -315,18 +400,22 @@ class DSTManager:
         """
         if not self.semantic_dedup_enabled:
             return None
-        if self.ragu_processor is None or not hasattr(self.ragu_processor, "embed_text_sync"):
+        if self.ragu_processor is None or not hasattr(
+            self.ragu_processor, "embed_text_sync"
+        ):
             return None
         if not existing_active:
             return None
 
-        new_text = _triplet_text(new_triplet.subject, new_triplet.relation, new_triplet.object)
+        new_text = _triplet_text(
+            new_triplet.subject, new_triplet.relation, new_triplet.object
+        )
         new_emb = self.ragu_processor.embed_text_sync(new_text)
         if not new_emb:
             return None
 
         best_sim = 0.0
-        best_rec: Optional[FactRecord] = None
+        best_rec: FactRecord | None = None
         for rec in existing_active:
             rec_text = _triplet_text(rec.subject, rec.relation, rec.object)
             rec_emb = self.ragu_processor.embed_text_sync(rec_text)
@@ -340,10 +429,15 @@ class DSTManager:
         if best_sim >= self.semantic_dedup_threshold and best_rec is not None:
             logger.info(
                 "Semantic dedup: sim=%.4f >= %.2f | new=[%s|%s|%s] vs existing record_id=%d [%s|%s|%s]",
-                best_sim, self.semantic_dedup_threshold,
-                new_triplet.subject, new_triplet.relation, new_triplet.object,
+                best_sim,
+                self.semantic_dedup_threshold,
+                new_triplet.subject,
+                new_triplet.relation,
+                new_triplet.object,
                 best_rec.record_id,
-                best_rec.subject, best_rec.relation, best_rec.object,
+                best_rec.subject,
+                best_rec.relation,
+                best_rec.object,
             )
             return best_rec
         return None
@@ -358,13 +452,15 @@ class DSTManager:
         self,
         dialogue_id: str,
         user_text: str,
-        fact_created_at_iso: Optional[str] = None,
-    ) -> Tuple[List[MemoryFact], List[str]]:
+        fact_created_at_iso: str | None = None,
+    ) -> tuple[list[MemoryFact], list[str]]:
         state = self.get_state(dialogue_id)
         state.step += 1
         logger.debug(
             "DST upsert start dialogue_id=%s step=%d text_len=%d",
-            dialogue_id, state.step, len(user_text),
+            dialogue_id,
+            state.step,
+            len(user_text),
         )
 
         # Expire stale records on write too (belt-and-suspenders)
@@ -372,11 +468,11 @@ class DSTManager:
         if expired:
             self._sync_expirations_to_ragu(dialogue_id, expired)
 
-        created: List[MemoryFact] = []
+        created: list[MemoryFact] = []
         selected_slots = self.slot_selector.select_slots(user_text)
         no_slots_selected = len(selected_slots) == 0
-        triplets: List[ExtractedTriplet] = []
-        inline_deletions_by_slot: Dict[str, List[DeletionSignal]] = defaultdict(list)
+        triplets: list[ExtractedTriplet] = []
+        inline_deletions_by_slot: dict[str, list[DeletionSignal]] = defaultdict(list)
 
         for slot in selected_slots:
             if self.slot_context_enabled:
@@ -389,8 +485,10 @@ class DSTManager:
                 # (heuristic, llm_separate, none) use context for awareness only,
                 # the model should NOT output delete arrays in those modes.
                 inline_mode = self.triplet_deletion_mode == "llm_inline"
-                slot_triplets, slot_deletions = self.triplet_extractor.extract_for_slot_with_context(
-                    user_text, slot, existing_lines, enable_deletion=inline_mode
+                slot_triplets, slot_deletions = (
+                    self.triplet_extractor.extract_for_slot_with_context(
+                        user_text, slot, existing_lines, enable_deletion=inline_mode
+                    )
                 )
                 if inline_mode:
                     inline_deletions_by_slot[slot].extend(slot_deletions)
@@ -403,39 +501,47 @@ class DSTManager:
             if self.slot_fallback_on_no_slots:
                 logger.info(
                     "Slot selector returned no slots dialogue_id=%s step=%d → single-pass fallback",
-                    dialogue_id, state.step,
+                    dialogue_id,
+                    state.step,
                 )
                 triplets = self.triplet_extractor.extract(user_text)
             else:
                 logger.info(
                     "Slot selector returned no slots dialogue_id=%s step=%d → skipping (fallback disabled)",
-                    dialogue_id, state.step,
+                    dialogue_id,
+                    state.step,
                 )
         elif not triplets:
             # Slots were selected but all per-slot extractions returned empty
             if self.triplet_fallback_on_empty:
                 logger.info(
                     "All per-slot extractions returned empty dialogue_id=%s step=%d → single-pass fallback",
-                    dialogue_id, state.step,
+                    dialogue_id,
+                    state.step,
                 )
                 triplets = self.triplet_extractor.extract(user_text)
             else:
                 logger.info(
                     "All per-slot extractions returned empty dialogue_id=%s step=%d → skipping (fallback disabled)",
-                    dialogue_id, state.step,
+                    dialogue_id,
+                    state.step,
                 )
 
         if not triplets and not any(inline_deletions_by_slot.values()):
             # Check if any deletion mode might still produce deletions
-            has_potential_deletions = (
-                self.triplet_deletion_mode in ("heuristic", "llm_separate")
-                and any(state.slots.values())
-            )
+            has_potential_deletions = self.triplet_deletion_mode in (
+                "heuristic",
+                "llm_separate",
+            ) and any(state.slots.values())
             if not has_potential_deletions:
-                logger.info("No triplets extracted dialogue_id=%s step=%d", dialogue_id, state.step)
+                logger.info(
+                    "No triplets extracted dialogue_id=%s step=%d",
+                    dialogue_id,
+                    state.step,
+                )
                 return [], selected_slots
 
-        by_slot: Dict[str, List[ExtractedTriplet]] = defaultdict(list)
+        by_slot: dict[str, list[ExtractedTriplet]] = defaultdict(list)
         for t in triplets:
             by_slot[t.slot].append(t)
 
@@ -454,22 +560,30 @@ class DSTManager:
             expired_in_slot = self._expire_slot(state, slot)
             if expired_in_slot and self.ragu_processor is not None:
                 from ..storage.ragu_graph_processor import GraphTripletDelete
-                self.ragu_processor.delete_triplet_deltas([
-                    GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
-                    for rid in expired_in_slot
-                ])
+
+                self.ragu_processor.delete_triplet_deltas(
+                    [
+                        GraphTripletDelete(
+                            record_id=rid, dialogue_id=dialogue_id, slot=slot
+                        )
+                        for rid in expired_in_slot
+                    ]
+                )
 
             # --- DELETION PASS (before semantic dedup and conflict resolution) ---
             # Order: deletions first → then semantic dedup → then conflict → then insert.
             # This ensures conflict resolver sees post-deletion state.
 
-            deletion_signals: List[DeletionSignal] = []
+            deletion_signals: list[DeletionSignal] = []
 
             if self.triplet_deletion_mode == "llm_inline":
                 # Вариант A: сигналы уже получены при экстракции с контекстом
                 deletion_signals = inline_deletions_by_slot.get(slot, [])
 
-            elif self.triplet_deletion_mode == "heuristic" and self.negation_detector is not None:
+            elif (
+                self.triplet_deletion_mode == "heuristic"
+                and self.negation_detector is not None
+            ):
                 # Вариант C: эвристический детектор отрицания
                 active_for_heuristic = [r for r in state.slots[slot] if r.is_active]
                 if active_for_heuristic:
@@ -477,12 +591,16 @@ class DSTManager:
                         user_text, active_for_heuristic
                     )
 
-            elif self.triplet_deletion_mode == "llm_separate" and self.deletion_client is not None:
+            elif (
+                self.triplet_deletion_mode == "llm_separate"
+                and self.deletion_client is not None
+            ):
                 # Вариант B: отдельный LLM-вызов, всегда получает текущие факты
                 active_for_llm = [r for r in state.slots[slot] if r.is_active]
                 if active_for_llm:
                     existing_lines_del = [
-                        r.as_line() for r in active_for_llm[: self.slot_context_max_facts]
+                        r.as_line()
+                        for r in active_for_llm[: self.slot_context_max_facts]
                     ]
                     deletion_signals = self.deletion_client.detect_deletions(
                         user_text, slot, existing_lines_del
@@ -495,24 +613,33 @@ class DSTManager:
                     "heuristic": "heuristic",
                 }
                 src = deletion_source_map.get(self.triplet_deletion_mode, "unknown")
-                self._apply_deletion_signals(dialogue_id, state, slot, deletion_signals, deletion_source=src)
+                self._apply_deletion_signals(
+                    dialogue_id, state, slot, deletion_signals, deletion_source=src
+                )
                 logger.info(
                     "Applied %d deletion signal(s) slot=%s mode=%s",
-                    len(deletion_signals), slot, self.triplet_deletion_mode,
+                    len(deletion_signals),
+                    slot,
+                    self.triplet_deletion_mode,
                 )
 
             # --- Semantic dedup PRE-PASS ---
             # For each new triplet: check if a very similar active record exists.
             # If yes: deactivate old, insert new (refreshed TTL timer).
-            semantic_dedup_deactivate: List[int] = []
-            semantic_dedup_skip_new: set = set()  # do NOT skip — we insert new (replaces old)
+            semantic_dedup_deactivate: list[int] = []
+            semantic_dedup_skip_new: set = (
+                set()
+            )  # do NOT skip — we insert new (replaces old)
 
             active_in_slot = [r for r in state.slots[slot] if r.is_active]
 
             if self.semantic_dedup_enabled:
                 for idx, new_t in enumerate(slot_triplets):
                     similar_rec = self._semantic_dedup(new_t, active_in_slot)
-                    if similar_rec is None or similar_rec.record_id in semantic_dedup_deactivate:
+                    if (
+                        similar_rec is None
+                        or similar_rec.record_id in semantic_dedup_deactivate
+                    ):
                         continue
 
                     new_len = len(new_t.as_line())
@@ -524,8 +651,12 @@ class DSTManager:
                         logger.info(
                             "Semantic dedup: replacing record_id=%d (old_len=%d) "
                             "with new triplet (new_len=%d) [%s|%s|%s]",
-                            similar_rec.record_id, old_len, new_len,
-                            new_t.subject, new_t.relation, new_t.object,
+                            similar_rec.record_id,
+                            old_len,
+                            new_len,
+                            new_t.subject,
+                            new_t.relation,
+                            new_t.object,
                         )
                     else:
                         # Existing record is longer/richer → keep old, skip new
@@ -533,8 +664,12 @@ class DSTManager:
                         logger.info(
                             "Semantic dedup: keeping record_id=%d (old_len=%d >= new_len=%d), "
                             "skipping new [%s|%s|%s]",
-                            similar_rec.record_id, old_len, new_len,
-                            new_t.subject, new_t.relation, new_t.object,
+                            similar_rec.record_id,
+                            old_len,
+                            new_len,
+                            new_t.subject,
+                            new_t.relation,
+                            new_t.object,
                         )
 
                 # Apply semantic dedup deactivations and track deleted facts
@@ -555,33 +690,38 @@ class DSTManager:
                                 created_at_step=rec.created_at_step,
                                 created_at_datetime=rec.created_at_datetime,
                                 deleted_at_step=state.step,
-                                deletion_reason='semantic_dedup',
-                                deletion_source='dedup_engine',
+                                deletion_reason="semantic_dedup",
+                                deletion_source="dedup_engine",
                                 deletion_details={
-                                    'replacement_subject': new_t.subject,
-                                    'replacement_relation': new_t.relation,
-                                    'replacement_object': new_t.object,
-                                }
+                                    "replacement_subject": new_t.subject,
+                                    "replacement_relation": new_t.relation,
+                                    "replacement_object": new_t.object,
+                                },
                             )
                             state.deleted_facts.append(deleted_fact)
 
                 if semantic_dedup_deactivate and self.ragu_processor is not None:
                     from ..storage.ragu_graph_processor import GraphTripletDelete
-                    self.ragu_processor.delete_triplet_deltas([
-                        GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
-                        for rid in semantic_dedup_deactivate
-                    ])
+
+                    self.ragu_processor.delete_triplet_deltas(
+                        [
+                            GraphTripletDelete(
+                                record_id=rid, dialogue_id=dialogue_id, slot=slot
+                            )
+                            for rid in semantic_dedup_deactivate
+                        ]
+                    )
 
             # Rebuild active list after semantic dedup
             active_in_slot = [r for r in state.slots[slot] if r.is_active]
 
             # --- Conflict resolution ---
             skip_indices: set = set()
-            deactivated_record_ids: List[int] = []
+            deactivated_record_ids: list[int] = []
 
             if self.conflict_resolver is not None:
                 subjects = {t.subject for t in slot_triplets}
-                all_existing: List[GraphEdge] = [
+                all_existing: list[GraphEdge] = [
                     GraphEdge(
                         edge_id=rec.record_id,
                         slot=slot,
@@ -596,10 +736,15 @@ class DSTManager:
                 ]
 
                 if all_existing:
-                    resolution = self.conflict_resolver.resolve(slot, all_existing, slot_triplets)
+                    resolution = self.conflict_resolver.resolve(
+                        slot, all_existing, slot_triplets
+                    )
 
                     # Build record_id → triplet text map for logging
-                    _id_to_text = {e.record_id: f"{e.subject}|{e.relation}|{e.object}" for e in all_existing}
+                    _id_to_text = {
+                        e.record_id: f"{e.subject}|{e.relation}|{e.object}"
+                        for e in all_existing
+                    }
 
                     for rid in resolution.deactivate_ids:
                         for rec in state.slots.get(slot, []):
@@ -619,17 +764,18 @@ class DSTManager:
                                     created_at_step=rec.created_at_step,
                                     created_at_datetime=rec.created_at_datetime,
                                     deleted_at_step=state.step,
-                                    deletion_reason='conflict_resolution',
-                                    deletion_source='conflict_resolver',
+                                    deletion_reason="conflict_resolution",
+                                    deletion_source="conflict_resolver",
                                     deletion_details={
-                                        'conflict_description': f"Conflict with new triplets in slot {slot}"
-                                    }
+                                        "conflict_description": f"Conflict with new triplets in slot {slot}"
+                                    },
                                 )
                                 state.deleted_facts.append(deleted_fact)
                                 logger.info(
                                     "Conflict resolver: DEACTIVATED record_id=%d slot=%s "
                                     "triplet=[%s] step=%d",
-                                    rid, slot,
+                                    rid,
+                                    slot,
                                     _id_to_text.get(rid, "?|?|?"),
                                     state.step,
                                 )
@@ -640,24 +786,38 @@ class DSTManager:
                             logger.info(
                                 "Conflict resolver: SKIPPED new idx=%d slot=%s "
                                 "triplet=[%s|%s|%s]",
-                                idx, slot, t.subject, t.relation, t.object,
+                                idx,
+                                slot,
+                                t.subject,
+                                t.relation,
+                                t.object,
                             )
 
                     skip_indices = resolution.skip_new_indices
 
-                    if not resolution.deactivate_ids and not resolution.skip_new_indices:
+                    if (
+                        not resolution.deactivate_ids
+                        and not resolution.skip_new_indices
+                    ):
                         logger.debug(
                             "Conflict resolver: no conflicts found slot=%s "
                             "existing=%d new=%d",
-                            slot, len(all_existing), len(slot_triplets),
+                            slot,
+                            len(all_existing),
+                            len(slot_triplets),
                         )
 
             if self.ragu_processor is not None and deactivated_record_ids:
                 from ..storage.ragu_graph_processor import GraphTripletDelete
-                self.ragu_processor.delete_triplet_deltas([
-                    GraphTripletDelete(record_id=rid, dialogue_id=dialogue_id, slot=slot)
-                    for rid in deactivated_record_ids
-                ])
+
+                self.ragu_processor.delete_triplet_deltas(
+                    [
+                        GraphTripletDelete(
+                            record_id=rid, dialogue_id=dialogue_id, slot=slot
+                        )
+                        for rid in deactivated_record_ids
+                    ]
+                )
 
             # --- Insert surviving new triplets ---
             new_deltas = []
@@ -667,8 +827,16 @@ class DSTManager:
                     logger.info(
                         "Conflict resolver: SKIPPED insertion idx=%d slot=%s "
                         "triplet=[%s|%s|%s] reason=%s",
-                        idx, slot, t.subject, t.relation, t.object,
-                        "conflict_resolver" if idx in skip_indices else "semantic_dedup",
+                        idx,
+                        slot,
+                        t.subject,
+                        t.relation,
+                        t.object,
+                        (
+                            "conflict_resolver"
+                            if idx in skip_indices
+                            else "semantic_dedup"
+                        ),
                     )
                     continue
 
@@ -688,42 +856,54 @@ class DSTManager:
                     is_active=True,
                     ttl=ttl,
                     created_at_datetime=self._new_fact_created_at_iso(
-                        state, override_iso=fact_created_at_iso,
+                        state,
+                        override_iso=fact_created_at_iso,
                     ),
                 )
                 state.slots[slot].append(rec)
 
                 if self.ragu_processor is not None:
                     from ..storage.ragu_graph_processor import GraphTripletDelta
-                    new_deltas.append(GraphTripletDelta(
-                        record_id=rid,
-                        dialogue_id=dialogue_id,
-                        step=state.step,
+
+                    new_deltas.append(
+                        GraphTripletDelta(
+                            record_id=rid,
+                            dialogue_id=dialogue_id,
+                            step=state.step,
+                            slot=slot,
+                            subject=t.subject,
+                            relation=t.relation,
+                            object=t.object,
+                            ttl=ttl,
+                        )
+                    )
+
+                created.append(
+                    MemoryFact(
                         slot=slot,
+                        record_id=rid,
+                        value=value,
+                        source_text=user_text,
+                        created_at_step=state.step,
+                        updated_at_step=state.step,
+                        is_active=True,
                         subject=t.subject,
                         relation=t.relation,
                         object=t.object,
                         ttl=ttl,
-                    ))
-
-                created.append(MemoryFact(
-                    slot=slot,
-                    record_id=rid,
-                    value=value,
-                    source_text=user_text,
-                    created_at_step=state.step,
-                    updated_at_step=state.step,
-                    is_active=True,
-                    subject=t.subject,
-                    relation=t.relation,
-                    object=t.object,
-                    ttl=ttl,
-                    created_at_datetime=rec.created_at_datetime,
-                ))
+                        created_at_datetime=rec.created_at_datetime,
+                    )
+                )
                 inserted_count += 1
                 logger.info(
                     "INSERTED record_id=%d slot=%s triplet=[%s|%s|%s] ttl=%s step=%d",
-                    rid, slot, t.subject, t.relation, t.object, ttl, state.step,
+                    rid,
+                    slot,
+                    t.subject,
+                    t.relation,
+                    t.object,
+                    ttl,
+                    state.step,
                 )
 
             if self.ragu_processor is not None and new_deltas:
@@ -732,7 +912,8 @@ class DSTManager:
             logger.info(
                 "Slot %s summary step=%d: inserted=%d skipped=%d deactivated_conflict=%d "
                 "deactivated_deletion=%d deactivated_dedup=%d",
-                slot, state.step,
+                slot,
+                state.step,
                 inserted_count,
                 len(skip_indices) + len(semantic_dedup_skip_new),
                 len(deactivated_record_ids),
@@ -742,10 +923,12 @@ class DSTManager:
 
         return created, selected_slots
 
-    def deactivate_record(self, dialogue_id: str, record_id: int, reason: str = 'manual') -> bool:
+    def deactivate_record(
+        self, dialogue_id: str, record_id: int, reason: str = "manual"
+    ) -> bool:
         state = self.get_state(dialogue_id)
-        found_slot: Optional[str] = None
-        found_rec: Optional[FactRecord] = None
+        found_slot: str | None = None
+        found_rec: FactRecord | None = None
         for slot, records in state.slots.items():
             for rec in records:
                 if rec.record_id == record_id and rec.is_active:
@@ -773,33 +956,40 @@ class DSTManager:
             created_at_datetime=found_rec.created_at_datetime,
             deleted_at_step=state.step,
             deletion_reason=reason,
-            deletion_source='manual_call',
+            deletion_source="manual_call",
         )
         state.deleted_facts.append(deleted_fact)
 
         if self.ragu_processor is not None:
             from ..storage.ragu_graph_processor import GraphTripletDelete
-            self.ragu_processor.delete_triplet_deltas([
-                GraphTripletDelete(record_id=record_id, dialogue_id=dialogue_id, slot=found_slot)
-            ])
+
+            self.ragu_processor.delete_triplet_deltas(
+                [
+                    GraphTripletDelete(
+                        record_id=record_id, dialogue_id=dialogue_id, slot=found_slot
+                    )
+                ]
+            )
         return True
 
-    def active_slot_names(self, dialogue_id: str) -> List[str]:
+    def active_slot_names(self, dialogue_id: str) -> list[str]:
         state = self.get_state(dialogue_id)
         # Lazy expiry on read
         expired = self._expire_all(state)
         if expired:
             self._sync_expirations_to_ragu(dialogue_id, expired)
 
-        names: List[str] = []
+        names: list[str] = []
         for slot, records in state.slots.items():
             if any(r.is_active for r in records):
                 names.append(slot)
         return sorted(names)
 
-    def memory_lines_for_slots(self, dialogue_id: str, slot_names: List[str]) -> List[str]:
+    def memory_lines_for_slots(
+        self, dialogue_id: str, slot_names: list[str]
+    ) -> list[str]:
         state = self.get_state(dialogue_id)
-        lines: List[str] = []
+        lines: list[str] = []
         for name in slot_names:
             recs = state.slots.get(name)
             if not recs:
@@ -809,78 +999,88 @@ class DSTManager:
                     lines.append(f"{name}: {rec.value}")
         return lines
 
-    def active_facts(self, dialogue_id: str) -> List[MemoryFact]:
+    def active_facts(self, dialogue_id: str) -> list[MemoryFact]:
         state = self.get_state(dialogue_id)
         # Lazy expiry on read
         expired = self._expire_all(state)
         if expired:
             self._sync_expirations_to_ragu(dialogue_id, expired)
 
-        result: List[MemoryFact] = []
+        result: list[MemoryFact] = []
         for slot, records in state.slots.items():
             for rec in records:
                 if rec.is_active:
-                    result.append(MemoryFact(
-                        slot=slot,
-                        record_id=rec.record_id,
-                        value=rec.value,
-                        source_text=rec.source_text,
-                        created_at_step=rec.created_at_step,
-                        updated_at_step=rec.updated_at_step,
-                        is_active=rec.is_active,
-                        subject=rec.subject,
-                        relation=rec.relation,
-                        object=rec.object,
-                        ttl=rec.ttl,
-                        created_at_datetime=rec.created_at_datetime,
-                    ))
+                    result.append(
+                        MemoryFact(
+                            slot=slot,
+                            record_id=rec.record_id,
+                            value=rec.value,
+                            source_text=rec.source_text,
+                            created_at_step=rec.created_at_step,
+                            updated_at_step=rec.updated_at_step,
+                            is_active=rec.is_active,
+                            subject=rec.subject,
+                            relation=rec.relation,
+                            object=rec.object,
+                            ttl=rec.ttl,
+                            created_at_datetime=rec.created_at_datetime,
+                        )
+                    )
         return result
 
-    def expired_facts(self, dialogue_id: str) -> List[Dict[str, Any]]:
+    def expired_facts(self, dialogue_id: str) -> list[dict[str, Any]]:
         """Return all expired (soft-deleted) records for logging/visualization."""
         state = self.get_state(dialogue_id)
         as_of = self._as_of_datetime_for_state(state)
         result = []
         for slot, records in state.slots.items():
             for rec in records:
-                if not rec.is_active and is_expired(rec.ttl, rec.created_at_datetime, as_of=as_of):
-                    result.append({
-                        "slot": slot,
-                        "record_id": rec.record_id,
-                        "subject": rec.subject,
-                        "relation": rec.relation,
-                        "object": rec.object,
-                        "ttl": rec.ttl,
-                        "created_at_datetime": rec.created_at_datetime,
-                        "expired": True,
-                    })
+                if not rec.is_active and is_expired(
+                    rec.ttl, rec.created_at_datetime, as_of=as_of
+                ):
+                    result.append(
+                        {
+                            "slot": slot,
+                            "record_id": rec.record_id,
+                            "subject": rec.subject,
+                            "relation": rec.relation,
+                            "object": rec.object,
+                            "ttl": rec.ttl,
+                            "created_at_datetime": rec.created_at_datetime,
+                            "expired": True,
+                        }
+                    )
         return result
 
-    def deleted_facts_with_reasons(self, dialogue_id: str) -> List[Dict[str, Any]]:
+    def deleted_facts_with_reasons(self, dialogue_id: str) -> list[dict[str, Any]]:
         """Return all tracked deleted facts with their deletion reasons and sources."""
         state = self.get_state(dialogue_id)
         result = []
         for deleted in state.deleted_facts:
-            result.append({
-                "slot": deleted.slot,
-                "record_id": deleted.record_id,
-                "subject": deleted.subject,
-                "relation": deleted.relation,
-                "object": deleted.object,
-                "value": deleted.value,
-                "source_text": deleted.source_text,
-                "created_at_step": deleted.created_at_step,
-                "created_at_datetime": deleted.created_at_datetime,
-                "deleted_at_step": deleted.deleted_at_step,
-                "deletion_reason": deleted.deletion_reason,
-                "deletion_source": deleted.deletion_source,
-                "deletion_details": deleted.deletion_details,
-            })
+            result.append(
+                {
+                    "slot": deleted.slot,
+                    "record_id": deleted.record_id,
+                    "subject": deleted.subject,
+                    "relation": deleted.relation,
+                    "object": deleted.object,
+                    "value": deleted.value,
+                    "source_text": deleted.source_text,
+                    "created_at_step": deleted.created_at_step,
+                    "created_at_datetime": deleted.created_at_datetime,
+                    "deleted_at_step": deleted.deleted_at_step,
+                    "deletion_reason": deleted.deletion_reason,
+                    "deletion_source": deleted.deletion_source,
+                    "deletion_details": deleted.deletion_details,
+                }
+            )
         return result
 
-    def entity_scope_for_slots(self, dialogue_id: str, slot_names: List[str], hops: int = 1) -> List[str]:
+    def entity_scope_for_slots(
+        self, dialogue_id: str, slot_names: list[str], hops: int = 1
+    ) -> list[str]:
         state = self.get_state(dialogue_id)
-        entities: List[str] = []
+        entities: list[str] = []
         seen: set = set()
         for slot in slot_names:
             for rec in state.slots.get(slot, []):
@@ -892,7 +1092,7 @@ class DSTManager:
                         entities.append(name)
         return entities
 
-    def slots_with_messages(self, dialogue_id: str) -> List[Dict[str, Any]]:
+    def slots_with_messages(self, dialogue_id: str) -> list[dict[str, Any]]:
         """
         Memory as an ordered list of slots with active records.
         Triggers lazy TTL expiry before building the payload.
@@ -904,30 +1104,34 @@ class DSTManager:
         if expired:
             self._sync_expirations_to_ragu(dialogue_id, expired)
 
-        result: List[Dict[str, Any]] = []
+        result: list[dict[str, Any]] = []
         for slot, records in state.slots.items():
-            messages: List[dict] = []
+            messages: list[dict] = []
             for rec in records:
                 if not rec.is_active:
                     continue
-                messages.append({
-                    "record_id": rec.record_id,
-                    "message_text": rec.value,
-                    "source_text": rec.source_text,
-                    "subject": rec.subject,
-                    "relation": rec.relation,
-                    "object": rec.object,
-                    "created_at_step": rec.created_at_step,
-                    "updated_at_step": rec.updated_at_step,
-                    "is_active": rec.is_active,
-                    "ttl": rec.ttl,
-                    "created_at_datetime": rec.created_at_datetime,
-                })
-            result.append({
-                "slot": slot,
-                "slot_label": slot,
-                "messages": messages,
-            })
+                messages.append(
+                    {
+                        "record_id": rec.record_id,
+                        "message_text": rec.value,
+                        "source_text": rec.source_text,
+                        "subject": rec.subject,
+                        "relation": rec.relation,
+                        "object": rec.object,
+                        "created_at_step": rec.created_at_step,
+                        "updated_at_step": rec.updated_at_step,
+                        "is_active": rec.is_active,
+                        "ttl": rec.ttl,
+                        "created_at_datetime": rec.created_at_datetime,
+                    }
+                )
+            result.append(
+                {
+                    "slot": slot,
+                    "slot_label": slot,
+                    "messages": messages,
+                }
+            )
         return result
 
     def clear_dialogue(self, dialogue_id: str) -> None:

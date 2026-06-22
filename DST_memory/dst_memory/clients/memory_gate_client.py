@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..prompts.loader import load_prompt_modules
-from .serving import GenerationConfig, LocalHFServing
 from ..slots.ontology import DEFAULT_USER_SLOTS
-from ..slots.slot_name_normalize import normalize_slot_label, resolve_slot_key_to_existing
+from ..slots.slot_name_normalize import (
+    normalize_slot_label,
+    resolve_slot_key_to_existing,
+)
+from .serving import GenerationConfig, LocalHFServing
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +39,14 @@ class MemoryGateSelection:
     """Результат шлюза: подставлять ли память в финальную LLM и какие слоты."""
 
     use_memory: bool
-    slot_names: List[str]
+    slot_names: list[str]
 
 
 class MemoryGateClient:
     def __init__(
         self,
         use_stub: bool,
-        serving: Optional[LocalHFServing] = None,
+        serving: LocalHFServing | None = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
         parse_retry_temperature: float = 0.65,
@@ -54,7 +57,9 @@ class MemoryGateClient:
         self.max_retries = max_retries
         self.prompt_language = prompt_language
         self.parse_retry_temperature = float(parse_retry_temperature)
-        self.parse_retry_temperature_increment = float(parse_retry_temperature_increment)
+        self.parse_retry_temperature_increment = float(
+            parse_retry_temperature_increment
+        )
         self._prompt_modules = None
         if self.use_stub:
             logger.info("Memory gate client in STUB mode (эвристика по маркерам)")
@@ -69,7 +74,7 @@ class MemoryGateClient:
     def select_slots(
         self,
         user_message: str,
-        existing_slot_names: List[str],
+        existing_slot_names: list[str],
         *,
         for_vector_context: bool = False,
     ) -> MemoryGateSelection:
@@ -98,7 +103,9 @@ class MemoryGateClient:
                     self.parse_retry_temperature
                     + self.parse_retry_temperature_increment * float(attempt - 2),
                 )
-                gen_cfg = GenerationConfig(max_new_tokens=200, do_sample=True, temperature=t)
+                gen_cfg = GenerationConfig(
+                    max_new_tokens=200, do_sample=True, temperature=t
+                )
             raw = self.serving.generate_chat(messages, generation_config=gen_cfg)
             logger.info("Memory gate raw attempt=%d: %s", attempt, raw[:500])
             parsed = self._parse_response(raw)
@@ -124,7 +131,7 @@ class MemoryGateClient:
     def _stub_select(
         self,
         user_message: str,
-        existing_slot_names: List[str],
+        existing_slot_names: list[str],
         *,
         for_vector_context: bool,
     ) -> MemoryGateSelection:
@@ -132,7 +139,9 @@ class MemoryGateClient:
         if any(m in lower for m in _MARKERS):
             if for_vector_context:
                 return MemoryGateSelection(use_memory=True, slot_names=[])
-            return MemoryGateSelection(use_memory=True, slot_names=list(existing_slot_names))
+            return MemoryGateSelection(
+                use_memory=True, slot_names=list(existing_slot_names)
+            )
         return MemoryGateSelection(use_memory=False, slot_names=[])
 
     @staticmethod
@@ -148,7 +157,7 @@ class MemoryGateClient:
         return "\n".join(lines).strip()
 
     @staticmethod
-    def _extract_first_json_object(text: str) -> Optional[str]:
+    def _extract_first_json_object(text: str) -> str | None:
         start = text.find("{")
         if start < 0:
             return None
@@ -163,7 +172,7 @@ class MemoryGateClient:
                     return text[start : i + 1]
         return None
 
-    def _parse_response(self, text: str) -> Optional[Dict[str, Any]]:
+    def _parse_response(self, text: str) -> dict[str, Any] | None:
         cleaned = self._strip_markdown_fence(text)
         blob = cleaned
         if not blob.strip().startswith("{"):
@@ -180,8 +189,8 @@ class MemoryGateClient:
 
     def _finalize(
         self,
-        existing_slot_names: List[str],
-        obj: Dict[str, Any],
+        existing_slot_names: list[str],
+        obj: dict[str, Any],
         *,
         for_vector_context: bool,
     ) -> MemoryGateSelection:
@@ -199,7 +208,7 @@ class MemoryGateClient:
         if not isinstance(raw_slots, list):
             raw_slots = []
 
-        names_out: List[str] = []
+        names_out: list[str] = []
         seen: set[str] = set()
         canonical = list(existing_slot_names)
 
@@ -227,7 +236,7 @@ class MemoryGateClient:
         return MemoryGateSelection(use_memory=True, slot_names=names_out)
 
     @staticmethod
-    def _match_slot_name(s: str, canonical: List[str]) -> Optional[str]:
+    def _match_slot_name(s: str, canonical: list[str]) -> str | None:
         if not s:
             return None
         allowed = set(canonical)

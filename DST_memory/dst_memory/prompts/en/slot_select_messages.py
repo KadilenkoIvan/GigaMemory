@@ -10,9 +10,9 @@ from .prompt_fewshots import slot_select_few_shot_messages
 def build_slot_select_messages(
     user_message: str,
     *,
-    ontology_slots: List[str] | None = None,
+    ontology_slots: list[str] | None = None,
     max_slots: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     names = ontology_slots or DEFAULT_USER_SLOTS.slot_names
     slots_json = json.dumps([s.upper() for s in names], ensure_ascii=False)
 

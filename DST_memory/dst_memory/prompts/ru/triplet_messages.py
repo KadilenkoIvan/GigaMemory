@@ -26,12 +26,12 @@ def build_triplet_messages(
     *,
     slot_name: str | None = None,
     include_slot: bool = False,
-    ontology_slots: List[str] | None = None,
+    ontology_slots: list[str] | None = None,
     max_triplets: int = 12,
     ttl_mode: str = "mode2",
-    existing_triplets: Optional[List[str]] = None,
+    existing_triplets: list[str] | None = None,
     enable_deletion: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Построить чат-сообщения для экстракции триплетов.
 
@@ -51,7 +51,9 @@ def build_triplet_messages(
     ru_slot = CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else None
 
     use_context = existing_triplets is not None
-    use_deletion = enable_deletion  # controlled explicitly; independent from use_context
+    use_deletion = (
+        enable_deletion  # controlled explicitly; independent from use_context
+    )
 
     slot_header = ""
     if slot_name and ru_slot:
@@ -59,13 +61,15 @@ def build_triplet_messages(
             f"Текущий слот: {ru_slot} ({slot_name}).\n"
             f"Извлекай только факты, относящиеся к слоту «{ru_slot}».\n"
             f"Факты, принадлежащие другим слотам - не включай, даже если они есть в сообщении.\n"
-            f"Если в сообщении нет фактов для слота «{ru_slot}» - верни {{\"triplets\":[]}}.\n"
+            f'Если в сообщении нет фактов для слота «{ru_slot}» - верни {{"triplets":[]}}.\n'
             "В JSON не указывай поле slot - слот задаётся системой.\n\n"
         )
 
     # --- Условные блоки уточнений (наборы слотов в ontology.py) ---
     slot_boundary_block = ""
-    if triplet_prompt_show_clarification(slot_name, TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY):
+    if triplet_prompt_show_clarification(
+        slot_name, TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY
+    ):
         slot_boundary_block = (
             "ГРАНИЦА СЛОТОВ «СЕМЬЯ» и «РОМАНТИКА»:\n"
             "  СЕМЬЯ (FAMILY) - кровные родственники и законные члены семьи САМОГО ПОЛЬЗОВАТЕЛЯ:\n"
@@ -80,19 +84,23 @@ def build_triplet_messages(
         )
 
     events_travel_chain_block = ""
-    if triplet_prompt_show_clarification(slot_name, TRIPLET_CLARIFY_EVENTS_TRAVEL_CHAIN):
+    if triplet_prompt_show_clarification(
+        slot_name, TRIPLET_CLARIFY_EVENTS_TRAVEL_CHAIN
+    ):
         events_travel_chain_block = (
             "Для событий и поездок - цепочка (место/событие становится субъектом своих атрибутов):\n"
             "  пользователь → действие → место или событие\n"
             "  место или событие → атрибут → значение\n"
-            "  Запрещено: {\"subject\":\"пользователь\",\"relation\":\"поездка\",\"object\":\"токио сентябрь\"}\n"
-            "  Верно:     {\"subject\":\"пользователь\",\"relation\":\"поездка\",\"object\":\"токио\"}\n"
-            "             {\"subject\":\"токио\",\"relation\":\"дата\",\"object\":\"сентябрь\"}\n"
-            "             {\"subject\":\"токио\",\"relation\":\"едет с\",\"object\":\"семья\"}\n\n"
+            '  Запрещено: {"subject":"пользователь","relation":"поездка","object":"токио сентябрь"}\n'
+            '  Верно:     {"subject":"пользователь","relation":"поездка","object":"токио"}\n'
+            '             {"subject":"токио","relation":"дата","object":"сентябрь"}\n'
+            '             {"subject":"токио","relation":"едет с","object":"семья"}\n\n'
         )
 
     kinship_foreign_family_block = ""
-    if triplet_prompt_show_clarification(slot_name, TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY):
+    if triplet_prompt_show_clarification(
+        slot_name, TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY
+    ):
         kinship_foreign_family_block = (
             "ТОЧНОСТЬ РОДСТВЕННЫХ СВЯЗЕЙ:\n"
             "  Чётко определяй, КТО кому и КЕМ является. Субъект - тот, у кого есть это родство.\n"
@@ -110,31 +118,32 @@ def build_triplet_messages(
                 # llm_inline mode: model should output delete signals
                 context_instructions = (
                     "ИНСТРУКЦИИ ПО РАБОТЕ С ТЕКУЩИМИ ФАКТАМИ:\n"
-                    "  1. Если новый факт заменяет старый - добавь его в \"triplets\" И добавь\n"
-                    "     старый факт в \"delete\". Для сохранения истории добавь в \"triplets\"\n"
+                    '  1. Если новый факт заменяет старый - добавь его в "triplets" И добавь\n'
+                    '     старый факт в "delete". Для сохранения истории добавь в "triplets"\n'
                     "     факт с префиксом «бывшее/прежнее» (пример: «бывшее место жительства»).\n"
                     "  2. Если пользователь явно отменяет факт без замены - добавь старый факт\n"
-                    "     в \"delete\". Для сохранения истории добавь в \"triplets\"\n"
+                    '     в "delete". Для сохранения истории добавь в "triplets"\n'
                     "     факт с префиксом «бывшее/прежнее» (пример: «бывшее место жительства»).\n"
-                    "  3. Если факт просто уточняется - обнови через \"delete\" + новый \"triplets\".\n"
-                    "  4. Если новое сообщение не меняет известные факты - \"delete\":[].\n"
-                    "  5. Не дублируй уже существующие факты в \"triplets\".\n\n"
+                    '  3. Если факт просто уточняется - обнови через "delete" + новый "triplets".\n'
+                    '  4. Если новое сообщение не меняет известные факты - "delete":[].\n'
+                    '  5. Не дублируй уже существующие факты в "triplets".\n\n'
                 )
             else:
                 # context-aware mode without deletion: model sees existing facts
                 # but should only output new/changed triplets, no delete field
                 context_instructions = (
                     "ИНСТРУКЦИИ ПО РАБОТЕ С ТЕКУЩИМИ ФАКТАМИ:\n"
-                    "  1. НЕ ДУБЛИРУЙ уже существующие факты в \"triplets\" - добавляй только новые.\n"
+                    '  1. НЕ ДУБЛИРУЙ уже существующие факты в "triplets" - добавляй только новые.\n'
                     "  2. Если факт изменился - добавь новый факт и при необходимости\n"
                     "     исторический («бывшее/прежнее»). Старый будет удалён системой автоматически.\n"
-                    "  3. Если сообщение не добавляет новых фактов - верни {\"triplets\":[]}.\n\n"
+                    '  3. Если сообщение не добавляет новых фактов - верни {"triplets":[]}.\n\n'
                 )
             context_block = (
-                f"Текущие факты в слоте"
+                "Текущие факты в слоте"
                 + (f" «{ru_slot}»" if ru_slot else "")
                 + " (Не дублируй их, если нет новой информации):\n"
-                + facts_lines + "\n\n"
+                + facts_lines
+                + "\n\n"
                 + context_instructions
             )
         else:
@@ -144,20 +153,20 @@ def build_triplet_messages(
                 + " (нет записей)\n\n"
             )
 
-    use_ttl = (ttl_mode == "mode2")
+    use_ttl = ttl_mode == "mode2"
 
     if use_ttl:
         if include_slot:
             output_schema = (
                 '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер","ttl":"1y"}]}'
-                if not use_deletion else
-                '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер","ttl":"1y"}],"delete":[{"subject":"пользователь","relation":"работает как","object":"водитель"}]}'
+                if not use_deletion
+                else '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер","ttl":"1y"}],"delete":[{"subject":"пользователь","relation":"работает как","object":"водитель"}]}'
             )
         else:
             output_schema = (
                 '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси","ttl":"1y"}]}'
-                if not use_deletion else
-                '{"triplets":[{"subject":"пользователь","relation":"место жительства","object":"сызрань","ttl":"1y"},{"subject":"пользователь","relation":"бывшее место жительства","object":"москва","ttl":"1y"}],"delete":[{"subject":"пользователь","relation":"место жительства","object":"москва"}]}'
+                if not use_deletion
+                else '{"triplets":[{"subject":"пользователь","relation":"место жительства","object":"сызрань","ttl":"1y"},{"subject":"пользователь","relation":"бывшее место жительства","object":"москва","ttl":"1y"}],"delete":[{"subject":"пользователь","relation":"место жительства","object":"москва"}]}'
             )
         ttl_block = (
             "\nДОПОЛНИТЕЛЬНО К КАЖДОМУ ТРИПЛЕТУ ДОБАВЛЯЙ ПОЛЕ TTL (время жизни факта).\n"
@@ -177,23 +186,23 @@ def build_triplet_messages(
         if include_slot:
             output_schema = (
                 '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}]}'
-                if not use_deletion else
-                '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}],"delete":[{"subject":"пользователь","relation":"работает как","object":"водитель"}]}'
+                if not use_deletion
+                else '{"triplets":[{"slot":"РАБОТА","subject":"пользователь","relation":"работает как","object":"инженер"}],"delete":[{"subject":"пользователь","relation":"работает как","object":"водитель"}]}'
             )
         else:
             output_schema = (
                 '{"triplets":[{"subject":"пользователь","relation":"работает как","object":"водитель такси"}]}'
-                if not use_deletion else
-                '{"triplets":[{"subject":"пользователь","relation":"место жительства","object":"сызрань"}],"delete":[{"subject":"пользователь","relation":"место жительства","object":"москва"}]}'
+                if not use_deletion
+                else '{"triplets":[{"subject":"пользователь","relation":"место жительства","object":"сызрань"}],"delete":[{"subject":"пользователь","relation":"место жительства","object":"москва"}]}'
             )
         ttl_block = ""
 
     delete_block = ""
     if use_deletion:
         delete_block = (
-            "\nПОЛЕ \"delete\" - список фактов для явного удаления из памяти.\n"
-            "Добавляй в \"delete\" только факты из текущего списка фактов слота.\n"
-            "Если нечего удалять - \"delete\":[].\n"
+            '\nПОЛЕ "delete" - список фактов для явного удаления из памяти.\n'
+            'Добавляй в "delete" только факты из текущего списка фактов слота.\n'
+            'Если нечего удалять - "delete":[].\n'
         )
 
     system = (
@@ -204,27 +213,26 @@ def build_triplet_messages(
         "Субъект, связь и объект пиши строчными буквами (lowercase).\n"
         "Не используй символ подчёркивания «_» - разделяй слова только пробелами.\n"
         "Для фактов о самом пользователе используй субъект: пользователь.\n"
-
         "Если упомянута связанная сущность (питомец, член семьи, коллега и т.п.):\n"
         "  1. Триплет связи - всегда добавляй роль, только потом имя, если оно есть:\n"
-        "     Запрещено: {\"subject\":\"пользователь\",\"relation\":\"есть кот\",\"object\":\"рыжик\"}\n"
-        "     Верно:     {\"subject\":\"пользователь\",\"relation\":\"есть кот\",\"object\":\"кот пользователя\"}\n"
-        "                {\"subject\":\"кот пользователя\",\"relation\":\"имя\",\"object\":\"рыжик\"}\n"
+        '     Запрещено: {"subject":"пользователь","relation":"есть кот","object":"рыжик"}\n'
+        '     Верно:     {"subject":"пользователь","relation":"есть кот","object":"кот пользователя"}\n'
+        '                {"subject":"кот пользователя","relation":"имя","object":"рыжик"}\n'
         "  2. Свойства сущности - всегда добавляй роль, только потом имя, если оно есть:\n"
-        "     Запрещено: {\"subject\":\"рыжик\",\"relation\":\"болен\",\"object\":\"да\"}\n"
-        "     Верно:     {\"subject\":\"кот пользователя\",\"relation\":\"имя\",\"object\":\"рыжик\"}\n"
-        "                {\"subject\":\"рыжик\",\"relation\":\"состояние\",\"object\":\"болен\"}\n\n"
+        '     Запрещено: {"subject":"рыжик","relation":"болен","object":"да"}\n'
+        '     Верно:     {"subject":"кот пользователя","relation":"имя","object":"рыжик"}\n'
+        '                {"subject":"рыжик","relation":"состояние","object":"болен"}\n\n'
         + events_travel_chain_block
         + "Каждый триплет обособлен - понятен при одиночном прочтении, без соседних триплетов.\n"
         "  Субъект и объект должны однозначно называть сущность, даже вне контекста:\n"
-        "  Запрещено: {\"subject\":\"старший\",\"relation\":\"имя\",\"object\":\"алёша\"}\n"
+        '  Запрещено: {"subject":"старший","relation":"имя","object":"алёша"}\n'
         "             (непонятно, чей «старший»)\n"
-        "  Верно:     {\"subject\":\"старший сын пользователя\",\"relation\":\"имя\",\"object\":\"алёша\"}\n"
+        '  Верно:     {"subject":"старший сын пользователя","relation":"имя","object":"алёша"}\n'
         "Не упаковывай несколько фактов в один объект.\n"
         "Связь однозначно описывает смысл - используй цепочку:\n"
-        "  Запрещено: {\"subject\":\"пользователь\",\"relation\":\"частота\",\"object\":\"раз в неделю\"}\n"
-        "  Верно:     {\"subject\":\"пользователь\",\"relation\":\"ходит\",\"object\":\"рыбалка\"}\n"
-        "             {\"subject\":\"рыбалка\",\"relation\":\"частота\",\"object\":\"раз в неделю\"}\n\n"
+        '  Запрещено: {"subject":"пользователь","relation":"частота","object":"раз в неделю"}\n'
+        '  Верно:     {"subject":"пользователь","relation":"ходит","object":"рыбалка"}\n'
+        '             {"subject":"рыбалка","relation":"частота","object":"раз в неделю"}\n\n'
         + kinship_foreign_family_block
         + "Не выдумывай факты - только то, что явно сказано в сообщении.\n"
         "Строго запрещено - не создавай записи, которые содержат информацию о пользователе, но не относятся к текущему слоту.\n"
@@ -260,21 +268,25 @@ def build_triplet_messages(
 
     def user_turn_with_context(msg: str) -> str:
         slot_part = f"Слот: {ru_slot}\n" if ru_slot else ""
-        action = "Извлеки новые/изменённые факты и укажи факты для удаления." if use_deletion else "Извлеки только новые факты, не дублируй существующие."
-        return (
-            f"{slot_part}"
-            f"Сообщение пользователя:\n{msg}\n\n"
-            f"{action}"
+        action = (
+            "Извлеки новые/изменённые факты и укажи факты для удаления."
+            if use_deletion
+            else "Извлеки только новые факты, не дублируй существующие."
         )
+        return f"{slot_part}" f"Сообщение пользователя:\n{msg}\n\n" f"{action}"
 
     if use_context:
         few_shot = triplet_context_few_shot_messages(
-            user_turn_with_context, slot_name=slot_name, use_ttl=use_ttl,
+            user_turn_with_context,
+            slot_name=slot_name,
+            use_ttl=use_ttl,
             enable_deletion=use_deletion,
         )
         user_turn = user_turn_with_context
     elif include_slot:
-        few_shot = triplet_single_pass_few_shot_messages(user_turn_no_slot, use_ttl=use_ttl)
+        few_shot = triplet_single_pass_few_shot_messages(
+            user_turn_no_slot, use_ttl=use_ttl
+        )
         user_turn = user_turn_no_slot
     elif slot_name and ru_slot:
         few_shot = triplet_per_slot_few_shot_messages(

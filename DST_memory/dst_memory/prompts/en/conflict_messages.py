@@ -1,6 +1,7 @@
 """
 English UI for triplet-level conflict resolution.
 """
+
 from __future__ import annotations
 
 import json
@@ -11,9 +12,9 @@ from .prompt_fewshots import CONFLICT_RESOLUTION_FEWSHOT
 
 def build_conflict_messages(
     slot_name: str,
-    existing_triplets: List[Dict[str, Any]],
-    new_triplets: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    existing_triplets: list[dict[str, Any]],
+    new_triplets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     # system = (
     #     "YOU ARE A MEMORY CONFLICT RESOLVER FOR A USER KNOWLEDGE GRAPH.\n"
     #     "You receive EXISTING active triplets (with record_id) and NEW incoming triplets (with idx).\n"
@@ -43,25 +44,22 @@ def build_conflict_messages(
         "You receive EXISTING active triplets (with record_id) and NEW incoming triplets (with idx).\n"
         "Your task: detect contradictions and superseded facts.\n\n"
         "OUTPUT ONLY VALID JSON. NO MARKDOWN. NO EXPLANATION.\n\n"
-        "SCHEMA: {\"deactivate\": [<record_id>, ...]}\n\n"
+        'SCHEMA: {"deactivate": [<record_id>, ...]}\n\n'
         "RULES:\n"
         "DEACTIVATE an existing record when a new triplet supersedes it "
         "(same subject, semantically equivalent or contradicting relation — old value is now wrong or outdated).\n"
         "DO NOT deactivate facts that remain valid alongside the new ones.\n"
         "IMPORTANT: If the existing and new triplet have the SAME subject and SAME object but "
         "DIFFERENT relations, this is COMPLEMENTARY information about the same entity — "
-        "keep BOTH, return {\"deactivate\":[]}.\n"
-        "IF there is no conflict — return {\"deactivate\":[]}.\n\n"
+        'keep BOTH, return {"deactivate":[]}.\n'
+        'IF there is no conflict — return {"deactivate":[]}.\n\n'
         f"SLOT: {slot_name}\n"
     )
 
     def user_turn(existing: str, new: str) -> str:
-        return (
-            f"Existing triplets: {existing}\n"
-            f"New triplets: {new}"
-        )
+        return f"Existing triplets: {existing}\n" f"New triplets: {new}"
 
-    few_shot: List[Dict[str, Any]] = []
+    few_shot: list[dict[str, Any]] = []
     for existing_json, new_json, answer in CONFLICT_RESOLUTION_FEWSHOT:
         few_shot.append({"role": "user", "content": user_turn(existing_json, new_json)})
         few_shot.append({"role": "assistant", "content": answer})

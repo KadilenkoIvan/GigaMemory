@@ -8,7 +8,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
-from dst_memory.utils.io_utils import iter_dialogue_messages, iter_user_messages, read_jsonl
+from dst_memory.utils.io_utils import (
+    iter_dialogue_messages,
+    iter_user_messages,
+    read_jsonl,
+)
 from dst_memory.utils.run_config_loader import (
     default_config_path,
     load_run_config,
@@ -38,6 +42,7 @@ def _pre_parse_config_path(argv: list[str]) -> str | None:
 def build_pipeline(args: argparse.Namespace):
     from dst_memory import PipelineConfig
     from dst_memory.core.pipeline import DSTMemoryPipeline
+
     _ensure_local_ragu_import()
     from dst_memory.storage.ragu_graph_processor import build_ragu_processor
 
@@ -66,19 +71,31 @@ def build_pipeline(args: argparse.Namespace):
         ragu_embedder_model=getattr(args, "ragu_embedder_model", "deepvk/USER-bge-m3"),
         ragu_storage_path=getattr(args, "ragu_storage_path", ""),
         ttl_mode=getattr(args, "ttl_mode", "mode2"),
-        ttl_slot_overrides=json.loads(getattr(args, "ttl_slot_overrides", "{}") or "{}"),
+        ttl_slot_overrides=json.loads(
+            getattr(args, "ttl_slot_overrides", "{}") or "{}"
+        ),
         ttl_semantic_dedup_enabled=getattr(args, "ttl_semantic_dedup_enabled", True),
-        ttl_semantic_dedup_threshold=float(getattr(args, "ttl_semantic_dedup_threshold", 0.9)),
+        ttl_semantic_dedup_threshold=float(
+            getattr(args, "ttl_semantic_dedup_threshold", 0.9)
+        ),
         slot_context_enabled=getattr(args, "slot_context_enabled", False),
         slot_context_max_facts=int(getattr(args, "slot_context_max_facts", 10)),
         triplet_deletion_mode=getattr(args, "triplet_deletion_mode", "none"),
         deletion_use_pymorphy=getattr(args, "deletion_use_pymorphy", False),
-        conflict_allow_multi_relation_same_object=getattr(args, "conflict_allow_multi_relation_same_object", True),
-        conflict_rule_same_relation_updates=getattr(args, "conflict_rule_same_relation_updates", True),
+        conflict_allow_multi_relation_same_object=getattr(
+            args, "conflict_allow_multi_relation_same_object", True
+        ),
+        conflict_rule_same_relation_updates=getattr(
+            args, "conflict_rule_same_relation_updates", True
+        ),
         slot_model_enable_thinking=getattr(args, "slot_model_enable_thinking", False),
-        slot_llm_inject_no_think_prompt=getattr(args, "slot_llm_inject_no_think_prompt", True),
+        slot_llm_inject_no_think_prompt=getattr(
+            args, "slot_llm_inject_no_think_prompt", True
+        ),
         slot_llm_lm_format_enforcer=getattr(args, "slot_llm_lm_format_enforcer", False),
-        slot_llm_load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+        slot_llm_load_quantization=str(
+            getattr(args, "slot_llm_load_quantization", "none") or "none"
+        ),
         slot_fallback_on_no_slots=getattr(args, "slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=getattr(args, "triplet_fallback_on_empty", True),
         prompt_language=getattr(args, "prompt_language", "ru"),
@@ -119,11 +136,25 @@ def create_parser(
 
     parser = argparse.ArgumentParser(description="DST_memory runner")
     parser.add_argument("--config", type=str, default=resolved_config_path)
-    parser.add_argument("--importance-model-path", type=str, default=s.get("importance_model_path", ""))
-    parser.add_argument("--importance-threshold", type=float, default=float(s.get("importance_threshold", 0.5)))
-    parser.add_argument("--retrieval-top-k", type=int, default=int(s.get("retrieval_top_k", 5)))
-    parser.add_argument("--graph-top-k-records", type=int, default=int(s.get("graph_top_k_records", 20)))
-    parser.add_argument("--recent-history-pairs", type=int, default=int(s.get("recent_history_pairs", 5)))
+    parser.add_argument(
+        "--importance-model-path", type=str, default=s.get("importance_model_path", "")
+    )
+    parser.add_argument(
+        "--importance-threshold",
+        type=float,
+        default=float(s.get("importance_threshold", 0.5)),
+    )
+    parser.add_argument(
+        "--retrieval-top-k", type=int, default=int(s.get("retrieval_top_k", 5))
+    )
+    parser.add_argument(
+        "--graph-top-k-records", type=int, default=int(s.get("graph_top_k_records", 20))
+    )
+    parser.add_argument(
+        "--recent-history-pairs",
+        type=int,
+        default=int(s.get("recent_history_pairs", 5)),
+    )
     parser.add_argument(
         "--disable-memory-gate",
         action="store_const",
@@ -148,19 +179,65 @@ def create_parser(
         default=str(s.get("llm_mode", "openrouter")),
         choices=["stub", "local", "api", "openrouter", "puter"],
     )
-    parser.add_argument("--llm-api-url", type=str, default=str(s.get("llm_api_url", "https://openrouter.ai/api/v1")))
-    parser.add_argument("--llm-api-key", type=str, default=str(s.get("llm_api_key", "")))
-    parser.add_argument("--llm-model", type=str, default=str(s.get("llm_model", "openai/gpt-oss-120b:free")))
-    parser.add_argument("--llm-tokenizer-model", type=str, default=str(s.get("llm_tokenizer_model", "")))
-    parser.add_argument("--llm-temperature", type=float, default=float(s.get("llm_temperature", 0.0)))
-    parser.add_argument("--llm-max-tokens", type=int, default=int(s.get("llm_max_tokens", 1024)))
-    parser.add_argument("--openrouter-http-referer", dest="openrouter_http_referer", type=str, default=str(s.get("openrouter_http_referer", "")))
-    parser.add_argument("--openrouter-x-title", dest="openrouter_x_title", type=str, default=str(s.get("openrouter_x_title", "")))
-    parser.add_argument("--no-final-llm", action="store_const", const=True, default=bool(s.get("no_final_llm", False)))
-    parser.add_argument("--log-level", type=str, default=str(s.get("log_level", "INFO")))
-    parser.add_argument("--slot-use-stub", action="store_const", const=True, default=bool(s.get("slot_use_stub", False)))
-    parser.add_argument("--slot-model-path", type=str, default=str(s.get("slot_model_path", "Qwen/Qwen3-0.6B")))
-    parser.add_argument("--slot-max-slots-per-message", type=int, default=int(s.get("slot_max_slots_per_message", 5)))
+    parser.add_argument(
+        "--llm-api-url",
+        type=str,
+        default=str(s.get("llm_api_url", "https://openrouter.ai/api/v1")),
+    )
+    parser.add_argument(
+        "--llm-api-key", type=str, default=str(s.get("llm_api_key", ""))
+    )
+    parser.add_argument(
+        "--llm-model",
+        type=str,
+        default=str(s.get("llm_model", "openai/gpt-oss-120b:free")),
+    )
+    parser.add_argument(
+        "--llm-tokenizer-model", type=str, default=str(s.get("llm_tokenizer_model", ""))
+    )
+    parser.add_argument(
+        "--llm-temperature", type=float, default=float(s.get("llm_temperature", 0.0))
+    )
+    parser.add_argument(
+        "--llm-max-tokens", type=int, default=int(s.get("llm_max_tokens", 1024))
+    )
+    parser.add_argument(
+        "--openrouter-http-referer",
+        dest="openrouter_http_referer",
+        type=str,
+        default=str(s.get("openrouter_http_referer", "")),
+    )
+    parser.add_argument(
+        "--openrouter-x-title",
+        dest="openrouter_x_title",
+        type=str,
+        default=str(s.get("openrouter_x_title", "")),
+    )
+    parser.add_argument(
+        "--no-final-llm",
+        action="store_const",
+        const=True,
+        default=bool(s.get("no_final_llm", False)),
+    )
+    parser.add_argument(
+        "--log-level", type=str, default=str(s.get("log_level", "INFO"))
+    )
+    parser.add_argument(
+        "--slot-use-stub",
+        action="store_const",
+        const=True,
+        default=bool(s.get("slot_use_stub", False)),
+    )
+    parser.add_argument(
+        "--slot-model-path",
+        type=str,
+        default=str(s.get("slot_model_path", "Qwen/Qwen3-0.6B")),
+    )
+    parser.add_argument(
+        "--slot-max-slots-per-message",
+        type=int,
+        default=int(s.get("slot_max_slots_per_message", 5)),
+    )
     parser.add_argument(
         "--prompt-language",
         dest="prompt_language",
@@ -169,8 +246,14 @@ def create_parser(
         choices=["ru", "en"],
         help="UI language for slot/triplet/gate/deletion/conflict and final LLM prompts (ru or en)",
     )
-    parser.add_argument("--ragu-embedder-model", type=str, default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")))
-    parser.add_argument("--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", "")))
+    parser.add_argument(
+        "--ragu-embedder-model",
+        type=str,
+        default=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")),
+    )
+    parser.add_argument(
+        "--ragu-storage-path", type=str, default=str(s.get("ragu_storage_path", ""))
+    )
     parser.add_argument(
         "--clear-ragu-graph",
         dest="clear_ragu_graph",
@@ -320,28 +403,47 @@ def create_parser(
     op.add_argument("--prompt", type=str, default="Ответь одним словом: работает.")
     op.set_defaults(func=cmd_module_openrouter_ping)
 
-    tj = m_sub.add_parser("triplet-json-test", help="Run per-slot triplet extraction from JSON payload")
-    tj.add_argument("--json-path", type=str, default="DST_memory/triplet_test_payload.json")
+    tj = m_sub.add_parser(
+        "triplet-json-test", help="Run per-slot triplet extraction from JSON payload"
+    )
+    tj.add_argument(
+        "--json-path", type=str, default="DST_memory/triplet_test_payload.json"
+    )
     tj.set_defaults(func=cmd_module_triplet_json_test)
 
-    tjb = m_sub.add_parser("triplet-json-batch-test", help="Run triplet extraction for batch JSON payload")
-    tjb.add_argument("--json-path", type=str, default="DST_memory/triplet_test_payloads.json")
-    tjb.add_argument("--output-path", type=str, default="DST_memory/triplet_test_results.json")
+    tjb = m_sub.add_parser(
+        "triplet-json-batch-test", help="Run triplet extraction for batch JSON payload"
+    )
+    tjb.add_argument(
+        "--json-path", type=str, default="DST_memory/triplet_test_payloads.json"
+    )
+    tjb.add_argument(
+        "--output-path", type=str, default="DST_memory/triplet_test_results.json"
+    )
     tjb.set_defaults(func=cmd_module_triplet_json_batch_test)
 
     p = sub.add_parser("pipeline", help="Run pipeline")
     p_sub = p.add_subparsers(required=True)
 
     test_parser = p_sub.add_parser("test", help="Test mode over jsonl dataset")
-    test_parser.add_argument("--dataset-path", type=str, default=pj_cfg.get("dataset_path"))
-    test_parser.add_argument("--output-path", type=str, default=pj_cfg.get("output_path"))
+    test_parser.add_argument(
+        "--dataset-path", type=str, default=pj_cfg.get("dataset_path")
+    )
+    test_parser.add_argument(
+        "--output-path", type=str, default=pj_cfg.get("output_path")
+    )
     test_parser.set_defaults(func=cmd_pipeline_test_jsonl)
 
     inf = p_sub.add_parser("inference", help="Inference mode")
     inf_sub = inf.add_subparsers(required=True)
 
     pi_parser = inf_sub.add_parser("interactive", help="Interactive inference")
-    pi_parser.add_argument("--dialogue-id", dest="dialogue_id", type=str, default=pi_cfg.get("dialogue_id", "interactive"))
+    pi_parser.add_argument(
+        "--dialogue-id",
+        dest="dialogue_id",
+        type=str,
+        default=pi_cfg.get("dialogue_id", "interactive"),
+    )
     pi_parser.set_defaults(func=cmd_pipeline_inference_interactive)
 
     ps_parser = inf_sub.add_parser("single-turn", help="Single turn inference")
@@ -353,13 +455,16 @@ def create_parser(
 
 def cmd_module_classifier(args: argparse.Namespace) -> None:
     from dst_memory.clients.classifier import ImportanceClassifier
-    model = ImportanceClassifier(model_path=args.importance_model_path, threshold=args.importance_threshold)
+
+    model = ImportanceClassifier(
+        model_path=args.importance_model_path, threshold=args.importance_threshold
+    )
     print(json.dumps(model.predict(args.text), ensure_ascii=False, indent=2))
 
 
 def cmd_module_dst(args: argparse.Namespace) -> None:
-    from dst_memory.core.dst_manager import DSTManager
     from dst_memory.clients.serving import LocalHFServing
+    from dst_memory.core.dst_manager import DSTManager
     from dst_memory.slots.slot_select_client import SlotSelectClient
     from dst_memory.triplets.triplet_client import TripletExtractionClient
 
@@ -367,7 +472,9 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
     if not args.slot_use_stub:
         slot_serving = LocalHFServing(
             args.slot_model_path,
-            load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+            load_quantization=str(
+                getattr(args, "slot_llm_load_quantization", "none") or "none"
+            ),
         )
     triplet_extractor = TripletExtractionClient(
         use_stub=args.slot_use_stub,
@@ -395,6 +502,7 @@ def cmd_module_dst(args: argparse.Namespace) -> None:
 
 def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
     from dst_memory.clients.llm_client import FinalLLMClient
+
     client = FinalLLMClient(
         mode="openrouter",
         api_url=args.llm_api_url,
@@ -410,21 +518,25 @@ def cmd_module_openrouter_ping(args: argparse.Namespace) -> None:
 
 
 def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
-    from dst_memory.slots.ontology import DEFAULT_USER_SLOTS
     from dst_memory.clients.serving import LocalHFServing
+    from dst_memory.slots.ontology import DEFAULT_USER_SLOTS
     from dst_memory.triplets.triplet_client import TripletExtractionClient
 
-    with open(args.json_path, "r", encoding="utf-8") as f:
+    with open(args.json_path, encoding="utf-8") as f:
         payload = json.load(f)
     msg = str(payload.get("message", "")).strip()
     slot = str(payload.get("slot", "")).strip().upper()
     if not msg:
         raise SystemExit("JSON payload must include non-empty 'message'")
     if slot not in set(DEFAULT_USER_SLOTS.slot_names):
-        raise SystemExit(f"Invalid slot '{slot}'. Allowed: {', '.join(DEFAULT_USER_SLOTS.slot_names)}")
+        raise SystemExit(
+            f"Invalid slot '{slot}'. Allowed: {', '.join(DEFAULT_USER_SLOTS.slot_names)}"
+        )
     serving = LocalHFServing(
         args.slot_model_path,
-        load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+        load_quantization=str(
+            getattr(args, "slot_llm_load_quantization", "none") or "none"
+        ),
     )
     client = TripletExtractionClient(
         use_stub=False,
@@ -438,7 +550,12 @@ def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
         "slot": slot,
         "message": msg,
         "triplets": [
-            {"subject": t.subject, "relation": t.relation, "object": t.object, "ttl": t.ttl}
+            {
+                "subject": t.subject,
+                "relation": t.relation,
+                "object": t.object,
+                "ttl": t.ttl,
+            }
             for t in triplets
         ],
     }
@@ -446,11 +563,11 @@ def cmd_module_triplet_json_test(args: argparse.Namespace) -> None:
 
 
 def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
-    from dst_memory.slots.ontology import DEFAULT_USER_SLOTS
     from dst_memory.clients.serving import LocalHFServing
+    from dst_memory.slots.ontology import DEFAULT_USER_SLOTS
     from dst_memory.triplets.triplet_client import TripletExtractionClient
 
-    with open(args.json_path, "r", encoding="utf-8") as f:
+    with open(args.json_path, encoding="utf-8") as f:
         payload = json.load(f)
     cases = payload.get("cases", [])
     if not isinstance(cases, list) or not cases:
@@ -458,7 +575,9 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
     allowed = set(DEFAULT_USER_SLOTS.slot_names)
     serving = LocalHFServing(
         args.slot_model_path,
-        load_quantization=str(getattr(args, "slot_llm_load_quantization", "none") or "none"),
+        load_quantization=str(
+            getattr(args, "slot_llm_load_quantization", "none") or "none"
+        ),
     )
     client = TripletExtractionClient(
         use_stub=False,
@@ -473,18 +592,33 @@ def cmd_module_triplet_json_batch_test(args: argparse.Namespace) -> None:
         msg = str(case.get("message", "")).strip()
         slot = str(case.get("slot", "")).strip().upper()
         if not msg or slot not in allowed:
-            results.append({"id": cid, "slot": slot, "message": msg, "error": "invalid_case", "triplets": []})
+            results.append(
+                {
+                    "id": cid,
+                    "slot": slot,
+                    "message": msg,
+                    "error": "invalid_case",
+                    "triplets": [],
+                }
+            )
             continue
         triplets = client.extract_for_slot(msg, slot)
-        results.append({
-            "id": cid,
-            "slot": slot,
-            "message": msg,
-            "triplets": [
-                {"subject": t.subject, "relation": t.relation, "object": t.object, "ttl": t.ttl}
-                for t in triplets
-            ],
-        })
+        results.append(
+            {
+                "id": cid,
+                "slot": slot,
+                "message": msg,
+                "triplets": [
+                    {
+                        "subject": t.subject,
+                        "relation": t.relation,
+                        "object": t.object,
+                        "ttl": t.ttl,
+                    }
+                    for t in triplets
+                ],
+            }
+        )
     with open(args.output_path, "w", encoding="utf-8") as f:
         json.dump({"results": results}, f, ensure_ascii=False, indent=2)
     print(f"Saved: {args.output_path}")
@@ -505,7 +639,7 @@ def _derive_ragu_storage_from_output(args: argparse.Namespace) -> str:
     output_path = getattr(args, "output_path", "") or ""
     base = Path(__file__).resolve().parent
     if output_path:
-        stem = Path(output_path).stem   # e.g. "test1" from "results/test1.json"
+        stem = Path(output_path).stem  # e.g. "test1" from "results/test1.json"
         return str(base / f"ragu_storage_{stem}")
     return str(base / "ragu_storage")
 
@@ -520,12 +654,17 @@ def _build_graph_visualization(args: argparse.Namespace) -> None:
     """
     import subprocess
 
-    storage_path = Path(getattr(args, "ragu_storage_path", "") or
-                        Path(__file__).resolve().parent / "ragu_storage")
+    storage_path = Path(
+        getattr(args, "ragu_storage_path", "")
+        or Path(__file__).resolve().parent / "ragu_storage"
+    )
     graph_path = storage_path / "knowledge_graph.gml"
 
     if not graph_path.exists():
-        logger.warning("Graph visualization: knowledge_graph.gml not found at %s — skipping", graph_path)
+        logger.warning(
+            "Graph visualization: knowledge_graph.gml not found at %s — skipping",
+            graph_path,
+        )
         return
 
     output_path = Path(args.output_path)
@@ -534,20 +673,30 @@ def _build_graph_visualization(args: argparse.Namespace) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     viz_script = repo_root / "RAGU" / "scripts" / "visualize_knowledge_graph.py"
     if not viz_script.exists():
-        logger.warning("Graph visualization: script not found at %s — skipping", viz_script)
+        logger.warning(
+            "Graph visualization: script not found at %s — skipping", viz_script
+        )
         return
 
-    cmd = [sys.executable, str(viz_script),
-           "--graph-path", str(graph_path),
-           "--output", str(html_output)]
+    cmd = [
+        sys.executable,
+        str(viz_script),
+        "--graph-path",
+        str(graph_path),
+        "--output",
+        str(html_output),
+    ]
     logger.info("Building graph visualization: %s", " ".join(cmd))
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
             print(f"Saved graph: {html_output}")
         else:
-            logger.warning("Visualization script failed (code %d):\n%s",
-                           result.returncode, result.stderr[:1000])
+            logger.warning(
+                "Visualization script failed (code %d):\n%s",
+                result.returncode,
+                result.stderr[:1000],
+            )
     except Exception as exc:
         logger.warning("Could not build graph visualization: %s", exc)
 
@@ -582,7 +731,9 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
         write_logs = []
 
         for msg in iter_user_messages(row):
-            write_logs.append(pipeline.write_to_memory(dialogue_id=dialogue_id, message=msg))
+            write_logs.append(
+                pipeline.write_to_memory(dialogue_id=dialogue_id, message=msg)
+            )
 
         pending_user = None
         for msg in iter_dialogue_messages(row):
@@ -593,7 +744,9 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
                 pending_user = None
 
         # Always collect the verbose answer (includes final_llm_prompt for logs)
-        verbose_answer = pipeline.answer_without_final_llm(dialogue_id=dialogue_id, question=question)
+        verbose_answer = pipeline.answer_without_final_llm(
+            dialogue_id=dialogue_id, question=question
+        )
 
         if args.no_final_llm:
             answer = verbose_answer
@@ -615,23 +768,29 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
                 if args.no_final_llm
                 else pipeline.final_llm._last_prompt_messages
             ),
-            "memory_context_for_final_llm": verbose_answer.get("memory_context_for_final_llm"),
+            "memory_context_for_final_llm": verbose_answer.get(
+                "memory_context_for_final_llm"
+            ),
             "expired_facts": verbose_answer.get("expired_facts", []),
-            "deleted_facts_with_reasons": verbose_answer.get("deleted_facts_with_reasons", []),
+            "deleted_facts_with_reasons": verbose_answer.get(
+                "deleted_facts_with_reasons", []
+            ),
         }
         results_logs.append(log_entry)
 
         compact_answer = verbose_answer
-        results_compact.append({
-            "dialogue_id": dialogue_id,
-            "question": question,
-            "use_memory": compact_answer.get("use_memory"),
-            "retrieved": compact_answer.get("retrieved", []),
-            "memory_slots": compact_answer.get("memory_slots", []),
-            "memory_context": compact_answer.get("memory_context_for_final_llm"),
-            "recent_pairs": compact_answer.get("recent_pairs", []),
-            "expired_facts": compact_answer.get("expired_facts", []),
-        })
+        results_compact.append(
+            {
+                "dialogue_id": dialogue_id,
+                "question": question,
+                "use_memory": compact_answer.get("use_memory"),
+                "retrieved": compact_answer.get("retrieved", []),
+                "memory_slots": compact_answer.get("memory_slots", []),
+                "memory_context": compact_answer.get("memory_context_for_final_llm"),
+                "recent_pairs": compact_answer.get("recent_pairs", []),
+                "expired_facts": compact_answer.get("expired_facts", []),
+            }
+        )
         pipeline.clear_memory(dialogue_id)
 
     with open(args.output_path, "w", encoding="utf-8") as f:
@@ -671,7 +830,11 @@ def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
         log = pipeline.write_to_memory(did, Message(role="user", content=raw))
         if args.no_final_llm:
             out = pipeline.answer_without_final_llm(did, raw)
-            print(json.dumps({"write_log": log, "answer": out}, ensure_ascii=False, indent=2))
+            print(
+                json.dumps(
+                    {"write_log": log, "answer": out}, ensure_ascii=False, indent=2
+                )
+            )
             continue
         answer = pipeline.answer(did, raw)
         pipeline.add_recent_pair(did, raw, answer)
@@ -688,15 +851,23 @@ def cmd_pipeline_inference_single_turn(args: argparse.Namespace) -> None:
     log = pipeline.write_to_memory(args.dialogue_id, Message(role="user", content=msg))
     if args.no_final_llm:
         out = pipeline.answer_without_final_llm(args.dialogue_id, msg)
-        print(json.dumps({"write_log": log, "answer": out}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps({"write_log": log, "answer": out}, ensure_ascii=False, indent=2)
+        )
         return
     answer = pipeline.answer(args.dialogue_id, msg)
     pipeline.add_recent_pair(args.dialogue_id, msg, answer)
-    print(json.dumps({
-        "write_log": log,
-        "answer": answer,
-        "final_llm_prompt": pipeline.final_llm._last_prompt_messages,
-    }, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {
+                "write_log": log,
+                "answer": answer,
+                "final_llm_prompt": pipeline.final_llm._last_prompt_messages,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 def main() -> None:
@@ -708,7 +879,9 @@ def main() -> None:
     try:
         file_cfg = load_run_config(load_path)
     except FileNotFoundError as e:
-        raise SystemExit(f"{e}\nCreate DST_memory/run_config.json or pass --config <path>.") from e
+        raise SystemExit(
+            f"{e}\nCreate DST_memory/run_config.json or pass --config <path>."
+        ) from e
     resolved = Path(load_path) if load_path else default_config_path()
     resolved = resolved.resolve()
     parser = create_parser(

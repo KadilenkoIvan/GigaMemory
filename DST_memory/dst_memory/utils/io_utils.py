@@ -4,9 +4,9 @@ from typing import Dict, Iterable, List
 from ..core.models import Message
 
 
-def read_jsonl(path: str) -> List[Dict]:
-    rows: List[Dict] = []
-    with open(path, "r", encoding="utf-8") as f:
+def read_jsonl(path: str) -> list[dict]:
+    rows: list[dict] = []
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -15,7 +15,7 @@ def read_jsonl(path: str) -> List[Dict]:
     return rows
 
 
-def iter_user_messages(record: Dict) -> Iterable[Message]:
+def iter_user_messages(record: dict) -> Iterable[Message]:
     for session in record.get("sessions", []):
         sid = session.get("id")
         for msg in session.get("messages", []):
@@ -25,7 +25,7 @@ def iter_user_messages(record: Dict) -> Iterable[Message]:
                 yield Message(role="user", content=content, session_id=sid)
 
 
-def iter_dialogue_messages(record: Dict) -> Iterable[Message]:
+def iter_dialogue_messages(record: dict) -> Iterable[Message]:
     for session in record.get("sessions", []):
         sid = session.get("id")
         for msg in session.get("messages", []):

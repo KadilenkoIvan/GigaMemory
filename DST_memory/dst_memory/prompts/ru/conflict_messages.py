@@ -1,6 +1,7 @@
 """
 Промпт для разрешения конфликтов на уровне триплетов (русский UI).
 """
+
 from __future__ import annotations
 
 import json
@@ -11,9 +12,9 @@ from .prompt_fewshots import CONFLICT_RESOLUTION_FEWSHOT
 
 def build_conflict_messages(
     slot_name: str,
-    existing_triplets: List[Dict[str, Any]],
-    new_triplets: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    existing_triplets: list[dict[str, Any]],
+    new_triplets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     # system = (
     #     "ТЫ — РЕЗОЛВЕР КОНФЛИКТОВ ПАМЯТИ ДЛЯ ГРАФА ЗНАНИЙ ПОЛЬЗОВАТЕЛЯ.\n"
     #     "Тебе даны СУЩЕСТВУЮЩИЕ активные триплеты (с record_id) и НОВЫЕ входящие триплеты (с idx).\n"
@@ -43,7 +44,7 @@ def build_conflict_messages(
         "Тебе даны СУЩЕСТВУЮЩИЕ активные триплеты (с record_id) и НОВЫЕ входящие триплеты (с idx).\n"
         "Задача: обнаружить противоречия и устаревшие факты.\n\n"
         "ВЫДАВАЙ ТОЛЬКО ВАЛИДНЫЙ JSON. БЕЗ MARKDOWN. БЕЗ ПОЯСНЕНИЙ.\n\n"
-        "СХЕМА: {\"deactivate\": [<record_id>, ...]}\n\n"
+        'СХЕМА: {"deactivate": [<record_id>, ...]}\n\n'
         "ПРАВИЛА:\n"
         "ДЕАКТИВИРУЙ существующую запись, если новый триплет её заменяет "
         "(тот же субъект, семантически эквивалентная или противоречащая связь — старое значение неверно или устарело).\n"
@@ -51,18 +52,15 @@ def build_conflict_messages(
         "ВАЖНО: если у существующего и нового триплета ОДИН субъект и ОДИН объект, но РАЗНЫЕ связи, "
         "это ДОПОЛНЯЮЩАЯ информация об одной сущности "
         "(например «есть партнёр» и «живёт вместе с» для одного и того же партнёра) — "
-        "сохрани ОБА, верни {\"deactivate\":[]}.\n"
-        "Если конфликтов нет — верни {\"deactivate\":[]}.\n\n"
+        'сохрани ОБА, верни {"deactivate":[]}.\n'
+        'Если конфликтов нет — верни {"deactivate":[]}.\n\n'
         f"СЛОТ: {slot_name}\n"
     )
 
     def user_turn(existing: str, new: str) -> str:
-        return (
-            f"Существующие триплеты: {existing}\n"
-            f"Новые триплеты: {new}"
-        )
+        return f"Существующие триплеты: {existing}\n" f"Новые триплеты: {new}"
 
-    few_shot: List[Dict[str, Any]] = []
+    few_shot: list[dict[str, Any]] = []
     for existing_json, new_json, answer in CONFLICT_RESOLUTION_FEWSHOT:
         few_shot.append({"role": "user", "content": user_turn(existing_json, new_json)})
         few_shot.append({"role": "assistant", "content": answer})
