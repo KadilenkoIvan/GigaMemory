@@ -1,6 +1,66 @@
-# DST_memory
+# GigaMemory
+
+[![CI](https://github.com/KadilenkoIvan/GigaMemory/actions/workflows/ci.yml/badge.svg)](https://github.com/KadilenkoIvan/GigaMemory/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 `DST_memory` — модуль долгосрочной памяти LLM на основе DST-графа фактов и RAGU retrieval.
+
+## Quick Start
+
+```bash
+# 1. Клонировать репозиторий
+git clone https://github.com/KadilenkoIvan/GigaMemory.git
+cd GigaMemory
+
+# 2. Настроить окружение через uv (CUDA по умолчанию)
+make install          # CUDA
+# make install-cpu   # CPU-only
+
+# 3. Запустить pipeline в stub-режиме (без LLM и GPU)
+make smoke
+```
+
+Или вручную (без make):
+
+```bash
+pip install uv
+uv sync --extra cpu --extra dev
+uv run python DST_memory/run.py \
+  --llm-mode stub --slot-use-stub --memory-gate-use-stub \
+  --no-final-llm --memory-strategy full_graph_json \
+  pipeline test \
+  --dataset-path data/format_example.jsonl \
+  --output-path output.json
+```
+
+## Архитектура пайплайна
+
+```mermaid
+flowchart TD
+    MSG[Сообщение пользователя] --> IMP[Классификатор важности]
+    IMP -->|не важно| SKIP[Память без изменений]
+    IMP -->|важно| SLOT[Выбор слотов]
+    SLOT -->|слоты найдены| EXT[Извлечение триплетов]
+    SLOT -->|не найдены| SP[Single-pass fallback]
+    EXT -->|триплеты| DEDUP[Семантическая дедупликация]
+    EXT -->|пусто| SP
+    SP --> DEDUP
+    DEDUP --> CONF[Разрешение конфликтов]
+    CONF --> DST[DST state]
+    DST --> RAGU[RAGU граф]
+    RAGU --> DONE[Запись завершена]
+
+    Q[Вопрос пользователя] --> STRAT{Стратегия памяти}
+    STRAT -->|full_graph_json| FG[Полный граф JSON]
+    STRAT -->|relevant_slots_full| RS[Gate → релевантные слоты]
+    STRAT -->|topk_graph_records| TK[Top-K по RAGU]
+    FG & RS & TK --> HIST[+ последние пары диалога]
+    HIST --> LLM[Финальная LLM]
+    LLM --> ANS[Ответ]
+```
+
+
 
 ## Что это за проект
 
