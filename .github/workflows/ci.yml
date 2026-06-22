@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dev tools
+        run: uv pip install --system ruff black
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Black format check
+        run: black --check .
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install deps (no torch)
+        run: |
+          uv pip install --system \
+            mypy \
+            loguru razdel pyvis openai huggingface-hub \
+            pymorphy2 pymorphy2-dicts-ru pyspellchecker \
+            numpy transformers accelerate
+
+      - name: Mypy
+        run: mypy DST_memory/dst_memory/ --ignore-missing-imports
+
+  test:
+    name: Tests (stub mode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install test deps (no torch)
+        run: |
+          uv pip install --system \
+            setuptools \
+            pytest pytest-asyncio pytest-cov \
+            loguru razdel pyvis openai huggingface-hub \
+            pymorphy2 pymorphy2-dicts-ru pyspellchecker \
+            numpy transformers accelerate
+
+      - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/DST_memory
+        run: pytest tests/ -v
+
+  docker:
+    name: Docker Build (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (CPU)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          build-args: TORCH_EXTRA=cpu
+          tags: gigamemory:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
