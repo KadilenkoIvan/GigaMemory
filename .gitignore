@@ -233,4 +233,5 @@ slot_eval/slot_eval_report*.json
 slot_eval/judge_*.json
 
 # RAGU graph storage (runtime-generated, run-specific)
+DST_memory/ragu_storage/
 DST_memory/ragu_storage_*/
