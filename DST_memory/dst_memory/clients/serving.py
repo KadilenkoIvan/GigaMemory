@@ -148,14 +148,14 @@ class LocalHFServing:
                 resolved,
                 trust_remote_code=True,
                 torch_dtype=torch_dtype,
-            ).to(self.device)
+            ).to(self.device)  # type: ignore[arg-type]
         self.model.eval()
         try:
             first_param = next(self.model.parameters())
             model_device = first_param.device
             param_dtype = first_param.dtype
         except StopIteration:
-            model_device = "unknown"
+            model_device = "unknown"  # type: ignore[assignment]
             param_dtype = None
         logger.info(
             "Serving model loaded on device=%s param_dtype=%s (requested load dtype=%s quant=%s)",
@@ -275,11 +275,11 @@ class LocalHFServing:
                 self._prefix_allowed_tokens_fn_for_schema(schema)
             )
         with torch.no_grad():
-            outputs = self.model.generate(
+            outputs = self.model.generate(  # type: ignore[misc]
                 **inputs,
-                **gen_kwargs,
+                **gen_kwargs,  # type: ignore[arg-type]
             )
         result = self.tokenizer.decode(
             outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
         )
-        return result.strip()
+        return result.strip()  # type: ignore[union-attr]
