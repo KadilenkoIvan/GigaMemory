@@ -2,10 +2,12 @@ import gc
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+# torch and transformers are heavy optional deps — imported lazily inside LocalHFServing
+# so that the rest of the codebase (and tests in stub mode) can be imported without GPU.
+if TYPE_CHECKING:
+    import torch
 
 from ..slots.slot_model_path import resolve_slot_model_path
 
@@ -73,12 +75,17 @@ class LocalHFServing:
     def __init__(
         self,
         model_path_or_id: str,
-        torch_dtype: torch.dtype = torch.float16,
+        torch_dtype: Any = None,  # defaults to torch.float16 after lazy import
         enable_thinking: bool = False,
         load_quantization: str = "none",
         inject_no_think_prompt: bool = True,
         use_lm_format_enforcer: bool = False,
     ):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        if torch_dtype is None:
+            torch_dtype = torch.float16
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_thinking = enable_thinking
         self.inject_no_think_prompt = bool(inject_no_think_prompt)
@@ -160,6 +167,8 @@ class LocalHFServing:
 
     def release(self) -> None:
         """Drop weights from VRAM/RAM (call before loading another large local model)."""
+        import torch
+
         logger.info("LocalHFServing.release() — dropping model and tokenizer")
         self._lm_enforcer_prefix_cache.clear()
         try:
@@ -216,6 +225,8 @@ class LocalHFServing:
         messages: list[dict[str, str]],
         generation_config: GenerationConfig | None = None,
     ) -> str:
+        import torch
+
         if generation_config is None:
             generation_config = GenerationConfig()
 

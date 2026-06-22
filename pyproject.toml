@@ -131,6 +131,17 @@ known-first-party = ["dst_memory"]
 [tool.black]
 line-length = 88
 target-version = ["py310", "py311"]
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | RAGU
+  | validation
+  | dataset_generation
+  | slot_eval
+  | __pycache__
+)/
+'''
 
 # ─── Mypy ─────────────────────────────────────────────────────────────────────
 
