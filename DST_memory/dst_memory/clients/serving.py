@@ -149,8 +149,8 @@ class LocalHFServing:
                 trust_remote_code=True,
                 torch_dtype=torch_dtype,
             ).to(
-                self.device
-            )  # type: ignore[arg-type]
+                self.device  # type: ignore[arg-type]
+            )
         self.model.eval()
         try:
             first_param = next(self.model.parameters())
