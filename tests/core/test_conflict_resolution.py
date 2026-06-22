@@ -9,9 +9,11 @@ from __future__ import annotations
 import pytest
 
 from dst_memory.core.graph_backend import GraphEdge
-from dst_memory.triplets.conflict_client import ConflictResolution, TripletConflictClient
+from dst_memory.triplets.conflict_client import (
+    ConflictResolution,
+    TripletConflictClient,
+)
 from dst_memory.triplets.triplet_client import ExtractedTriplet
-
 
 # ---------------------------------------------------------------------------
 # Helpers

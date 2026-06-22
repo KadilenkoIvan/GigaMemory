@@ -15,7 +15,6 @@ from dst_memory.triplets.deletion_client import TripletDeletionClient
 from dst_memory.triplets.negation_detector import NegationDeletionDetector
 from dst_memory.triplets.triplet_client import DeletionSignal, TripletExtractionClient
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a minimal FactRecord
 # ---------------------------------------------------------------------------
