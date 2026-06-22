@@ -253,7 +253,7 @@ class DSTManager:
 
         deactivated: list[int] = []
         seen: set = set()
-        deleted_records_info: list[tuple[int, str, str, str, str, str]] = (
+        deleted_records_info: list[tuple[int, str, str, str, str, str, int, str]] = (
             []
         )  # record info for tracking
 

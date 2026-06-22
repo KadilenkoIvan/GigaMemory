@@ -12,7 +12,7 @@ import logging
 from typing import List, Optional
 
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 from ..prompts.parsers import parse_deletion_response
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ class TripletDeletionClient:
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
         if not use_stub and serving is None:
             raise ValueError(

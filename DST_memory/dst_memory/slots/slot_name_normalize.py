@@ -25,7 +25,7 @@ def _patch_inspect_for_pymorphy2() -> None:
     try:
         from inspect import ArgSpec  # type: ignore[attr-defined]
     except ImportError:
-        ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "keywords", "defaults"])
+        ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "keywords", "defaults"])  # type: ignore[no-redef]
 
     def getargspec(func):  # noqa: ANN001
         spec = inspect.getfullargspec(func)

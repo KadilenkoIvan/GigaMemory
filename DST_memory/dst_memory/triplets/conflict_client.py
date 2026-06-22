@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..clients.serving import GenerationConfig, LocalHFServing
 from ..core.graph_backend import GraphEdge
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 from ..prompts.parsers import parse_conflict_response
 from .triplet_client import ExtractedTriplet
 
@@ -72,7 +72,7 @@ class TripletConflictClient:
         self.rule_same_relation_updates = rule_same_relation_updates
         self.allow_multi_relation_same_object = allow_multi_relation_same_object
         self.prompt_language = prompt_language
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
         if not use_stub and serving is None:
             raise ValueError(

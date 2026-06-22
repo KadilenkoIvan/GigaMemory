@@ -358,7 +358,7 @@ class FinalLLMClient:
         if self.x_title.strip():
             headers["X-OpenRouter-Title"] = self.x_title.strip()
 
-        last_exception = None
+        last_exception: Exception | None = None
         for attempt in range(max_retries):
             req = urllib.request.Request(
                 self._chat_url(),

@@ -118,13 +118,13 @@ if __name__ == "__main__":
         datetime.fromisoformat(_iso)
     assert parse_longmemeval_question_date_to_iso("nope") is None
     _hds = ["2023/05/20 (Sat) 02:21", "2023/05/21 (Sun) 03:24"]
-    assert fact_clock_iso_for_haystack_session(
+    assert fact_clock_iso_for_haystack_session(  # type: ignore[union-attr]
         True, _hds, 0, "2023/05/22 (Mon) 10:00"
     ).startswith("2023-05-20")
-    assert fact_clock_iso_for_haystack_session(
+    assert fact_clock_iso_for_haystack_session(  # type: ignore[union-attr]
         True, _hds, 1, "2023/05/22 (Mon) 10:00"
     ).startswith("2023-05-21")
-    assert fact_clock_iso_for_haystack_session(
+    assert fact_clock_iso_for_haystack_session(  # type: ignore[union-attr]
         True, _hds, 9, "2023/05/22 (Mon) 10:00"
     ).startswith("2023-05-22")
     assert fact_clock_iso_for_haystack_session(False, _hds, 0, "x") is None

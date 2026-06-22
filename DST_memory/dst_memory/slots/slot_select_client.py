@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 
 from ..clients.lm_json_schemas import SLOT_SELECT_JSON_SCHEMA
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology, filter_resolve_slots
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class SlotSelectClient:
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
         )
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
     def select_slots(self, user_message: str) -> list[str]:
         if self.use_stub:
@@ -72,7 +72,7 @@ class SlotSelectClient:
                     temperature=t,
                     lm_enforcer_json_schema=schema,
                 )
-            raw = self.serving.generate_chat(messages, generation_config=gen_cfg)
+            raw = self.serving.generate_chat(messages, generation_config=gen_cfg)  # type: ignore[union-attr]
             logger.info("Slot selector raw attempt=%d: %s", attempt, raw[:500])
             parsed = self._parse(raw)
             if parsed is not None:

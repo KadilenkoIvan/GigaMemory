@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 from ..slots.ontology import DEFAULT_USER_SLOTS
 from ..slots.slot_name_normalize import (
     normalize_slot_label,
@@ -60,7 +60,7 @@ class MemoryGateClient:
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
         )
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
         if self.use_stub:
             logger.info("Memory gate client in STUB mode (эвристика по маркерам)")
         elif self.serving is None:

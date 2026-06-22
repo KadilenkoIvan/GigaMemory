@@ -336,7 +336,7 @@ class DSTMemoryPipeline:
                 "dialogue_id": dialogue_id,
                 "slots": self.dst.slots_with_messages(dialogue_id),
             }
-            has_data = any(s.get("messages") for s in memory_graph["slots"])
+            has_data = any(s.get("messages") for s in memory_graph["slots"])  # type: ignore[attr-defined]
             return memory_graph, {
                 **meta_base,
                 "use_memory": has_data,
@@ -382,7 +382,7 @@ class DSTMemoryPipeline:
             }
 
         # topk_graph_records
-        lines = self.ragu_processor.search_memory(
+        lines = self.ragu_processor.search_memory(  # type: ignore[union-attr]
             query=question,
             slot_names=None,
             top_k=max(1, int(self.config.graph_top_k_records)),
@@ -414,7 +414,7 @@ class DSTMemoryPipeline:
         selected_slots = gate_meta.get("selected_slots") or self.dst.active_slot_names(
             dialogue_id
         )
-        retrieved = self.ragu_processor.search_memory(
+        retrieved = self.ragu_processor.search_memory(  # type: ignore[union-attr]
             query=question,
             slot_names=list(selected_slots) if selected_slots else None,
             top_k=self.config.retrieval_top_k,
@@ -480,7 +480,7 @@ class DSTMemoryPipeline:
                 self.dst.slot_selector._serving = None
         if hasattr(self.dst, "conflict_resolver"):
             if hasattr(self.dst.conflict_resolver, "_serving"):
-                self.dst.conflict_resolver._serving = None
+                self.dst.conflict_resolver._serving = None  # type: ignore[union-attr]
 
         # Force garbage collection
         gc.collect()
@@ -534,11 +534,11 @@ class DSTMemoryPipeline:
                 self.dst.slot_selector._serving = self._slot_serving
         if hasattr(self.dst, "conflict_resolver"):
             if hasattr(self.dst.conflict_resolver, "_serving"):
-                self.dst.conflict_resolver._serving = self._slot_serving
+                self.dst.conflict_resolver._serving = self._slot_serving  # type: ignore[union-attr]
 
         # Re-attach to memory gate
         gate_stub = self.config.memory_gate_use_stub or self._slot_serving is None
-        self.memory_gate._serving = self._slot_serving if not gate_stub else None
+        self.memory_gate._serving = self._slot_serving if not gate_stub else None  # type: ignore[attr-defined]
 
         logger.info("Local models reloaded")
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class SlotUpdateClient:
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
     def plan_operations(
         self,
@@ -70,7 +70,7 @@ class SlotUpdateClient:
         tries = self.max_retries + 1
         last = ""
         for attempt in range(1, tries + 1):
-            last = self.serving.generate_chat(
+            last = self.serving.generate_chat(  # type: ignore[union-attr]
                 messages,
                 generation_config=GenerationConfig(max_new_tokens=400, do_sample=False),
             )
@@ -100,7 +100,7 @@ class SlotUpdateClient:
             {"role": "system", "content": sys_msg},
             {"role": "user", "content": prompt},
         ]
-        fixed = self.serving.generate_chat(
+        fixed = self.serving.generate_chat(  # type: ignore[union-attr]
             messages,
             generation_config=GenerationConfig(max_new_tokens=250, do_sample=False),
         )

@@ -12,7 +12,7 @@ from ..clients.lm_json_schemas import (
 )
 from ..clients.serving import GenerationConfig, LocalHFServing
 from ..core.models import VALID_TTL_VALUES
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class TripletExtractionClient:
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
         )
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
         if self.use_stub:
             logger.info("Triplet extractor in STUB mode")
@@ -191,7 +191,7 @@ class TripletExtractionClient:
                     temperature=t,
                     lm_enforcer_json_schema=json_schema,
                 )
-            last = self.serving.generate_chat(messages, generation_config=gen_cfg)
+            last = self.serving.generate_chat(messages, generation_config=gen_cfg)  # type: ignore[union-attr]
             slot_label = slot_name if slot_name is not None else "SINGLE_PASS"
             logger.info(
                 "Triplet extractor slot=[%s] attempt=%d raw: %s",
