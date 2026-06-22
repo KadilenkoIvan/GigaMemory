@@ -1,0 +1,157 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gigamemory"
+version = "0.1.0"
+description = "Long-term memory module for LLMs based on DST graph and RAGU retrieval"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "transformers>=4.40",
+    "sentence-transformers>=2.0",
+    "datasets",
+    "evaluate",
+    "numpy>=1.26",
+    "huggingface-hub",
+    "accelerate",
+    "pymorphy2",
+    "pymorphy2-dicts-ru",
+    "pyspellchecker",
+    "openai>=1.0",
+    "loguru",
+    "razdel",
+    "pyvis",
+    "optimum",
+    "seaborn",
+    "iterative-stratification",
+    "gguf",
+    "graph-ragu",
+]
+
+[project.optional-dependencies]
+# CUDA build: torch with CUDA 12.6 support + GPU-only extras
+cuda = [
+    "torch>=2.0",
+    "torchvision",
+    "torchaudio",
+    "bitsandbytes",
+]
+# CPU-only build: used in CI and lightweight environments
+cpu = [
+    "torch>=2.0",
+    "torchvision",
+    "torchaudio",
+]
+# flash-attn is a separate extra because it requires compilation and CUDA
+flash-attn = [
+    "flash-attn",
+]
+# Dev tools: linting, formatting, type checking, testing
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.4",
+    "black>=24.0",
+    "mypy>=1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["DST_memory"]
+include = ["dst_memory*"]
+
+# ─── uv: index sources ────────────────────────────────────────────────────────
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# RAGU is a local editable package
+graph-ragu = { path = "./RAGU", editable = true }
+# PyTorch: CUDA wheels when [cuda] extra is requested, CPU otherwise
+torch = [
+    { index = "pytorch-cuda", marker = "extra == 'cuda'" },
+    { index = "pytorch-cpu", marker = "extra == 'cpu'" },
+]
+torchvision = [
+    { index = "pytorch-cuda", marker = "extra == 'cuda'" },
+    { index = "pytorch-cpu", marker = "extra == 'cpu'" },
+]
+torchaudio = [
+    { index = "pytorch-cuda", marker = "extra == 'cuda'" },
+    { index = "pytorch-cpu", marker = "extra == 'cpu'" },
+]
+
+# ─── Ruff ─────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["DST_memory"]
+# Exclude third-party and generated directories
+exclude = [
+    "RAGU",
+    "validation",
+    "dataset_generation",
+    "slot_eval",
+    ".git",
+    ".venv",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = [
+    "E501",   # line too long — delegated to black
+    "E203",   # whitespace before ':' — black-incompatible
+    "UP007",  # use X | Y instead of Union[X, Y] — breaks 3.9 compat in TYPE_CHECKING blocks
+    "UP035",  # use typing instead of typing_extensions — some deps still need extensions
+    "F401",   # unused import — many __init__.py re-exports are intentional
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dst_memory"]
+
+[tool.ruff.lint.per-file-ignores]
+"DST_memory/dst_memory/prompts/**" = ["E501"]  # long few-shot strings
+"DST_memory/run.py" = ["E402"]                 # sys.path manipulation before imports
+
+# ─── Black ────────────────────────────────────────────────────────────────────
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311"]
+
+# ─── Mypy ─────────────────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+no_implicit_optional = true
+# Exclude heavy subdirectories not part of the core library
+exclude = [
+    "RAGU/",
+    "validation/",
+    "dataset_generation/",
+    "slot_eval/",
+]
+
+# ─── Pytest ───────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v"
