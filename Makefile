@@ -43,6 +43,10 @@ install-dev: ## Install dev tools only (no torch — for CI lint/type jobs)
 	$(UV) sync --extra dev
 	@echo "Dev-only environment ready."
 
+hooks: ## Install pre-commit hooks (run once after cloning)
+	$(UV) run pre-commit install
+	@echo "Pre-commit hooks installed."
+
 # ─── Code quality ─────────────────────────────────────────────────────────────
 
 lint: ## Run ruff linter (errors only)
