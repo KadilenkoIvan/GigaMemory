@@ -3,6 +3,7 @@ Unit tests for core data models: FactRecord, is_expired(), TTL logic.
 
 Pure Python — no LLM, no GPU.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta

@@ -4,6 +4,7 @@ Unit tests for slot normalization utilities.
 Tests normalize_slot_label() and resolve_slot_key_to_existing() — pure
 string functions, no LLM or GPU required.
 """
+
 from __future__ import annotations
 
 import pytest

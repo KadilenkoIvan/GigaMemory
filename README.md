@@ -8,31 +8,35 @@
 
 ## Quick Start
 
+**Требования:** GPU с CUDA и [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
 ```bash
 # 1. Клонировать репозиторий
 git clone https://github.com/KadilenkoIvan/GigaMemory.git
 cd GigaMemory
 
-# 2. Настроить окружение через uv (CUDA по умолчанию)
-make install          # CUDA
-# make install-cpu   # CPU-only
+# 2. Настроить окружение (CUDA)
+make install
 
-# 3. Запустить pipeline в stub-режиме (без LLM и GPU)
-make smoke
+# 3. Установить pre-commit хуки (один раз после клонирования)
+make hooks
+
+# 4. Задать API ключ OpenRouter
+cp DST_memory/.env.example DST_memory/.env
+# Открыть DST_memory/.env и вписать: OPENROUTER_API_KEY=<ваш ключ>
+
+# 5. Запустить интерактивный диалог
+uv run python DST_memory/run.py pipeline inference interactive
 ```
 
-Или вручную (без make):
+При первом запуске `Qwen/Qwen3.5-9B-Instruct` скачается автоматически с HuggingFace (~18 GB).  
+Слот-модель и финальная LLM настраиваются в `DST_memory/run_config.json`.
 
-```bash
-pip install uv
-uv sync --extra cpu --extra dev
-uv run python DST_memory/run.py \
-  --llm-mode stub --slot-use-stub --memory-gate-use-stub \
-  --no-final-llm --memory-strategy full_graph_json \
-  pipeline test \
-  --dataset-path data/format_example.jsonl \
-  --output-path output.json
-```
+> Это один из возможных режимов запуска. Модель используемая внутри проекта может быть как локкальной, 
+> так и с openRouter. То же самое для финальной LLM, которая будет использоваться для ответов.
+> Также, поддерживаются batch-тест по датасету (`pipeline test`),
+> разные стратегии памяти, режимы удаления фактов и stub-режим без GPU — см. разделы ниже.
+> Для быстрой проверки без GPU и LLM: `make smoke`.
 
 ## Архитектура пайплайна
 

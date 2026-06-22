@@ -4,6 +4,7 @@ Unit tests for TripletExtractionClient.
 All tests use use_stub=True (no GPU / LLM needed) or test the pure _parse()
 logic directly — no model inference happens.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -35,12 +36,16 @@ def test_stub_extract_returns_empty(stub_client: TripletExtractionClient) -> Non
     assert triplets == []
 
 
-def test_stub_extract_for_slot_returns_empty(stub_client: TripletExtractionClient) -> None:
+def test_stub_extract_for_slot_returns_empty(
+    stub_client: TripletExtractionClient,
+) -> None:
     triplets = stub_client.extract_for_slot("Я живу в Москве", "LOCATION")
     assert triplets == []
 
 
-def test_stub_extract_with_context_returns_empty(stub_client: TripletExtractionClient) -> None:
+def test_stub_extract_with_context_returns_empty(
+    stub_client: TripletExtractionClient,
+) -> None:
     triplets, deletions = stub_client.extract_with_context(
         "Я переехал в Питер",
         existing_triplets=["пользователь | место жительства | москва"],
@@ -104,7 +109,9 @@ def test_parse_invalid_json_returns_none(stub_client: TripletExtractionClient) -
     assert stub_client._parse("{}") is None
 
 
-def test_parse_invalid_ttl_falls_back_to_inf(stub_client: TripletExtractionClient) -> None:
+def test_parse_invalid_ttl_falls_back_to_inf(
+    stub_client: TripletExtractionClient,
+) -> None:
     raw = '{"triplets":[{"slot":"FOOD","subject":"пользователь","relation":"ест","object":"пиццу","ttl":"bad_value"}]}'
     result = stub_client._parse(raw, forced_slot="FOOD")
     assert result is not None
@@ -151,7 +158,9 @@ def test_parse_with_deletion_signals(stub_client: TripletExtractionClient) -> No
     assert deletions[0].object == "москва"
 
 
-def test_parse_delete_field_ignored_when_flag_false(stub_client: TripletExtractionClient) -> None:
+def test_parse_delete_field_ignored_when_flag_false(
+    stub_client: TripletExtractionClient,
+) -> None:
     raw = """{
         "triplets":[{"slot":"HOME","subject":"пользователь","relation":"живёт в","object":"питер","ttl":"1y"}],
         "delete":[{"subject":"пользователь","relation":"живёт в","object":"москва"}]
@@ -170,7 +179,10 @@ def test_parse_delete_field_ignored_when_flag_false(stub_client: TripletExtracti
 def test_normalize_field_strips_and_lowercases() -> None:
     assert TripletExtractionClient._normalize_field("  Иван  ") == "иван"
     assert TripletExtractionClient._normalize_field("МОСКВА") == "москва"
-    assert TripletExtractionClient._normalize_field("место  жительства") == "место жительства"
+    assert (
+        TripletExtractionClient._normalize_field("место  жительства")
+        == "место жительства"
+    )
 
 
 def test_normalize_field_collapses_whitespace() -> None:

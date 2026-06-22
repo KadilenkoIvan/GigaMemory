@@ -4,6 +4,7 @@ Unit tests for TripletConflictClient — rule layer only.
 All tests use use_stub=True so no LLM is called.
 The rule layer runs unconditionally (before LLM).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -44,7 +45,9 @@ def make_triplet(
     slot: str = "TEST",
     ttl: str = "inf",
 ) -> ExtractedTriplet:
-    return ExtractedTriplet(slot=slot, subject=subject, relation=relation, object=obj, ttl=ttl)
+    return ExtractedTriplet(
+        slot=slot, subject=subject, relation=relation, object=obj, ttl=ttl
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -97,10 +100,12 @@ def test_exact_duplicate_skips_new(stub_client: TripletConflictClient) -> None:
     assert result.deactivate_ids == []
 
 
-def test_exact_duplicate_only_skips_matching(stub_client: TripletConflictClient) -> None:
+def test_exact_duplicate_only_skips_matching(
+    stub_client: TripletConflictClient,
+) -> None:
     edges = [make_edge(1, "пользователь", "имя", "иван")]
     new_triplets = [
-        make_triplet("пользователь", "имя", "иван"),   # duplicate → skip
+        make_triplet("пользователь", "имя", "иван"),  # duplicate → skip
         make_triplet("пользователь", "возраст", "30"),  # new fact → keep
     ]
 
@@ -114,7 +119,9 @@ def test_exact_duplicate_only_skips_matching(stub_client: TripletConflictClient)
 # ---------------------------------------------------------------------------
 
 
-def test_same_relation_different_object_deactivates_old(stub_client: TripletConflictClient) -> None:
+def test_same_relation_different_object_deactivates_old(
+    stub_client: TripletConflictClient,
+) -> None:
     edges = [make_edge(10, "пользователь", "живёт в", "москва")]
     new_triplets = [make_triplet("пользователь", "живёт в", "питер")]
 
@@ -123,7 +130,9 @@ def test_same_relation_different_object_deactivates_old(stub_client: TripletConf
     assert 0 not in result.skip_new_indices
 
 
-def test_same_relation_deactivates_all_matching_edges(stub_client: TripletConflictClient) -> None:
+def test_same_relation_deactivates_all_matching_edges(
+    stub_client: TripletConflictClient,
+) -> None:
     edges = [
         make_edge(10, "пользователь", "работает в", "яндекс"),
         make_edge(11, "пользователь", "работает в", "mail"),
@@ -163,7 +172,9 @@ def test_complementary_facts_not_conflicted() -> None:
         allow_multi_relation_same_object=True,
     )
     edges = [make_edge(1, "пользователь", "есть партнёр", "партнёр пользователя")]
-    new_triplets = [make_triplet("пользователь", "живёт вместе с", "партнёр пользователя")]
+    new_triplets = [
+        make_triplet("пользователь", "живёт вместе с", "партнёр пользователя")
+    ]
 
     result = client.resolve("ROMANCE", edges, new_triplets)
     # Same subject, same object, different relation → complementary → no conflict
@@ -177,7 +188,9 @@ def test_complementary_facts_always_llm_when_flag_false() -> None:
         allow_multi_relation_same_object=False,
     )
     edges = [make_edge(1, "пользователь", "есть партнёр", "партнёр пользователя")]
-    new_triplets = [make_triplet("пользователь", "живёт вместе с", "партнёр пользователя")]
+    new_triplets = [
+        make_triplet("пользователь", "живёт вместе с", "партнёр пользователя")
+    ]
 
     result = client.resolve("ROMANCE", edges, new_triplets)
     # LLM would be called, but stub → no changes
@@ -206,12 +219,14 @@ def test_conflict_resolution_fields() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_partial_conflict_among_multiple_new(stub_client: TripletConflictClient) -> None:
+def test_partial_conflict_among_multiple_new(
+    stub_client: TripletConflictClient,
+) -> None:
     edges = [make_edge(5, "пользователь", "имя", "иван")]
     new_triplets = [
-        make_triplet("пользователь", "имя", "иван"),    # exact duplicate → skip
-        make_triplet("пользователь", "возраст", "30"),   # no conflict → keep
-        make_triplet("пользователь", "город", "москва"), # no conflict → keep
+        make_triplet("пользователь", "имя", "иван"),  # exact duplicate → skip
+        make_triplet("пользователь", "возраст", "30"),  # no conflict → keep
+        make_triplet("пользователь", "город", "москва"),  # no conflict → keep
     ]
 
     result = stub_client.resolve("IDENTITY", edges, new_triplets)

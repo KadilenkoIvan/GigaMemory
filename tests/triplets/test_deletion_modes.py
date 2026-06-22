@@ -6,6 +6,7 @@ Unit tests for all three deletion modes:
 
 All tests run without GPU / LLM (stub mode or pure pattern matching).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -211,9 +212,9 @@ class TestModeCHeuristic:
         ],
     )
     def test_negation_detected_in_message(self, message: str) -> None:
-        assert self.detector._has_negation(message), (
-            f"Expected negation pattern in: {message!r}"
-        )
+        assert self.detector._has_negation(
+            message
+        ), f"Expected negation pattern in: {message!r}"
 
     @pytest.mark.parametrize(
         "message",
@@ -226,9 +227,9 @@ class TestModeCHeuristic:
         ],
     )
     def test_no_negation_in_neutral_messages(self, message: str) -> None:
-        assert not self.detector._has_negation(message), (
-            f"False positive negation in: {message!r}"
-        )
+        assert not self.detector._has_negation(
+            message
+        ), f"False positive negation in: {message!r}"
 
     # --- Word normalization ---
 

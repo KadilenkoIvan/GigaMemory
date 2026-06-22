@@ -3,6 +3,7 @@ Shared pytest fixtures for GigaMemory unit tests.
 
 All tests run in stub mode — no GPU, no real LLM required.
 """
+
 from __future__ import annotations
 
 import sys
