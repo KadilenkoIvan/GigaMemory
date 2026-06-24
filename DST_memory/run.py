@@ -827,21 +827,26 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
 
 
 def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
+    import datetime
     import threading
 
     from dst_memory.core.models import Message
+
+    # Each run gets an isolated session folder with a datetime suffix.
+    # This prevents state from bleeding between separate runs.
+    session_dir = getattr(args, "session_dir", "")
+    if session_dir:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        base_id = getattr(args, "dialogue_id", "session") or "session"
+        args.dialogue_id = f"{base_id}_{timestamp}"
 
     pipeline = build_pipeline(args)
     pipeline.final_llm.realtime_mode = True
     did = args.dialogue_id
     parallel = getattr(args, "parallel_write_mode", False)
-    session_dir = getattr(args, "session_dir", "")
 
-    # Load persisted session if available
     if session_dir:
-        loaded = pipeline.load_session(did, session_dir)
-        if loaded:
-            print(f"[session restored from {session_dir}/{did}/state.json]")
+        print(f"[session: {session_dir}/{did}/]")
 
     mode_label = " [parallel-write]" if parallel else ""
     print(
