@@ -262,7 +262,18 @@ class LocalHFServing:
             text = "".join(str(t) for t in text)
         elif not isinstance(text, str):
             text = str(text)
-        inputs = self.tokenizer(text, return_tensors="pt").to(in_dev)
+        # Python 3.13 + old tokenizers Rust library: tokenizer.__call__ goes through
+        # encode_batch which fails. Use backend_tokenizer.encode() (single-item Rust
+        # path) to build tensors manually and bypass the batch code path.
+        try:
+            inputs = self.tokenizer(text, return_tensors="pt").to(in_dev)
+        except TypeError:
+            enc = self.tokenizer.backend_tokenizer.encode(
+                text, add_special_tokens=False
+            )
+            ids = torch.tensor([enc.ids], dtype=torch.long).to(in_dev)
+            mask = torch.tensor([enc.attention_mask], dtype=torch.long).to(in_dev)
+            inputs = {"input_ids": ids, "attention_mask": mask}
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
         # Transformers only uses temperature/top_p when sampling is enabled.
