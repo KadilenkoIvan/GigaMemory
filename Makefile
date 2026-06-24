@@ -32,8 +32,10 @@ install: ## Set up CUDA environment (cu126) with uv
 	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
 	@echo "          .venv\\Scripts\\activate     (Windows)"
 
-install-cpu: ## Set up CPU-only environment with uv
-	$(UV) sync --extra cpu --extra dev
+install-cpu: ## Set up CPU-only environment with uv (Linux/macOS)
+	$(UV) sync --extra dev
+	$(UV) pip install torch torchvision torchaudio \
+		--extra-index-url https://download.pytorch.org/whl/cpu
 	@echo ""
 	@echo "CPU environment ready."
 	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"

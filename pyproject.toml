@@ -79,18 +79,20 @@ explicit = true
 [tool.uv.sources]
 # RAGU is a local editable package
 graph-ragu = { path = "./RAGU", editable = true }
-# PyTorch: CUDA wheels when [cuda] extra is requested, CPU otherwise
+# PyTorch: CUDA wheels on Linux/Windows, CPU wheels on macOS.
+# uv requires disjoint marker environments — sys_platform satisfies this.
+# For CPU-only on Linux use: make install-cpu (uses --extra-index-url directly).
 torch = [
-    { index = "pytorch-cuda", extra = "cuda" },
-    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
 ]
 torchvision = [
-    { index = "pytorch-cuda", extra = "cuda" },
-    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
 ]
 torchaudio = [
-    { index = "pytorch-cuda", extra = "cuda" },
-    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cuda", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
 ]
 
 # ─── Ruff ─────────────────────────────────────────────────────────────────────
