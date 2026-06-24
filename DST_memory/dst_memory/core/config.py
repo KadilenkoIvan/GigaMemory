@@ -213,6 +213,24 @@ class PipelineConfig:
     force_infinite_ttl: bool = True
 
     # -------------------------------------------------------------------
+    # Real-time / parallel write mode
+    # -------------------------------------------------------------------
+    # parallel_write_mode:
+    #   When True — in interactive inference, writing to memory and generating the
+    #   answer run in parallel threads. The answer is built from memory as it was
+    #   BEFORE the current message; facts from the current message appear in the
+    #   graph starting from the NEXT turn. A notice is added to the final LLM
+    #   system prompt so the model knows to rely on recent_pairs for the latest info.
+    parallel_write_mode: bool = False
+
+    # session_dir:
+    #   Directory where interactive session state is persisted between runs.
+    #   Each dialogue is saved as <session_dir>/<dialogue_id>/state.json.
+    #   RAGU graph is stored at <session_dir>/<dialogue_id>/ragu/ (overrides ragu_storage_path).
+    #   Empty string disables session persistence.
+    session_dir: str = ""
+
+    # -------------------------------------------------------------------
     # Model unloading for local final LLM
     # -------------------------------------------------------------------
     # unload_models_before_final_llm:

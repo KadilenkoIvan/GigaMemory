@@ -55,6 +55,16 @@ def final_llm_system_prompt(now_str: str) -> str:
     )
 
 
+def parallel_write_notice() -> str:
+    return (
+        "\n## Parallel processing note\n"
+        "The latest user message is being written to the memory graph in parallel with this response. "
+        "Its facts may not yet appear in the memory context above. "
+        "The message itself is available in the recent conversation pairs below — "
+        "use it as the primary source for information from the current turn.\n\n"
+    )
+
+
 def final_llm_user_prompt(
     now_str: str, mem_block: str, pairs_block: str, question: str
 ) -> str:

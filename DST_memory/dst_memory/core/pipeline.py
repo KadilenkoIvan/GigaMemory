@@ -190,6 +190,7 @@ class DSTMemoryPipeline:
             enable_thinking=getattr(config, "llm_enable_thinking", True),
             load_quantization=getattr(config, "llm_load_quantization", "none"),
             max_context_tokens=getattr(config, "llm_max_context_tokens", 128 * 1024),
+            parallel_write_mode=getattr(config, "parallel_write_mode", False),
         )
 
     def set_dialogue_dataset_clock(
@@ -596,3 +597,45 @@ class DSTMemoryPipeline:
     def clear_memory(self, dialogue_id: str) -> None:
         logger.info("clear_memory dialogue_id=%s", dialogue_id)
         self.dst.clear_dialogue(dialogue_id)
+
+    def save_session(self, dialogue_id: str, session_dir: str) -> None:
+        """Persist DialogueMemoryState for dialogue_id to <session_dir>/<dialogue_id>/state.json."""
+        import json
+        from pathlib import Path
+
+        state = self.dst.get_state(dialogue_id)
+        path = Path(session_dir) / dialogue_id / "state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(asdict(state), f, ensure_ascii=False, indent=2)
+        logger.debug("Session saved dialogue_id=%s path=%s", dialogue_id, path)
+
+    def load_session(self, dialogue_id: str, session_dir: str) -> bool:
+        """Load DialogueMemoryState from <session_dir>/<dialogue_id>/state.json. Returns True if found."""
+        import json
+        from pathlib import Path
+
+        from .models import DeletedFact, DialogueMemoryState, FactRecord
+
+        path = Path(session_dir) / dialogue_id / "state.json"
+        if not path.exists():
+            return False
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        slots = {
+            slot_name: [FactRecord(**r) for r in records]
+            for slot_name, records in data.get("slots", {}).items()
+        }
+        deleted_facts = [DeletedFact(**df) for df in data.get("deleted_facts", [])]
+        state = DialogueMemoryState(
+            dialogue_id=data["dialogue_id"],
+            step=data.get("step", 0),
+            slots=slots,
+            next_record_id=data.get("next_record_id", 1),
+            recent_pairs=data.get("recent_pairs", []),
+            deleted_facts=deleted_facts,
+            dataset_clock_iso=data.get("dataset_clock_iso"),
+        )
+        self.dst._states[dialogue_id] = state
+        logger.info("Session loaded dialogue_id=%s step=%d", dialogue_id, state.step)
+        return True
