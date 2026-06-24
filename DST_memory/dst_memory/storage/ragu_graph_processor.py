@@ -30,14 +30,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
-from sentence_transformers import SentenceTransformer
-
 from ragu.graph.knowledge_graph import KnowledgeGraph
 from ragu.graph.types import Entity, Relation
 from ragu.models.embedder import Embedder
 from ragu.search_engine.local_search import LocalSearchEngine
 from ragu.search_engine.types import LocalSearchResult
 from ragu.utils.ragu_utils import FLOATS
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +44,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Async Embedder adapter for SentenceTransformer
 # ---------------------------------------------------------------------------
+
 
 class SentenceTransformerEmbedder(Embedder):
     """
@@ -55,7 +55,9 @@ class SentenceTransformerEmbedder(Embedder):
 
     def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
         self._model = SentenceTransformer(model_name)
-        probe = self._model.encode([""], normalize_embeddings=True, show_progress_bar=False)
+        probe = self._model.encode(
+            [""], normalize_embeddings=True, show_progress_bar=False
+        )
         self._dim: int = int(probe.shape[1])
 
     @property
@@ -66,7 +68,9 @@ class SentenceTransformerEmbedder(Embedder):
         loop = asyncio.get_event_loop()
         vector = await loop.run_in_executor(
             None,
-            lambda: self._model.encode([text], normalize_embeddings=True, show_progress_bar=False)[0].tolist(),
+            lambda: self._model.encode(
+                [text], normalize_embeddings=True, show_progress_bar=False
+            )[0].tolist(),
         )
         return vector
 
@@ -81,18 +85,23 @@ class SentenceTransformerEmbedder(Embedder):
         loop = asyncio.get_event_loop()
         vectors = await loop.run_in_executor(
             None,
-            lambda: self._model.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist(),
+            lambda: self._model.encode(
+                texts, normalize_embeddings=True, show_progress_bar=False
+            ).tolist(),
         )
         return vectors
 
-    def encode_sync(self, text: str) -> List[float]:
+    def encode_sync(self, text: str) -> list[float]:
         """Synchronous encode for use outside async context."""
-        return self._model.encode([text], normalize_embeddings=True, show_progress_bar=False)[0].tolist()
+        return self._model.encode(
+            [text], normalize_embeddings=True, show_progress_bar=False
+        )[0].tolist()
 
 
 # ---------------------------------------------------------------------------
 # Internal mapping entry
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _RecordIds:
@@ -105,6 +114,7 @@ class _RecordIds:
 # ---------------------------------------------------------------------------
 # RaguGraphProcessor
 # ---------------------------------------------------------------------------
+
 
 class RaguGraphProcessor:
     """
@@ -120,7 +130,7 @@ class RaguGraphProcessor:
         self,
         knowledge_graph: KnowledgeGraph,
         local_search: LocalSearchEngine,
-        embedder: Optional[SentenceTransformerEmbedder] = None,
+        embedder: SentenceTransformerEmbedder | None = None,
     ) -> None:
         self.kg = knowledge_graph
         self.local_search = local_search
@@ -131,7 +141,7 @@ class RaguGraphProcessor:
     # Embedding (for semantic dedup in DSTManager)
     # ------------------------------------------------------------------
 
-    def embed_text_sync(self, text: str) -> List[float]:
+    def embed_text_sync(self, text: str) -> list[float]:
         """Synchronously embed text. Used by DSTManager for semantic dedup."""
         if self.embedder is None:
             return []
@@ -165,17 +175,19 @@ class RaguGraphProcessor:
                     await self.kg.delete_entity(eid)
                 except Exception:
                     pass
-            logger.debug("RAGU async clear: removed %d entity nodes", len(all_entity_ids))
+            logger.debug(
+                "RAGU async clear: removed %d entity nodes", len(all_entity_ids)
+            )
         except Exception as exc:
             logger.warning("RAGU clear_all failed: %s", exc)
 
-    def upsert_triplet_deltas(self, deltas: List["GraphTripletDelta"]) -> None:
+    def upsert_triplet_deltas(self, deltas: list[GraphTripletDelta]) -> None:
         """Insert new triplets into RAGU (sync wrapper)."""
         if not deltas:
             return
         _run_in_new_loop(self._async_upsert(deltas))
 
-    def delete_triplet_deltas(self, deltas: List["GraphTripletDelete"]) -> None:
+    def delete_triplet_deltas(self, deltas: list[GraphTripletDelete]) -> None:
         """Delete deactivated triplets from RAGU (sync wrapper)."""
         if not deltas:
             return
@@ -184,9 +196,9 @@ class RaguGraphProcessor:
     def search_memory(
         self,
         query: str,
-        slot_names: Optional[List[str]] = None,
+        slot_names: list[str] | None = None,
         top_k: int = 10,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Semantic search over the knowledge graph.
 
@@ -201,17 +213,19 @@ class RaguGraphProcessor:
         result: LocalSearchResult = _run_in_new_loop(
             self.local_search.a_search(query, top_k=top_k)
         )
-        return self._format_result(result, slot_filter=set(slot_names) if slot_names else None)
+        return self._format_result(
+            result, slot_filter=set(slot_names) if slot_names else None
+        )
 
     # ------------------------------------------------------------------
     # Async internals
     # ------------------------------------------------------------------
 
-    async def _async_upsert(self, deltas: List["GraphTripletDelta"]) -> None:
+    async def _async_upsert(self, deltas: list[GraphTripletDelta]) -> None:
         for delta in deltas:
             await self._upsert_one(delta)
 
-    async def _upsert_one(self, delta: "GraphTripletDelta") -> None:
+    async def _upsert_one(self, delta: GraphTripletDelta) -> None:
         chunk_id = f"msg_{delta.dialogue_id}_{delta.step}"
 
         subj_entity = Entity(
@@ -228,17 +242,6 @@ class RaguGraphProcessor:
         )
 
         await self.kg.insert_entities([subj_entity, obj_entity])
-
-        relation = Relation(
-            subject_id=subj_entity.id,
-            object_id=obj_entity.id,
-            subject_name=delta.subject,
-            object_name=delta.object,
-            relation_type=delta.relation,
-            description=f"{delta.subject} {delta.relation} {delta.object}",
-            slot=delta.slot,
-            source_chunk_id=[chunk_id],
-        )
 
         # Store TTL in relation metadata via description extension and extra attrs
         # (RAGU's Relation doesn't have a custom field; we encode TTL in description)
@@ -264,14 +267,19 @@ class RaguGraphProcessor:
         )
         logger.debug(
             "RAGU upsert record_id=%d slot=%s [%s|%s|%s] ttl=%s",
-            delta.record_id, delta.slot, delta.subject, delta.relation, delta.object, delta.ttl,
+            delta.record_id,
+            delta.slot,
+            delta.subject,
+            delta.relation,
+            delta.object,
+            delta.ttl,
         )
 
-    async def _async_delete(self, deltas: List["GraphTripletDelete"]) -> None:
+    async def _async_delete(self, deltas: list[GraphTripletDelete]) -> None:
         for delta in deltas:
             await self._delete_one(delta)
 
-    async def _delete_one(self, delta: "GraphTripletDelete") -> None:
+    async def _delete_one(self, delta: GraphTripletDelete) -> None:
         ids = self._record_to_ids.get(delta.record_id)
         if ids is None:
             logger.warning(
@@ -286,10 +294,14 @@ class RaguGraphProcessor:
                 ids.relation_id,
             )
         except Exception as exc:
-            logger.warning("RAGU delete_relation failed record_id=%d: %s", delta.record_id, exc)
+            logger.warning(
+                "RAGU delete_relation failed record_id=%d: %s", delta.record_id, exc
+            )
         finally:
             del self._record_to_ids[delta.record_id]
-        logger.debug("RAGU delete record_id=%d relation_id=%s", delta.record_id, ids.relation_id)
+        logger.debug(
+            "RAGU delete record_id=%d relation_id=%s", delta.record_id, ids.relation_id
+        )
 
         # Clean up orphan entity nodes (no remaining edges → isolated in graph)
         for entity_id in (ids.subject_entity_id, ids.object_entity_id):
@@ -298,32 +310,39 @@ class RaguGraphProcessor:
                     await self.kg.delete_entity(entity_id)
                     logger.debug("RAGU delete orphan entity_id=%s", entity_id)
             except Exception as exc:
-                logger.debug("RAGU orphan entity cleanup skipped entity_id=%s: %s", entity_id, exc)
+                logger.debug(
+                    "RAGU orphan entity cleanup skipped entity_id=%s: %s",
+                    entity_id,
+                    exc,
+                )
 
     # ------------------------------------------------------------------
     # Formatting helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_ttl_from_description(description: str) -> Optional[str]:
+    def _extract_ttl_from_description(description: str) -> str | None:
         """Parse '[ttl:Xm]' annotation from relation description."""
         import re
-        m = re.search(r'\[ttl:([^\]]+)\]', description or "")
+
+        m = re.search(r"\[ttl:([^\]]+)\]", description or "")
         return m.group(1) if m else None
 
     @staticmethod
     def _format_result(
         result: LocalSearchResult,
-        slot_filter: Optional[set] = None,
-    ) -> List[str]:
-        lines: List[str] = []
+        slot_filter: set | None = None,
+    ) -> list[str]:
+        lines: list[str] = []
         seen: set[str] = set()
 
         for rel in result.relations:
             if slot_filter and rel.slot not in slot_filter:
                 continue
             slot_tag = f"[{rel.slot}] " if rel.slot else ""
-            ttl = RaguGraphProcessor._extract_ttl_from_description(getattr(rel, "description", ""))
+            ttl = RaguGraphProcessor._extract_ttl_from_description(
+                getattr(rel, "description", "")
+            )
             ttl_tag = f" (ttl: {ttl})" if ttl else ""
             line = f"{slot_tag}{rel.subject_name} --{rel.relation_type}--> {rel.object_name}{ttl_tag}"
             if line not in seen:
@@ -346,6 +365,7 @@ class RaguGraphProcessor:
 # ---------------------------------------------------------------------------
 # Sync/async bridge
 # ---------------------------------------------------------------------------
+
 
 def _run_in_new_loop(coro) -> Any:
     """
@@ -378,9 +398,11 @@ def _run_in_new_loop(coro) -> Any:
 # Delta dataclasses (imported by DSTManager)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class GraphTripletDelta:
     """Payload for inserting a new triplet into the knowledge graph."""
+
     record_id: int
     dialogue_id: str
     step: int
@@ -394,6 +416,7 @@ class GraphTripletDelta:
 @dataclass
 class GraphTripletDelete:
     """Payload for removing a triplet (deactivated by conflict resolution or TTL)."""
+
     record_id: int
     dialogue_id: str
     slot: str
@@ -403,11 +426,12 @@ class GraphTripletDelete:
 # Factory
 # ---------------------------------------------------------------------------
 
+
 def build_ragu_processor(
     embedder_model: str = "all-MiniLM-L6-v2",
-    storage_path: Optional[str] = None,
+    storage_path: str | None = None,
     language: str = "russian",
-) -> Tuple[KnowledgeGraph, "RaguGraphProcessor"]:
+) -> tuple[KnowledgeGraph, RaguGraphProcessor]:
     """
     Convenience factory: creates Embedder → KnowledgeGraph → LocalSearchEngine
     → RaguGraphProcessor in one call.

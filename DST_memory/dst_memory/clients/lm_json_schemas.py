@@ -3,12 +3,13 @@ JSON Schema dicts for lm-format-enforcer (slot selector + triplet extraction).
 
 Kept minimal and aligned with SlotSelectClient / TripletExtractionClient parsers.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict
 
 # --- Slot selection: {"slot_assignments": ["WORK", ...]} ---
-SLOT_SELECT_JSON_SCHEMA: Dict[str, Any] = {
+SLOT_SELECT_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "slot_assignments": {
@@ -20,7 +21,7 @@ SLOT_SELECT_JSON_SCHEMA: Dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_TRIPLET_ITEM: Dict[str, Any] = {
+_TRIPLET_ITEM: dict[str, Any] = {
     "type": "object",
     "properties": {
         "slot": {"type": "string"},
@@ -33,7 +34,7 @@ _TRIPLET_ITEM: Dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_DELETE_ITEM: Dict[str, Any] = {
+_DELETE_ITEM: dict[str, Any] = {
     "type": "object",
     "properties": {
         "subject": {"type": "string"},
@@ -45,7 +46,7 @@ _DELETE_ITEM: Dict[str, Any] = {
 }
 
 # Triplet extraction without inline deletion signals.
-TRIPLET_JSON_SCHEMA: Dict[str, Any] = {
+TRIPLET_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "triplets": {"type": "array", "items": _TRIPLET_ITEM},
@@ -55,7 +56,7 @@ TRIPLET_JSON_SCHEMA: Dict[str, Any] = {
 }
 
 # Same as above but allows optional "delete" list (llm_inline deletion mode).
-TRIPLET_JSON_SCHEMA_WITH_DELETE: Dict[str, Any] = {
+TRIPLET_JSON_SCHEMA_WITH_DELETE: dict[str, Any] = {
     "type": "object",
     "properties": {
         "triplets": {"type": "array", "items": _TRIPLET_ITEM},

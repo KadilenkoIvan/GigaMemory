@@ -16,8 +16,8 @@ PromptLang = Literal["ru", "en"]
 def normalize_prompt_language(lang: str | None) -> PromptLang:
     if not lang:
         return "ru"
-    l = str(lang).strip().lower()
-    if l in ("en", "english"):
+    lang_lower = str(lang).strip().lower()
+    if lang_lower in ("en", "english"):
         return "en"
     return "ru"
 

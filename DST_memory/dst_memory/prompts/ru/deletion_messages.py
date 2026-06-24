@@ -8,8 +8,10 @@
 Этот вызов ВСЕГДА получает контекст текущих фактов (иначе бессмысленен),
 даже если slot_context_enabled=False для экстракции триплетов.
 """
+
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from ...slots.ontology import CANONICAL_TO_RU_LABEL
@@ -18,7 +20,7 @@ from ...slots.ontology import CANONICAL_TO_RU_LABEL
 # Few-shot примеры для детекции удалений
 # ---------------------------------------------------------------------------
 
-_DELETION_FEWSHOTS: List[tuple[str, str, str, str]] = [
+_DELETION_FEWSHOTS: list[tuple[str, str, str, str]] = [
     (
         "ЛОКАЦИЯ",
         "пользователь | место жительства | москва",
@@ -55,9 +57,11 @@ _DELETION_FEWSHOTS: List[tuple[str, str, str, str]] = [
 def build_deletion_messages(
     user_message: str,
     slot_name: str,
-    existing_triplets: List[str],
-) -> List[Dict[str, Any]]:
-    ru_slot = CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else slot_name
+    existing_triplets: list[str],
+) -> list[dict[str, Any]]:
+    ru_slot = (
+        CANONICAL_TO_RU_LABEL.get(slot_name, slot_name) if slot_name else slot_name
+    )
     facts_block = "\n".join(existing_triplets) if existing_triplets else "(нет фактов)"
 
     system = (
@@ -85,9 +89,11 @@ def build_deletion_messages(
             "Какие факты нужно удалить?"
         )
 
-    few_shots: List[Dict[str, Any]] = []
+    few_shots: list[dict[str, Any]] = []
     for fs_slot, fs_facts, fs_msg, fs_ans in _DELETION_FEWSHOTS:
-        few_shots.append({"role": "user", "content": _user_turn(fs_slot, fs_facts, fs_msg)})
+        few_shots.append(
+            {"role": "user", "content": _user_turn(fs_slot, fs_facts, fs_msg)}
+        )
         few_shots.append({"role": "assistant", "content": fs_ans})
 
     return (
@@ -97,7 +103,7 @@ def build_deletion_messages(
     )
 
 
-def parse_deletion_response(text: str) -> List[Dict[str, str]]:
+def parse_deletion_response(text: str) -> list[dict[str, str]]:
     """
     Распарсить ответ LLM в список объектов для удаления.
 
@@ -129,17 +135,17 @@ def parse_deletion_response(text: str) -> List[Dict[str, str]]:
             elif c == "}":
                 depth -= 1
                 if depth == 0:
-                    obj = json.loads(blob[start:i + 1])
+                    obj = json.loads(blob[start : i + 1])
                     break
         else:
             raise ValueError(f"Unbalanced JSON in: {blob[:200]!r}")
 
     if not isinstance(obj, dict) or "delete" not in obj:
-        raise ValueError(f"Expected {{\"delete\": [...]}} but got: {blob[:200]!r}")
+        raise ValueError(f'Expected {{"delete": [...]}} but got: {blob[:200]!r}')
 
     items = obj["delete"]
     if not isinstance(items, list):
-        raise ValueError(f"\"delete\" field is not a list: {blob[:200]!r}")
+        raise ValueError(f'"delete" field is not a list: {blob[:200]!r}')
 
     result = []
     for item in items:
@@ -151,4 +157,3 @@ def parse_deletion_response(text: str) -> List[Dict[str, str]]:
         if s and r and o:
             result.append({"subject": s, "relation": r, "object": o})
     return result
-

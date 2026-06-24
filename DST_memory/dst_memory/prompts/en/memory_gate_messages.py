@@ -4,20 +4,24 @@ from __future__ import annotations
 
 from typing import Dict, List
 
-from .prompt_fewshots import MEMORY_GATE_FEWSHOT, MEMORY_GATE_FEWSHOT_VECTOR, memory_gate_user_block
+from .prompt_fewshots import (
+    MEMORY_GATE_FEWSHOT,
+    MEMORY_GATE_FEWSHOT_VECTOR,
+    memory_gate_user_block,
+)
 
 
 def build_memory_gate_messages(
     user_message: str,
-    slot_names: List[str],
+    slot_names: list[str],
     *,
     for_vector_context: bool = False,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     extra_block = ""
     if for_vector_context:
         extra_block = (
             " IF MEMORY IS NEEDED FOR THE ANSWER BUT NO SPECIFIC SLOT FROM THE LIST FITS — "
-            'set use_memory: true and slots: [].'
+            "set use_memory: true and slots: []."
         )
 
     system = (
@@ -33,7 +37,7 @@ def build_memory_gate_messages(
         'WHEN use_memory=false THE "slots" ARRAY MUST BE [].'
     )
 
-    few_shot: List[Dict[str, str]] = []
+    few_shot: list[dict[str, str]] = []
     for question, slots_block, assistant_json in MEMORY_GATE_FEWSHOT:
         slot_list = [s.strip() for s in slots_block.split("\n") if s.strip()]
         few_shot.append(
@@ -50,11 +54,17 @@ def build_memory_gate_messages(
             few_shot.append(
                 {
                     "role": "user",
-                    "content": memory_gate_user_block(question, slot_list, extra_block.strip()),
+                    "content": memory_gate_user_block(
+                        question, slot_list, extra_block.strip()
+                    ),
                 }
             )
             few_shot.append({"role": "assistant", "content": assistant_json})
 
     final_user = memory_gate_user_block(user_message, slot_names, extra_block)
 
-    return [{"role": "system", "content": system}] + few_shot + [{"role": "user", "content": final_user}]
+    return (
+        [{"role": "system", "content": system}]
+        + few_shot
+        + [{"role": "user", "content": final_user}]
+    )

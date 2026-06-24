@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..clients.serving import GenerationConfig, LocalHFServing
-from ..prompts.loader import load_prompt_modules
+from ..prompts.loader import PromptModules, load_prompt_modules
 
 logger = logging.getLogger(__name__)
 
@@ -12,28 +12,28 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SlotOperation:
     op: str  # add|update|delete|nothing
-    record_id: Optional[int] = None
-    value: Optional[str] = None
+    record_id: int | None = None
+    value: str | None = None
 
 
 class SlotUpdateClient:
     def __init__(
         self,
-        serving: Optional[LocalHFServing] = None,
+        serving: LocalHFServing | None = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
     ):
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
     def plan_operations(
         self,
         slot_name: str,
-        existing_records: List[Dict[str, Any]],
+        existing_records: list[dict[str, Any]],
         user_message: str,
-    ) -> List[SlotOperation]:
+    ) -> list[SlotOperation]:
         if self.serving is None:
             logger.info("SlotUpdate STUB: add(full message) slot=%s", slot_name)
             return (
@@ -60,13 +60,17 @@ class SlotUpdateClient:
                 return ops
 
         logger.info("SlotUpdate fallback to add(full message) slot=%s", slot_name)
-        return [SlotOperation(op="add", value=user_message.strip())] if user_message.strip() else []
+        return (
+            [SlotOperation(op="add", value=user_message.strip())]
+            if user_message.strip()
+            else []
+        )
 
-    def _generate_with_retries(self, messages: List[Dict[str, str]]) -> str:
+    def _generate_with_retries(self, messages: list[dict[str, str]]) -> str:
         tries = self.max_retries + 1
         last = ""
         for attempt in range(1, tries + 1):
-            last = self.serving.generate_chat(
+            last = self.serving.generate_chat(  # type: ignore[union-attr]
                 messages,
                 generation_config=GenerationConfig(max_new_tokens=400, do_sample=False),
             )
@@ -92,15 +96,18 @@ class SlotUpdateClient:
                 f"Ответ для исправления:\n```text\n{bad_text}\n```"
             )
             sys_msg = "Ты исправляешь JSON."
-        messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": prompt}]
-        fixed = self.serving.generate_chat(
+        messages = [
+            {"role": "system", "content": sys_msg},
+            {"role": "user", "content": prompt},
+        ]
+        fixed = self.serving.generate_chat(  # type: ignore[union-attr]
             messages,
             generation_config=GenerationConfig(max_new_tokens=250, do_sample=False),
         )
         logger.info("SlotUpdate fixed JSON candidate: %s", fixed)
         return fixed
 
-    def _parse_operations(self, text: str) -> Optional[List[SlotOperation]]:
+    def _parse_operations(self, text: str) -> list[SlotOperation] | None:
         try:
             obj = json.loads(text.strip())
         except Exception:
@@ -111,7 +118,7 @@ class SlotUpdateClient:
         if not isinstance(ops, list):
             return None
 
-        out: List[SlotOperation] = []
+        out: list[SlotOperation] = []
         for item in ops:
             if not isinstance(item, dict):
                 continue
@@ -126,7 +133,9 @@ class SlotUpdateClient:
                 rid = item.get("id")
                 v = item.get("value")
                 if isinstance(rid, int) and isinstance(v, str) and v.strip():
-                    out.append(SlotOperation(op="update", record_id=rid, value=v.strip()))
+                    out.append(
+                        SlotOperation(op="update", record_id=rid, value=v.strip())
+                    )
             elif op == "delete":
                 rid = item.get("id")
                 if isinstance(rid, int):

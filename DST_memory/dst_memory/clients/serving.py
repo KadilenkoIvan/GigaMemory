@@ -2,20 +2,34 @@ import gc
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+# torch and transformers are heavy optional deps — imported lazily inside LocalHFServing
+# so that the rest of the codebase (and tests in stub mode) can be imported without GPU.
+if TYPE_CHECKING:
+    import torch
 
 from ..slots.slot_model_path import resolve_slot_model_path
 
 logger = logging.getLogger(__name__)
 
 
-def _normalize_load_quantization(raw: Optional[str]) -> str:
+def _normalize_load_quantization(raw: str | None) -> str:
     """Return one of: none, 8bit, 4bit."""
     q = (raw or "none").lower().strip()
-    if q in ("", "none", "off", "false", "no", "fp16", "float16", "bf16", "bfloat16", "fp32", "float32"):
+    if q in (
+        "",
+        "none",
+        "off",
+        "false",
+        "no",
+        "fp16",
+        "float16",
+        "bf16",
+        "bfloat16",
+        "fp32",
+        "float32",
+    ):
         return "none"
     if q in ("8bit", "int8", "8-bit", "bnb8"):
         return "8bit"
@@ -35,7 +49,7 @@ class GenerationConfig:
     temperature: float = 1.0
     top_p: float = 1.0
     # When LocalHFServing.use_lm_format_enforcer is True, pass a JSON Schema dict to constrain decoding.
-    lm_enforcer_json_schema: Optional[Dict[str, Any]] = None
+    lm_enforcer_json_schema: dict[str, Any] | None = None
 
 
 class LocalHFServing:
@@ -61,17 +75,22 @@ class LocalHFServing:
     def __init__(
         self,
         model_path_or_id: str,
-        torch_dtype: torch.dtype = torch.float16,
+        torch_dtype: Any = None,  # defaults to torch.float16 after lazy import
         enable_thinking: bool = False,
         load_quantization: str = "none",
         inject_no_think_prompt: bool = True,
         use_lm_format_enforcer: bool = False,
     ):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        if torch_dtype is None:
+            torch_dtype = torch.float16
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.enable_thinking = enable_thinking
         self.inject_no_think_prompt = bool(inject_no_think_prompt)
         self.use_lm_format_enforcer = bool(use_lm_format_enforcer)
-        self._lm_enforcer_prefix_cache: Dict[str, Any] = {}
+        self._lm_enforcer_prefix_cache: dict[str, Any] = {}
         self._quant = _normalize_load_quantization(load_quantization)
         if self.use_lm_format_enforcer:
             try:
@@ -104,7 +123,11 @@ class LocalHFServing:
                     "install bitsandbytes (and a compatible GPU driver)."
                 ) from e
 
-            compute = torch_dtype if torch_dtype in (torch.float16, torch.bfloat16) else torch.float16
+            compute = (
+                torch_dtype
+                if torch_dtype in (torch.float16, torch.bfloat16)
+                else torch.float16
+            )
             if self._quant == "8bit":
                 bnb = BitsAndBytesConfig(load_in_8bit=True)
             else:
@@ -125,14 +148,16 @@ class LocalHFServing:
                 resolved,
                 trust_remote_code=True,
                 torch_dtype=torch_dtype,
-            ).to(self.device)
+            ).to(
+                self.device  # type: ignore[arg-type]
+            )
         self.model.eval()
         try:
             first_param = next(self.model.parameters())
             model_device = first_param.device
             param_dtype = first_param.dtype
         except StopIteration:
-            model_device = "unknown"
+            model_device = "unknown"  # type: ignore[assignment]
             param_dtype = None
         logger.info(
             "Serving model loaded on device=%s param_dtype=%s (requested load dtype=%s quant=%s)",
@@ -144,6 +169,8 @@ class LocalHFServing:
 
     def release(self) -> None:
         """Drop weights from VRAM/RAM (call before loading another large local model)."""
+        import torch
+
         logger.info("LocalHFServing.release() — dropping model and tokenizer")
         self._lm_enforcer_prefix_cache.clear()
         try:
@@ -165,7 +192,7 @@ class LocalHFServing:
             pass
 
     @staticmethod
-    def _inject_no_think(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def _inject_no_think(messages: list[dict[str, str]]) -> list[dict[str, str]]:
         """
         Prepend '/no_think' to the first system message (or create one) so that
         Qwen3/3.5 models that respect the prompt-level directive skip their thinking
@@ -181,12 +208,14 @@ class LocalHFServing:
         msgs.insert(0, {"role": "system", "content": "/no_think"})
         return msgs
 
-    def _prefix_allowed_tokens_fn_for_schema(self, schema: Dict[str, Any]):
+    def _prefix_allowed_tokens_fn_for_schema(self, schema: dict[str, Any]):
         key = json.dumps(schema, sort_keys=True, ensure_ascii=False)
         if key in self._lm_enforcer_prefix_cache:
             return self._lm_enforcer_prefix_cache[key]
         from lmformatenforcer import JsonSchemaParser
-        from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
+        from lmformatenforcer.integrations.transformers import (
+            build_transformers_prefix_allowed_tokens_fn,
+        )
 
         parser = JsonSchemaParser(schema)
         fn = build_transformers_prefix_allowed_tokens_fn(self.tokenizer, parser)
@@ -195,9 +224,11 @@ class LocalHFServing:
 
     def generate_chat(
         self,
-        messages: List[Dict[str, str]],
-        generation_config: Optional[GenerationConfig] = None,
+        messages: list[dict[str, str]],
+        generation_config: GenerationConfig | None = None,
     ) -> str:
+        import torch
+
         if generation_config is None:
             generation_config = GenerationConfig()
 
@@ -242,13 +273,15 @@ class LocalHFServing:
             gen_kwargs["top_p"] = generation_config.top_p
         schema = getattr(generation_config, "lm_enforcer_json_schema", None)
         if self.use_lm_format_enforcer and schema:
-            gen_kwargs["prefix_allowed_tokens_fn"] = self._prefix_allowed_tokens_fn_for_schema(schema)
+            gen_kwargs["prefix_allowed_tokens_fn"] = (
+                self._prefix_allowed_tokens_fn_for_schema(schema)
+            )
         with torch.no_grad():
-            outputs = self.model.generate(
+            outputs = self.model.generate(  # type: ignore[misc]
                 **inputs,
-                **gen_kwargs,
+                **gen_kwargs,  # type: ignore[arg-type]
             )
         result = self.tokenizer.decode(
-            outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+            outputs[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True
         )
-        return result.strip()
+        return result.strip()  # type: ignore[union-attr]

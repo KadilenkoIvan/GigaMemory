@@ -8,6 +8,7 @@ Typical LongMemEval formats::
 
 Also accepted: no weekday (``2023/05/20 02:21``), optional spaces, and compact ``2023/05/20(Tue)23:40``.
 """
+
 from __future__ import annotations
 
 import re
@@ -20,7 +21,7 @@ _LMEM_DATE_RE = re.compile(
 )
 
 
-def parse_longmemeval_question_date_to_iso(raw: Any) -> Optional[str]:
+def parse_longmemeval_question_date_to_iso(raw: Any) -> str | None:
     """
     Parse LongMemEval ``question_date`` into ISO 8601 string (naive local semantics).
 
@@ -72,7 +73,7 @@ def fact_clock_iso_for_haystack_session(
     haystack_dates: Any,
     session_index: int,
     question_date_raw: Any,
-) -> Optional[str]:
+) -> str | None:
     """
     ISO timestamp for facts extracted from ``haystack_sessions[session_index]``.
 
@@ -93,7 +94,7 @@ def fact_clock_iso_for_haystack_session(
 def optional_clock_display_for_validation(
     use_dataset_datetime: bool,
     question_date_raw: Any,
-) -> Optional[str]:
+) -> str | None:
     """If dataset-time mode is on and ``question_date`` parses, return prompt clock string."""
     if not use_dataset_datetime:
         return None
@@ -117,14 +118,14 @@ if __name__ == "__main__":
         datetime.fromisoformat(_iso)
     assert parse_longmemeval_question_date_to_iso("nope") is None
     _hds = ["2023/05/20 (Sat) 02:21", "2023/05/21 (Sun) 03:24"]
-    assert fact_clock_iso_for_haystack_session(True, _hds, 0, "2023/05/22 (Mon) 10:00").startswith(
-        "2023-05-20"
-    )
-    assert fact_clock_iso_for_haystack_session(True, _hds, 1, "2023/05/22 (Mon) 10:00").startswith(
-        "2023-05-21"
-    )
-    assert fact_clock_iso_for_haystack_session(True, _hds, 9, "2023/05/22 (Mon) 10:00").startswith(
-        "2023-05-22"
-    )
+    assert fact_clock_iso_for_haystack_session(  # type: ignore[union-attr]
+        True, _hds, 0, "2023/05/22 (Mon) 10:00"
+    ).startswith("2023-05-20")
+    assert fact_clock_iso_for_haystack_session(  # type: ignore[union-attr]
+        True, _hds, 1, "2023/05/22 (Mon) 10:00"
+    ).startswith("2023-05-21")
+    assert fact_clock_iso_for_haystack_session(  # type: ignore[union-attr]
+        True, _hds, 9, "2023/05/22 (Mon) 10:00"
+    ).startswith("2023-05-22")
     assert fact_clock_iso_for_haystack_session(False, _hds, 0, "x") is None
     print("dataset_time OK:", len(_samples), "samples + haystack session clocks")

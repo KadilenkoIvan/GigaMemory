@@ -3,6 +3,7 @@ Prompts for slot content update (add/update/delete by record_id).
 Principle: one record per entity/topic. All facts about "жена" → one record.
 All facts about "рыбалка" → one record. New info about same entity → update, not add.
 """
+
 from __future__ import annotations
 
 import json
@@ -71,10 +72,10 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"add","value":"семейное положение: женат 20 лет"},'
-                       '{"op":"add","value":"сын: Ромка"},'
-                       '{"op":"add","value":"дочь: Аня"}'
-                       ']}',
+            '{"op":"add","value":"семейное положение: женат 20 лет"},'
+            '{"op":"add","value":"сын: Ромка"},'
+            '{"op":"add","value":"дочь: Аня"}'
+            "]}",
         },
         # Новый факт об уже известной сущности → update, не add
         {
@@ -105,9 +106,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"update","id":1,"value":"жена: Людмила, работает учителем в школе"},'
-                       '{"op":"update","id":2,"value":"сын: Ромка, учится в институте"}'
-                       ']}',
+            '{"op":"update","id":1,"value":"жена: Людмила, работает учителем в школе"},'
+            '{"op":"update","id":2,"value":"сын: Ромка, учится в институте"}'
+            "]}",
         },
         # Нейтральное сообщение → nothing
         {
@@ -128,7 +129,10 @@ def build_update_messages(
                 "а вот Чехова совсем не понимаю",
                 [
                     {"id": 1, "value": "рыбалка: с детства, раз в неделю, даже зимой"},
-                    {"id": 2, "value": "чтение: любит читать, любимый автор — Достоевский"},
+                    {
+                        "id": 2,
+                        "value": "чтение: любит читать, любимый автор — Достоевский",
+                    },
                 ],
             ),
         },
@@ -143,8 +147,14 @@ def build_update_messages(
                 "сходил на Любэ — полное разочарование, Расторгуев уже не тот",
                 [
                     {"id": 1, "value": "рыбалка: с детства, раз в неделю, даже зимой"},
-                    {"id": 2, "value": "чтение: любит читать, любимый автор — Достоевский"},
-                    {"id": 3, "value": "концерты: Аукцыон с сыном; органный с женой — не понравился"},
+                    {
+                        "id": 2,
+                        "value": "чтение: любит читать, любимый автор — Достоевский",
+                    },
+                    {
+                        "id": 3,
+                        "value": "концерты: Аукцыон с сыном; органный с женой — не понравился",
+                    },
                 ],
             ),
         },
@@ -167,9 +177,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"update","id":1,"value":"маршруты: Тверь с семьёй, Кострома с семьёй"},'
-                       '{"op":"update","id":3,"value":"планы: Казань с семьёй"}'
-                       ']}',
+            '{"op":"update","id":1,"value":"маршруты: Тверь с семьёй, Кострома с семьёй"},'
+            '{"op":"update","id":3,"value":"планы: Казань с семьёй"}'
+            "]}",
         },
         # update + add одновременно
         {
@@ -185,9 +195,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"update","id":1,"value":"машина: ford focus"},'
-                       '{"op":"add","value":"самокат: для коротких поездок"}'
-                       ']}',
+            '{"op":"update","id":1,"value":"машина: ford focus"},'
+            '{"op":"add","value":"самокат: для коротких поездок"}'
+            "]}",
         },
         # delete + add — старое устарело
         {
@@ -200,9 +210,9 @@ def build_update_messages(
         {
             "role": "assistant",
             "content": '{"operations":['
-                       '{"op":"delete","id":1},'
-                       '{"op":"add","value":"спорт: плавание в бассейне"}'
-                       ']}',
+            '{"op":"delete","id":1},'
+            '{"op":"add","value":"спорт: плавание в бассейне"}'
+            "]}",
         },
         # nothing — сообщение не относится к слоту
         {

@@ -21,7 +21,7 @@
     "no_final_llm": false,
     "log_level": "INFO",
     "slot_use_stub": false,
-    "slot_model_path": "DST_memory/models/Meno-Lite-0.1",
+    "slot_model_path": "Qwen/Qwen3.5-9B-Instruct",
     "slot_max_slots_per_message": 5,
     "use_ragu": true,
     "ragu_embedder_model": "deepvk/USER-bge-m3",

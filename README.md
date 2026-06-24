@@ -1,6 +1,70 @@
-# DST_memory
+# GigaMemory
+
+[![CI](https://github.com/KadilenkoIvan/GigaMemory/actions/workflows/ci.yml/badge.svg)](https://github.com/KadilenkoIvan/GigaMemory/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 `DST_memory` — модуль долгосрочной памяти LLM на основе DST-графа фактов и RAGU retrieval.
+
+## Quick Start
+
+**Требования:** GPU с CUDA и [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+# 1. Клонировать репозиторий
+git clone https://github.com/KadilenkoIvan/GigaMemory.git
+cd GigaMemory
+
+# 2. Настроить окружение (CUDA)
+make install
+
+# 3. Установить pre-commit хуки (один раз после клонирования)
+make hooks
+
+# 4. Задать API ключ OpenRouter
+cp DST_memory/.env.example DST_memory/.env
+# Открыть DST_memory/.env и вписать: OPENROUTER_API_KEY=<ваш ключ>
+
+# 5. Запустить интерактивный диалог
+uv run python DST_memory/run.py pipeline inference interactive
+```
+
+При первом запуске `Qwen/Qwen3.5-9B-Instruct` скачается автоматически с HuggingFace (~18 GB).  
+Слот-модель и финальная LLM настраиваются в `DST_memory/run_config.json`.
+
+> Это один из возможных режимов запуска. Модель используемая внутри проекта может быть как локкальной, 
+> так и с openRouter. То же самое для финальной LLM, которая будет использоваться для ответов.
+> Также, поддерживаются batch-тест по датасету (`pipeline test`),
+> разные стратегии памяти, режимы удаления фактов и stub-режим без GPU — см. разделы ниже.
+> Для быстрой проверки без GPU и LLM: `make smoke`.
+
+## Архитектура пайплайна
+
+```mermaid
+flowchart TD
+    MSG[Сообщение пользователя] --> IMP[Классификатор важности]
+    IMP -->|не важно| SKIP[Память без изменений]
+    IMP -->|важно| SLOT[Выбор слотов]
+    SLOT -->|слоты найдены| EXT[Извлечение триплетов]
+    SLOT -->|не найдены| SP[Single-pass fallback]
+    EXT -->|триплеты| DEDUP[Семантическая дедупликация]
+    EXT -->|пусто| SP
+    SP --> DEDUP
+    DEDUP --> CONF[Разрешение конфликтов]
+    CONF --> DST[DST state]
+    DST --> RAGU[RAGU граф]
+    RAGU --> DONE[Запись завершена]
+
+    Q[Вопрос пользователя] --> STRAT{Стратегия памяти}
+    STRAT -->|full_graph_json| FG[Полный граф JSON]
+    STRAT -->|relevant_slots_full| RS[Gate → релевантные слоты]
+    STRAT -->|topk_graph_records| TK[Top-K по RAGU]
+    FG & RS & TK --> HIST[+ последние пары диалога]
+    HIST --> LLM[Финальная LLM]
+    LLM --> ANS[Ответ]
+```
+
+
 
 ## Что это за проект
 

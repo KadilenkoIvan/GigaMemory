@@ -8,16 +8,17 @@ Hybrid strategy:
 
 The client is called per-slot after triplet extraction and before insertion.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..prompts.loader import load_prompt_modules
-from ..prompts.parsers import parse_conflict_response
-from ..core.graph_backend import GraphEdge
 from ..clients.serving import GenerationConfig, LocalHFServing
+from ..core.graph_backend import GraphEdge
+from ..prompts.loader import PromptModules, load_prompt_modules
+from ..prompts.parsers import parse_conflict_response
 from .triplet_client import ExtractedTriplet
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ConflictResolution:
     """Result of conflict analysis for one (slot, subject) group."""
-    deactivate_ids: List[int]
-    skip_new_indices: Set[int]
+
+    deactivate_ids: list[int]
+    skip_new_indices: set[int]
 
 
 class TripletConflictClient:
@@ -58,7 +60,7 @@ class TripletConflictClient:
         self,
         *,
         use_stub: bool,
-        serving: Optional[LocalHFServing] = None,
+        serving: LocalHFServing | None = None,
         max_retries: int = 1,
         rule_same_relation_updates: bool = True,
         allow_multi_relation_same_object: bool = True,
@@ -70,32 +72,36 @@ class TripletConflictClient:
         self.rule_same_relation_updates = rule_same_relation_updates
         self.allow_multi_relation_same_object = allow_multi_relation_same_object
         self.prompt_language = prompt_language
-        self._prompt_modules = None
+        self._prompt_modules: PromptModules | None = None
 
         if not use_stub and serving is None:
-            raise ValueError("TripletConflictClient requires serving when use_stub is False")
+            raise ValueError(
+                "TripletConflictClient requires serving when use_stub is False"
+            )
 
     def resolve(
         self,
         slot_name: str,
-        existing_edges: List[GraphEdge],
-        new_triplets: List[ExtractedTriplet],
+        existing_edges: list[GraphEdge],
+        new_triplets: list[ExtractedTriplet],
     ) -> ConflictResolution:
         """
         Returns which existing record_ids to deactivate and which new triplet
         indices to skip before insertion.
         """
-        deactivate: List[int] = []
-        skip_new: Set[int] = set()
+        deactivate: list[int] = []
+        skip_new: set[int] = set()
 
         # --- Rule layer: exact (subject, relation) match ---
-        handled_existing: Set[int] = set()
-        subjects_needing_llm: Set[str] = set()
+        handled_existing: set[int] = set()
+        subjects_needing_llm: set[str] = set()
 
         for idx, new_t in enumerate(new_triplets):
             exact_matches = [
-                e for e in existing_edges
-                if e.subject == new_t.subject and e.relation == new_t.relation
+                e
+                for e in existing_edges
+                if e.subject == new_t.subject
+                and e.relation == new_t.relation
                 and e.record_id not in handled_existing
             ]
             if exact_matches:
@@ -104,7 +110,10 @@ class TripletConflictClient:
                     skip_new.add(idx)
                     logger.debug(
                         "Rule dedup: skip new idx=%d (%s|%s|%s)",
-                        idx, new_t.subject, new_t.relation, new_t.object,
+                        idx,
+                        new_t.subject,
+                        new_t.relation,
+                        new_t.object,
                     )
                 else:
                     # Same subject+relation, different object
@@ -115,7 +124,9 @@ class TripletConflictClient:
                         logger.debug(
                             "Rule update: deactivate %s for new (%s|%s|%s)",
                             [e.record_id for e in exact_matches],
-                            new_t.subject, new_t.relation, new_t.object,
+                            new_t.subject,
+                            new_t.relation,
+                            new_t.object,
                         )
                     else:
                         subjects_needing_llm.add(new_t.subject)
@@ -132,15 +143,16 @@ class TripletConflictClient:
         # Any subject in new triplets (not fully handled) that has existing edges
         # with a DIFFERENT relation (semantic ambiguity).
         remaining_new = [
-            (idx, t) for idx, t in enumerate(new_triplets)
-            if idx not in skip_new
+            (idx, t) for idx, t in enumerate(new_triplets) if idx not in skip_new
         ]
         for idx, new_t in remaining_new:
             ambiguous_existing = [
-                e for e in existing_edges
+                e
+                for e in existing_edges
                 if e.subject == new_t.subject
                 and e.record_id not in handled_existing
-                and e.relation != new_t.relation  # different relation — potential semantic conflict
+                and e.relation
+                != new_t.relation  # different relation — potential semantic conflict
             ]
             if not ambiguous_existing:
                 continue
@@ -149,15 +161,18 @@ class TripletConflictClient:
                 # Filter out complementary facts: same subject + same object + different relation.
                 # These add independent information and should NOT trigger conflict resolution.
                 truly_ambiguous = [
-                    e for e in ambiguous_existing
-                    if e.object != new_t.object  # different object → potentially conflicting
+                    e
+                    for e in ambiguous_existing
+                    if e.object
+                    != new_t.object  # different object → potentially conflicting
                 ]
                 if truly_ambiguous:
                     subjects_needing_llm.add(new_t.subject)
                     logger.debug(
                         "Conflict LLM candidate: subj=%s new_rel=%s (complementary same-object "
                         "excluded=%d, ambiguous=%d)",
-                        new_t.subject, new_t.relation,
+                        new_t.subject,
+                        new_t.relation,
                         len(ambiguous_existing) - len(truly_ambiguous),
                         len(truly_ambiguous),
                     )
@@ -171,30 +186,41 @@ class TripletConflictClient:
                 subjects_needing_llm.add(new_t.subject)
 
         if not subjects_needing_llm or self.use_stub:
-            return ConflictResolution(deactivate_ids=deactivate, skip_new_indices=skip_new)
+            return ConflictResolution(
+                deactivate_ids=deactivate, skip_new_indices=skip_new
+            )
 
         # --- LLM layer: per-subject semantic conflict check ---
         llm_existing = [
-            {"record_id": e.record_id, "subject": e.subject,
-             "relation": e.relation, "object": e.object}
+            {
+                "record_id": e.record_id,
+                "subject": e.subject,
+                "relation": e.relation,
+                "object": e.object,
+            }
             for e in existing_edges
-            if e.subject in subjects_needing_llm
-            and e.record_id not in handled_existing
+            if e.subject in subjects_needing_llm and e.record_id not in handled_existing
         ]
         llm_new = [
-            {"idx": idx, "subject": t.subject, "relation": t.relation, "object": t.object}
+            {
+                "idx": idx,
+                "subject": t.subject,
+                "relation": t.relation,
+                "object": t.object,
+            }
             for idx, t in remaining_new
             if t.subject in subjects_needing_llm
         ]
 
         if not llm_existing or not llm_new:
-            return ConflictResolution(deactivate_ids=deactivate, skip_new_indices=skip_new)
+            return ConflictResolution(
+                deactivate_ids=deactivate, skip_new_indices=skip_new
+            )
 
         llm_result = self._call_llm(slot_name, llm_existing, llm_new)
         if llm_result:
             deactivate.extend(
-                rid for rid in llm_result["deactivate"]
-                if rid not in handled_existing
+                rid for rid in llm_result["deactivate"] if rid not in handled_existing
             )
             skip_new.update(llm_result["skip_new"])
 
@@ -203,9 +229,9 @@ class TripletConflictClient:
     def _call_llm(
         self,
         slot_name: str,
-        existing: List[Dict[str, Any]],
-        new_triplets: List[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
+        existing: list[dict[str, Any]],
+        new_triplets: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
         assert self.serving is not None
         if self._prompt_modules is None:
             self._prompt_modules = load_prompt_modules(self.prompt_language)
@@ -223,6 +249,9 @@ class TripletConflictClient:
             except Exception as exc:
                 logger.warning(
                     "Conflict parse failed attempt=%d slot=%s: %s | raw=%r",
-                    attempt, slot_name, exc, last[:200],
+                    attempt,
+                    slot_name,
+                    exc,
+                    last[:200],
                 )
         return None

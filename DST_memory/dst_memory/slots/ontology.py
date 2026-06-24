@@ -13,7 +13,7 @@ class SlotOntology:
     Each slot corresponds to a "subgraph" of a single user knowledge graph.
     """
 
-    slot_names: List[str]
+    slot_names: list[str]
 
     def normalize(self, name: str) -> str:
         s = (name or "").strip().upper()
@@ -48,7 +48,7 @@ class SlotOntology:
 
 # Русские метки слотов в промптах и few-shot → канонический ключ онтологии (англ. UPPERCASE).
 # Порядок совпадает с DEFAULT_USER_SLOTS.slot_names — для вывода в промптах.
-RU_SLOT_LABELS_ORDERED: List[str] = [
+RU_SLOT_LABELS_ORDERED: list[str] = [
     "ЛИЧНОСТЬ",
     "СЕМЬЯ",
     "ДРУЗЬЯ",
@@ -139,12 +139,18 @@ CANONICAL_TO_RU_LABEL: dict[str, str] = dict(
 
 # --- Условные блоки промпта экстракции триплетов (per-slot) ---
 # При single-pass (slot_name is None) подсказки из всех блоков включаются целиком.
-TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY: frozenset[str] = frozenset({"FAMILY", "ROMANCE"})
+TRIPLET_CLARIFY_FAMILY_ROMANCE_BOUNDARY: frozenset[str] = frozenset(
+    {"FAMILY", "ROMANCE"}
+)
 TRIPLET_CLARIFY_EVENTS_TRAVEL_CHAIN: frozenset[str] = frozenset({"EVENTS", "TRAVEL"})
-TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY: frozenset[str] = frozenset({"FAMILY", "FRIENDS", "ROMANCE"})
+TRIPLET_CLARIFY_KINSHIP_FOREIGN_FAMILY: frozenset[str] = frozenset(
+    {"FAMILY", "FRIENDS", "ROMANCE"}
+)
 
 
-def triplet_prompt_show_clarification(slot_name: str | None, applicable_slots: frozenset[str]) -> bool:
+def triplet_prompt_show_clarification(
+    slot_name: str | None, applicable_slots: frozenset[str]
+) -> bool:
     """
     Нужно ли включить слот-специфичное уточнение в system-промпт.
 
@@ -156,13 +162,17 @@ def triplet_prompt_show_clarification(slot_name: str | None, applicable_slots: f
     return slot_name in applicable_slots
 
 
-def resolve_slot_or_none(name: str, *, ontology: SlotOntology = DEFAULT_USER_SLOTS) -> Optional[str]:
+def resolve_slot_or_none(
+    name: str, *, ontology: SlotOntology = DEFAULT_USER_SLOTS
+) -> str | None:
     resolved = ontology.resolve(name)
     return resolved or None
 
 
-def filter_resolve_slots(names: Iterable[str], *, ontology: SlotOntology = DEFAULT_USER_SLOTS) -> List[str]:
-    out: List[str] = []
+def filter_resolve_slots(
+    names: Iterable[str], *, ontology: SlotOntology = DEFAULT_USER_SLOTS
+) -> list[str]:
+    out: list[str] = []
     seen: set[str] = set()
     for n in names:
         r = ontology.resolve(n)
@@ -171,4 +181,3 @@ def filter_resolve_slots(names: Iterable[str], *, ontology: SlotOntology = DEFAU
         seen.add(r)
         out.append(r)
     return out
-

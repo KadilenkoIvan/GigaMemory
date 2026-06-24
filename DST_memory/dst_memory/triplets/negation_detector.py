@@ -12,6 +12,7 @@
 
 Нормализация с pymorphy2: "Москве" → "москва", "живёт" → "жить".
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, List, Optional, Set
 
 if TYPE_CHECKING:
     from ..core.models import FactRecord
+    from .triplet_client import DeletionSignal
 
 logger = logging.getLogger(__name__)
 
@@ -28,35 +30,74 @@ logger = logging.getLogger(__name__)
 # Паттерны отрицания/удаления для русского языка
 # ---------------------------------------------------------------------------
 
-_NEGATION_PATTERNS: list[re.Pattern] = [re.compile(p, re.IGNORECASE) for p in [
-    r"больше\s+не\b",
-    r"уже\s+не\b",
-    r"не\s+(живу|живёт|живет|работаю|работает|хожу|ходит|делаю|делает|учусь|учится)\b",
-    r"перестал[аи]?\b",
-    r"бросил[аи]?\b",
-    r"расстал[иась]+\b",
-    r"разошл[иась]+\b",
-    r"разорвал[аи]?\s+отношения",
-    r"уволился|уволилась|уволен[аы]?\b",
-    r"умер|умерла|скончал[ся|ась]+\b",
-    r"продал[аи]?\b",
-    r"потерял[аи]?\b",
-    r"нет\s+у\s+меня\b",
-    r"у\s+меня\s+нет\b",
-    r"больше\s+не\s+занимаюсь",
-    r"не\s+занимаюсь\b",
-    r"перебрался|перебралась\b",
-    r"переехал[аи]?\b",
-    r"съехал[аи]?\b",
-]]
+_NEGATION_PATTERNS: list[re.Pattern] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"больше\s+не\b",
+        r"уже\s+не\b",
+        r"не\s+(живу|живёт|живет|работаю|работает|хожу|ходит|делаю|делает|учусь|учится)\b",
+        r"перестал[аи]?\b",
+        r"бросил[аи]?\b",
+        r"расстал[иась]+\b",
+        r"разошл[иась]+\b",
+        r"разорвал[аи]?\s+отношения",
+        r"уволился|уволилась|уволен[аы]?\b",
+        r"умер|умерла|скончал[ся|ась]+\b",
+        r"продал[аи]?\b",
+        r"потерял[аи]?\b",
+        r"нет\s+у\s+меня\b",
+        r"у\s+меня\s+нет\b",
+        r"больше\s+не\s+занимаюсь",
+        r"не\s+занимаюсь\b",
+        r"перебрался|перебралась\b",
+        r"переехал[аи]?\b",
+        r"съехал[аи]?\b",
+    ]
+]
 
 # Стоп-слова, которые не несут смыслового значения при сравнении
-_STOP_WORDS: Set[str] = {
-    "в", "на", "из", "к", "у", "по", "за", "до", "от", "об", "под",
-    "над", "при", "через", "без", "для", "с", "со", "и", "или", "но",
-    "не", "уже", "больше", "теперь", "что", "как", "это", "меня",
-    "мне", "я", "он", "она", "они", "мы", "ты",
-    "да", "нет", "всё", "все", "того",
+_STOP_WORDS: set[str] = {
+    "в",
+    "на",
+    "из",
+    "к",
+    "у",
+    "по",
+    "за",
+    "до",
+    "от",
+    "об",
+    "под",
+    "над",
+    "при",
+    "через",
+    "без",
+    "для",
+    "с",
+    "со",
+    "и",
+    "или",
+    "но",
+    "не",
+    "уже",
+    "больше",
+    "теперь",
+    "что",
+    "как",
+    "это",
+    "меня",
+    "мне",
+    "я",
+    "он",
+    "она",
+    "они",
+    "мы",
+    "ты",
+    "да",
+    "нет",
+    "всё",
+    "все",
+    "того",
 }
 
 
@@ -73,10 +114,11 @@ class NegationDeletionDetector:
 
     def __init__(self, use_pymorphy: bool = False):
         self.use_pymorphy = use_pymorphy
-        self._morph: Optional[object] = None
+        self._morph: object | None = None
         if use_pymorphy:
             try:
                 import pymorphy2  # type: ignore
+
                 self._morph = pymorphy2.MorphAnalyzer()
                 logger.info("NegationDeletionDetector: pymorphy2 loaded")
             except ImportError:
@@ -92,8 +134,8 @@ class NegationDeletionDetector:
     def detect_deletions(
         self,
         user_message: str,
-        active_records: "List[FactRecord]",
-    ) -> "List[_DeletionSignalLike]":
+        active_records: list[FactRecord],
+    ) -> list[DeletionSignal]:
         """
         Определить, какие активные записи следует удалить на основе
         паттернов отрицания в сообщении пользователя.
@@ -117,8 +159,8 @@ class NegationDeletionDetector:
         msg_words = self._normalize_text(user_message)
         logger.debug("NegationDetector: negation found, msg_words=%s", msg_words)
 
-        deletions: List[DeletionSignal] = []
-        seen_ids: Set[int] = set()
+        deletions: list[DeletionSignal] = []
+        seen_ids: set[int] = set()
 
         # --- Проход 1: точное совпадение subj+rel+obj ---
         for rec in active_records:
@@ -127,16 +169,23 @@ class NegationDeletionDetector:
             obj_words = self._normalize_text(rec.object)
             rel_words = self._normalize_text(rec.relation)
             # Объект или связь упомянуты в сообщении
-            if (obj_words & msg_words) or (rel_words & msg_words and obj_words & msg_words):
-                deletions.append(DeletionSignal(
-                    subject=rec.subject,
-                    relation=rec.relation,
-                    object=rec.object,
-                ))
+            if (obj_words & msg_words) or (
+                rel_words & msg_words and obj_words & msg_words
+            ):
+                deletions.append(
+                    DeletionSignal(
+                        subject=rec.subject,
+                        relation=rec.relation,
+                        object=rec.object,
+                    )
+                )
                 seen_ids.add(rec.record_id)
                 logger.info(
                     "NegationDetector pass1: marking for deletion record_id=%d [%s|%s|%s]",
-                    rec.record_id, rec.subject, rec.relation, rec.object,
+                    rec.record_id,
+                    rec.subject,
+                    rec.relation,
+                    rec.object,
                 )
 
         # --- Проход 2 (каскадный): только subject+relation если объект не нашли,
@@ -147,15 +196,20 @@ class NegationDeletionDetector:
                     continue
                 rel_words = self._normalize_text(rec.relation)
                 if rel_words & msg_words:
-                    deletions.append(DeletionSignal(
-                        subject=rec.subject,
-                        relation=rec.relation,
-                        object=rec.object,
-                    ))
+                    deletions.append(
+                        DeletionSignal(
+                            subject=rec.subject,
+                            relation=rec.relation,
+                            object=rec.object,
+                        )
+                    )
                     seen_ids.add(rec.record_id)
                     logger.info(
                         "NegationDetector pass2 (cascade): marking record_id=%d [%s|%s|%s]",
-                        rec.record_id, rec.subject, rec.relation, rec.object,
+                        rec.record_id,
+                        rec.subject,
+                        rec.relation,
+                        rec.object,
                     )
 
         return deletions
@@ -171,14 +225,14 @@ class NegationDeletionDetector:
                 return True
         return False
 
-    def _normalize_text(self, text: str) -> Set[str]:
+    def _normalize_text(self, text: str) -> set[str]:
         """
         Извлечь нормализованные значимые слова из текста.
         Если pymorphy2 загружен — лемматизировать.
         """
         raw = re.sub(r"[^\w\s]", " ", text.lower())
         tokens = raw.split()
-        result: Set[str] = set()
+        result: set[str] = set()
         for tok in tokens:
             if tok in _STOP_WORDS:
                 continue

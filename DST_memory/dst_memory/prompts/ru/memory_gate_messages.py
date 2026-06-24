@@ -5,24 +5,28 @@ from __future__ import annotations
 from typing import Dict, List
 
 from ...slots.ontology import CANONICAL_TO_RU_LABEL
-from .prompt_fewshots import MEMORY_GATE_FEWSHOT, MEMORY_GATE_FEWSHOT_VECTOR, memory_gate_user_block
+from .prompt_fewshots import (
+    MEMORY_GATE_FEWSHOT,
+    MEMORY_GATE_FEWSHOT_VECTOR,
+    memory_gate_user_block,
+)
 
 
-def _slots_ru(canonical: List[str]) -> List[str]:
+def _slots_ru(canonical: list[str]) -> list[str]:
     return [CANONICAL_TO_RU_LABEL.get(s, s) for s in canonical]
 
 
 def build_memory_gate_messages(
     user_message: str,
-    slot_names: List[str],
+    slot_names: list[str],
     *,
     for_vector_context: bool = False,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     extra_block = ""
     if for_vector_context:
         extra_block = (
             " ЕСЛИ ПАМЯТЬ ДЛЯ ОТВЕТА НУЖНА, НО НИ ОДИН КОНКРЕТНЫЙ СЛОТ ИЗ СПИСКА ЯВНО НЕ ПОДХОДИТ — "
-            'укажи use_memory: true и slots: [].'
+            "укажи use_memory: true и slots: []."
         )
 
     system = (
@@ -38,7 +42,7 @@ def build_memory_gate_messages(
         'ПРИ use_memory=false МАССИВ "slots" ДОЛЖЕН БЫТЬ [].'
     )
 
-    few_shot: List[Dict[str, str]] = []
+    few_shot: list[dict[str, str]] = []
     for question, slots_block, assistant_json in MEMORY_GATE_FEWSHOT:
         slot_list = [s.strip() for s in slots_block.split("\n") if s.strip()]
         few_shot.append(
@@ -55,11 +59,19 @@ def build_memory_gate_messages(
             few_shot.append(
                 {
                     "role": "user",
-                    "content": memory_gate_user_block(question, slot_list, extra_block.strip()),
+                    "content": memory_gate_user_block(
+                        question, slot_list, extra_block.strip()
+                    ),
                 }
             )
             few_shot.append({"role": "assistant", "content": assistant_json})
 
-    final_user = memory_gate_user_block(user_message, _slots_ru(slot_names), extra_block)
+    final_user = memory_gate_user_block(
+        user_message, _slots_ru(slot_names), extra_block
+    )
 
-    return [{"role": "system", "content": system}] + few_shot + [{"role": "user", "content": final_user}]
+    return (
+        [{"role": "system", "content": system}]
+        + few_shot
+        + [{"role": "user", "content": final_user}]
+    )

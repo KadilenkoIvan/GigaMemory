@@ -25,7 +25,7 @@ def _patch_inspect_for_pymorphy2() -> None:
     try:
         from inspect import ArgSpec  # type: ignore[attr-defined]
     except ImportError:
-        ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "keywords", "defaults"])
+        ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "keywords", "defaults"])  # type: ignore[no-redef]
 
     def getargspec(func):  # noqa: ANN001
         spec = inspect.getfullargspec(func)
@@ -252,7 +252,9 @@ def normalize_slot_label_cached(text: str) -> str:
     return normalize_slot_label(text)
 
 
-def resolve_slot_key_to_existing(existing_slot_names: Sequence[str], normalized: str) -> str:
+def resolve_slot_key_to_existing(
+    existing_slot_names: Sequence[str], normalized: str
+) -> str:
     """
     Если нормализованное имя совпадает с нормализацией одного из уже
     существующих ключей — возвращаем тот ключ как в состоянии (без дублей).
