@@ -51,12 +51,20 @@ class ImportanceClassifier:
         import torch
 
         logger.debug("Classifier predict text_len=%d", len(text))
-        inputs = self.tokenizer(
+        # Use tokenizer.encode() instead of tokenizer.__call__() to avoid
+        # a Python 3.13 / tokenizers compatibility issue where encode_batch
+        # raises TypeError on valid strings.
+        token_ids = self.tokenizer.encode(
             "query: " + text,
+            add_special_tokens=True,
             truncation=True,
             max_length=512,
-            return_tensors="pt",
-        ).to(self.device)
+        )
+        input_ids = torch.tensor([token_ids], dtype=torch.long).to(self.device)
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+        }
         with torch.no_grad():
             logits = self.model(**inputs).logits
             probs = torch.softmax(logits, dim=-1)[0]
