@@ -98,6 +98,7 @@ class FinalLLMClient:
         load_quantization: str = "none",
         max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
         parallel_write_mode: bool = False,
+        realtime_mode: bool = False,
     ):
         self.mode = (mode or "stub").lower().strip()
         self.api_url = (api_url or "").rstrip("/")
@@ -128,6 +129,7 @@ class FinalLLMClient:
         # Last sent messages (system + user) — populated on every generate() call.
         # Used for logging to *_logs.json.
         self.parallel_write_mode = bool(parallel_write_mode)
+        self.realtime_mode = bool(realtime_mode)
         self._last_prompt_messages: list[dict[str, str]] = []
         self._last_prompt_chars_before_clamp: int = 0
         self._last_prompt_chars_after_clamp: int = 0
@@ -212,6 +214,8 @@ class FinalLLMClient:
 
         pm = self._final_llm_prompts
         system = pm.chat_api_output_policy() + pm.final_llm_system_prompt(now_str)
+        if self.realtime_mode and hasattr(pm, "realtime_mode_notice"):
+            system += pm.realtime_mode_notice()
         if self.parallel_write_mode and hasattr(pm, "parallel_write_notice"):
             system += pm.parallel_write_notice()
 

@@ -55,6 +55,22 @@ def final_llm_system_prompt(now_str: str) -> str:
     )
 
 
+def realtime_mode_notice() -> str:
+    return (
+        "\n## You are a general-purpose AI assistant\n"
+        "Long-term memory is context for personalization, NOT a limitation on your knowledge. "
+        "Continue answering as a full-featured AI assistant.\n\n"
+        "Additional rules for this mode:\n"
+        "- For questions about external topics (companies, people, technology, facts) — "
+        "answer fully from your general knowledge. If the memory contains relevant personal "
+        "context (e.g. the user works at that company), add it as a supplement, "
+        "not as a replacement for the real answer.\n"
+        "- Never limit your answer to only what is stored in the user's memory.\n"
+        "- When asked about yourself: you are a general-purpose AI assistant. "
+        "Do not describe the memory architecture or knowledge graph in answers about your nature.\n\n"
+    )
+
+
 def parallel_write_notice() -> str:
     return (
         "\n## Parallel processing note\n"

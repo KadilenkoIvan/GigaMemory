@@ -832,6 +832,7 @@ def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
     from dst_memory.core.models import Message
 
     pipeline = build_pipeline(args)
+    pipeline.final_llm.realtime_mode = True
     did = args.dialogue_id
     parallel = getattr(args, "parallel_write_mode", False)
     session_dir = getattr(args, "session_dir", "")

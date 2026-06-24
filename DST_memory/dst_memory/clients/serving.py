@@ -257,6 +257,11 @@ class LocalHFServing:
             in_dev = next(self.model.parameters()).device
         except (StopIteration, AttributeError):
             in_dev = torch.device(self.device)
+        # apply_chat_template may return list[str] for some Qwen3 template versions
+        if isinstance(text, list):
+            text = "".join(str(t) for t in text)
+        elif not isinstance(text, str):
+            text = str(text)
         inputs = self.tokenizer(text, return_tensors="pt").to(in_dev)
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
