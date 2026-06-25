@@ -422,6 +422,98 @@ def get_graph_image(dialogue_id: str) -> Response:
     return Response(content=buf.read(), media_type="image/png")
 
 
+@app.get("/dialogue/{dialogue_id}/graph/html")
+def get_graph_html(dialogue_id: str) -> Response:
+    """Return an interactive HTML visualization of the memory graph (pyvis).
+
+    Open in a browser — nodes are draggable, edges are labelled with the relation,
+    colour-coded by slot.  Empty memory returns a minimal HTML page.
+    """
+    from pyvis.network import Network
+
+    pipeline = _require_pipeline()
+    state = pipeline.dst.get_state(dialogue_id)
+
+    triplets: list[tuple[str, str, str, str]] = []
+    for slot_name, records in state.slots.items():
+        for r in records:
+            if r.is_active:
+                triplets.append((r.subject, r.relation, r.object, slot_name))
+
+    if not triplets:
+        html = (
+            "<!DOCTYPE html><html><body style='font-family:sans-serif;padding:40px'>"
+            f"<h2>No memory yet for <code>{dialogue_id}</code></h2>"
+            "</body></html>"
+        )
+        return Response(content=html, media_type="text/html; charset=utf-8")
+
+    slot_names = sorted({t[3] for t in triplets})
+    colors = _slot_color_palette(slot_names)
+
+    net = Network(
+        height="700px",
+        width="100%",
+        directed=True,
+        notebook=False,
+        bgcolor="#1a1a2e",
+        font_color="#e0e0e0",
+    )
+    net.set_options(
+        """{
+        "physics": {"stabilization": {"iterations": 120}},
+        "edges": {"smooth": {"type": "dynamic"}, "arrows": {"to": {"enabled": true}}},
+        "nodes": {"font": {"size": 14}},
+        "interaction": {"hover": true, "tooltipDelay": 100}
+    }"""
+    )
+
+    seen_nodes: set[str] = set()
+    for subj, rel, obj, slot in triplets:
+        color = colors.get(slot, "#888888")
+        if subj not in seen_nodes:
+            net.add_node(
+                subj,
+                label=subj,
+                title=f"slot: {slot}",
+                color=color,
+                size=20,
+            )
+            seen_nodes.add(subj)
+        if obj not in seen_nodes:
+            net.add_node(
+                obj,
+                label=obj,
+                title=f"slot: {slot}",
+                color=color,
+                size=16,
+            )
+            seen_nodes.add(obj)
+        net.add_edge(subj, obj, label=rel, title=rel, color=color)
+
+    # Legend as an HTML overlay (pyvis doesn't have native legend support)
+    legend_items = "".join(
+        f'<span style="margin-right:12px">'
+        f'<span style="display:inline-block;width:12px;height:12px;'
+        f'background:{colors[s]};border-radius:50%;margin-right:4px"></span>'
+        f"{s}</span>"
+        for s in slot_names
+    )
+    title_bar = (
+        f'<div style="position:fixed;top:0;left:0;right:0;z-index:999;'
+        f"background:rgba(26,26,46,.9);color:#e0e0e0;padding:8px 16px;"
+        f'font-family:sans-serif;font-size:13px">'
+        f"<b>Memory graph:</b> {dialogue_id} &nbsp;|&nbsp; {len(triplets)} facts"
+        f"&nbsp;&nbsp;{legend_items}"
+        f"</div>"
+    )
+
+    raw_html = net.generate_html()
+    # Inject title bar right after <body>
+    html_out = raw_html.replace("<body>", f"<body>\n{title_bar}", 1)
+    return Response(content=html_out, media_type="text/html; charset=utf-8")
+
+
 @app.delete("/dialogue/{dialogue_id}")
 def delete_dialogue(dialogue_id: str) -> JSONResponse:
     """Clear all memory (DST state + RAGU graph) for the given dialogue."""

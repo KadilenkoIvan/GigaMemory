@@ -391,6 +391,44 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 - сразу один ответ;
 - возвращается json с write_log + answer.
 
+## 7.4 REST API (`DST_memory/api.py`)
+
+Назначение: продуктовый HTTP-слой поверх пайплайна. FastAPI приложение с одним singleton-пайплайном на процесс.
+
+### Инициализация
+
+При запуске сервера:
+1. Читается конфиг (`GIGAMEMORY_CONFIG` env → `DST_memory/run_config_api.json`).
+2. Загружается `DSTMemoryPipeline` (все модели + RAGU backend).
+3. На `pipeline.final_llm` устанавливается `realtime_mode=True` (real-time промпт для финальной LLM).
+
+### Endpoints
+
+| Метод | Путь | Логика |
+|---|---|---|
+| `POST /dialogue/{id}/message` | Принять `content`, запустить `write_to_memory` → `answer` → `add_recent_pair`. При `parallel_write=true` — запись в фоновом потоке, ответ строится сразу из текущего графа. |
+| `GET /dialogue/{id}/graph` | Вызов `dst.slots_with_messages(id)` — все активные факты со всеми метаданными. |
+| `GET /dialogue/{id}/graph_short` | Только активные триплеты (subject/relation/object/ttl) + вычисленное поле `expires_at` (ISO datetime или null для `inf`). |
+| `GET /dialogue/{id}/graph/image` | PNG-визуализация через networkx + matplotlib. Узлы — сущности, рёбра — отношения, цвет — по слоту. |
+| `GET /dialogue/{id}/graph/html` | Интерактивный HTML через pyvis (тёмный фон, drag & drop узлов, hover tooltips, легенда слотов). |
+| `DELETE /dialogue/{id}` | `pipeline.clear_memory(id)` — сброс DST-состояния и RAGU-графа. |
+
+### Параллельная запись
+
+`POST /message` с `parallel_write: true`:
+- Запись в граф стартует в background-треде.
+- Ответ строится немедленно на основе текущего состояния памяти (до текущего сообщения).
+- Поведение аналогично `--parallel-write` в интерактивном CLI-режиме.
+
+### Изоляция диалогов
+
+Каждый `dialogue_id` — независимое состояние. Один сервер может обслуживать произвольное количество диалогов одновременно. Per-dialogue lock гарантирует последовательность операций внутри одного диалога в синхронном режиме.
+
+### Персистентность
+
+Если `api.session_dir` задан, после каждого `write_to_memory` состояние сохраняется в `<session_dir>/<dialogue_id>/state.json`.  
+RAGU-граф хранится в `api.ragu_storage_path` (разделяется между всеми диалогами).
+
 ---
 
 ## 8. RAGU: хранение и релевантность

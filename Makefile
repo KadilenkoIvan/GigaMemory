@@ -2,9 +2,10 @@
 # Requires: uv (https://docs.astral.sh/uv/getting-started/installation/)
 #
 # Usage:
-#   make install       — set up CUDA environment (default, cu126)
-#   make install-cpu   — set up CPU-only environment
-#   make install-api   — install API extras (fastapi + uvicorn)
+#   make install       — install everything (CUDA + API + dev tools) — recommended for development
+#   make install-local — install for local pipeline run only (CUDA, no API server deps)
+#   make install-api   — install for API server only (CUDA + fastapi/uvicorn)
+#   make install-cpu   — CPU-only environment (no GPU)
 #   make lint          — run ruff linter
 #   make format        — apply black formatting
 #   make test          — run pytest in stub mode (no GPU/LLM needed)
@@ -18,7 +19,7 @@ UV              := uv
 PYTHON_VERSION  ?= 3.11
 CUDA_VERSION    ?= cu126
 
-.PHONY: all install install-cpu install-dev install-api \
+.PHONY: all install install-local install-cpu install-dev install-api \
         lint lint-fix format format-check type-check \
         test test-cov smoke \
         serve \
@@ -29,12 +30,25 @@ all: help
 
 # ─── Environment setup ────────────────────────────────────────────────────────
 
-install: ## Set up CUDA environment (cu126) with uv
-	$(UV) sync --extra cuda --extra dev
+install: ## Install everything: CUDA + API server + dev tools (recommended for development)
+	$(UV) sync --extra cuda --extra api --extra dev
 	@echo ""
-	@echo "CUDA environment ready."
+	@echo "Full environment ready (CUDA + API + dev)."
 	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
 	@echo "          .venv\\Scripts\\activate     (Windows)"
+
+install-local: ## Install for local pipeline run only (CUDA, no API server, no dev tools)
+	$(UV) sync --extra cuda
+	@echo ""
+	@echo "Local environment ready (CUDA only)."
+	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
+	@echo "          .venv\\Scripts\\activate     (Windows)"
+
+install-api: ## Install for API server (CUDA + fastapi/uvicorn)
+	$(UV) sync --extra cuda --extra api
+	@echo ""
+	@echo "API environment ready."
+	@echo "Set OPENROUTER_API_KEY, then: make serve"
 
 install-cpu: ## Set up CPU-only environment with uv (Linux/macOS)
 	$(UV) sync --extra dev
@@ -48,10 +62,6 @@ install-cpu: ## Set up CPU-only environment with uv (Linux/macOS)
 install-dev: ## Install dev tools only (no torch — for CI lint/type jobs)
 	$(UV) sync --extra dev
 	@echo "Dev-only environment ready."
-
-install-api: ## Install API extras (fastapi + uvicorn) on top of existing env
-	$(UV) sync --extra api
-	@echo "API extras installed. Run: make serve"
 
 hooks: ## Install pre-commit hooks (run once after cloning)
 	$(UV) run pre-commit install
