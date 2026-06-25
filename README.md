@@ -8,34 +8,39 @@
 
 ## Quick Start
 
-**Требования:** GPU с CUDA и [uv](https://docs.astral.sh/uv/getting-started/installation/).
+**Требования:** GPU с CUDA, [uv](https://docs.astral.sh/uv/getting-started/installation/) и ключ [OpenRouter](https://openrouter.ai/).
 
 ```bash
 # 1. Клонировать репозиторий
 git clone https://github.com/KadilenkoIvan/GigaMemory.git
 cd GigaMemory
 
-# 2. Настроить окружение (CUDA)
-make install
+# 2. Настроить окружение
+make install          # всё: CUDA + API сервер + dev инструменты (рекомендуется)
+# make install-local  # только для локального запуска пайплайна (без API)
+# make install-api    # только для запуска API сервера (CUDA + fastapi/uvicorn)
 
-# 3. Установить pre-commit хуки (один раз после клонирования)
+# 3. Установить pre-commit хуки (один раз)
 make hooks
 
-# 4. Задать API ключ OpenRouter
-cp DST_memory/.env.example DST_memory/.env
-# Открыть DST_memory/.env и вписать: OPENROUTER_API_KEY=<ваш ключ>
+# 4. Задать ключ OpenRouter
+export OPENROUTER_API_KEY=sk-or-...   # Linux/Mac
+$env:OPENROUTER_API_KEY="sk-or-..."  # Windows PowerShell
 
-# 5. Запустить интерактивный диалог
-uv run python DST_memory/run.py pipeline inference interactive
+# 5а. Запустить интерактивный диалог (real-time режим)
+uv run python DST_memory/run.py \
+  --config DST_memory/run_config_local.json \
+  pipeline inference interactive
+
+# 5б. Запустить REST API сервер
+make serve   # или: OPENROUTER_API_KEY=sk-or-... make serve
 ```
 
-При первом запуске `Qwen/Qwen3.5-9B-Instruct` скачается автоматически с HuggingFace (~18 GB).  
-Слот-модель и финальная LLM настраиваются в `DST_memory/run_config.json`.
+При первом запуске `Qwen/Qwen3.5-9B-Instruct` скачается с HuggingFace (~18 GB).  
+Конфиги: `DST_memory/run_config_local.json` — для интерактивного режима, `DST_memory/run_config_api.json` — для API сервера.
 
-> Это один из возможных режимов запуска. Модель используемая внутри проекта может быть как локкальной, 
-> так и с openRouter. То же самое для финальной LLM, которая будет использоваться для ответов.
-> Также, поддерживаются batch-тест по датасету (`pipeline test`),
-> разные стратегии памяти, режимы удаления фактов и stub-режим без GPU — см. разделы ниже.
+> Слот-модель (локальная Qwen) и финальная LLM (OpenRouter) настраиваются независимо.  
+> Доступны batch-прогон по датасету (`pipeline test`), разные стратегии памяти, режимы удаления фактов и stub-режим без GPU.  
 > Для быстрой проверки без GPU и LLM: `make smoke`.
 
 ## Архитектура пайплайна
@@ -71,7 +76,7 @@ flowchart TD
 - Память строится из сообщений пользователя.
 - Из важных сообщений извлекаются триплеты `subject-relation-object`.
 - Триплеты пишутся в состояние DST и синхронно зеркалятся в граф RAGU.
-- **Поддерживается удаление фактов** тремя независимыми методами (см. ниже).
+- Для поддержания актуальности памяти работают три независимых метода (см. ниже).
 - При ответе формируется memory context одной из стратегий и передается в final LLM.
 - Дополнительно передаются последние пары `user/assistant`.
 
@@ -90,22 +95,96 @@ flowchart TD
 - `CONFIG.md` — описание параметров.
 - `PIPELINE.md` — максимально подробная техническая документация по архитектуре и сценариям.
 
-## Режимы запуска
+## REST API
+
+FastAPI сервер с автоматической Swagger документацией.
+
+### Запуск
+
+```bash
+# Установить зависимости (если ещё не сделано)
+make install-api   # или make install
+
+# Запустить сервер (порт 8000, hot-reload)
+OPENROUTER_API_KEY=sk-or-... make serve
+
+# Swagger UI: http://localhost:8000/docs
+```
+
+### Endpoints
+
+| Метод | Путь | Описание |
+|---|---|---|
+| `POST` | `/dialogue/{id}/message` | Отправить сообщение, получить ответ LLM |
+| `GET` | `/dialogue/{id}/graph` | Полный граф памяти (JSON со всеми метаданными) |
+| `GET` | `/dialogue/{id}/graph_short` | Только активные триплеты + время истечения TTL |
+| `GET` | `/dialogue/{id}/graph/image` | PNG-визуализация графа (networkx + matplotlib) |
+| `GET` | `/dialogue/{id}/graph/html` | Интерактивный HTML-граф (pyvis, открывать в браузере) |
+| `DELETE` | `/dialogue/{id}` | Сбросить память диалога |
+
+### Примеры запросов (Windows PowerShell)
+
+```powershell
+# Отправить сообщение
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:8000/dialogue/user1/message" `
+  -ContentType "application/json" `
+  -Body '{"content": "Привет, я Ваня, работаю в Экспасофт"}'
+
+# Краткий граф памяти
+Invoke-RestMethod "http://localhost:8000/dialogue/user1/graph_short"
+
+# Открыть интерактивный HTML-граф в браузере
+Start-Process "http://localhost:8000/dialogue/user1/graph/html"
+
+# Скачать PNG граф
+Invoke-WebRequest "http://localhost:8000/dialogue/user1/graph/image" -OutFile graph.png
+
+# Сбросить память
+Invoke-RestMethod -Method DELETE "http://localhost:8000/dialogue/user1"
+```
+
+### Параллельная запись в API
+
+```powershell
+# Запись в память идёт в фоне, ответ возвращается немедленно
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:8000/dialogue/user1/message" `
+  -ContentType "application/json" `
+  -Body '{"content": "Я купил новую машину", "parallel_write": true}'
+```
+
+### Конфиг API
+
+`DST_memory/run_config_api.json` — отдельный конфиг для API режима.  
+Ключ OpenRouter берётся из переменной `OPENROUTER_API_KEY` (или прописывается в конфиге).  
+Конфиг переопределяется через env-переменную `GIGAMEMORY_CONFIG`.
+
+---
+
+## Режимы запуска (CLI)
 
 ### Test
 
 Batch-прогон jsonl: сообщения проходят запись в память, затем вызывается ответ на финальный вопрос.
 
 ```bash
-python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
+uv run python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
 ```
 
 ### Inference Interactive
 
-Пошаговый режим: новое сообщение -> запись в память -> ответ LLM.
+Real-time диалог: новое сообщение → запись в память → ответ LLM. Каждая сессия изолирована по datetime.
 
 ```bash
-python DST_memory/run.py pipeline inference interactive --dialogue-id demo
+uv run python DST_memory/run.py \
+  --config DST_memory/run_config_local.json \
+  pipeline inference interactive
+
+# С параллельной записью (ответ не ждёт записи в память)
+uv run python DST_memory/run.py \
+  --config DST_memory/run_config_local.json \
+  pipeline inference interactive --parallel-write
 ```
 
 ### Inference Single-turn
@@ -113,7 +192,7 @@ python DST_memory/run.py pipeline inference interactive --dialogue-id demo
 Один запрос на вход, один ответ на выход.
 
 ```bash
-python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --message "..."
+uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --message "..."
 ```
 
 ## Стратегии памяти

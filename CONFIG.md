@@ -116,6 +116,37 @@
 - Поддерживаются оба варианта JSON: `{"deactivate":[...], "skip_new":[...]}` и сокращённый `{"deactivate":[...]}`.
 - При отсутствии `skip_new` парсер трактует его как пустой список (без ошибки пайплайна).
 
+## `api`
+
+Настройки REST API сервера (`DST_memory/api.py`). Конфиг читается из `DST_memory/run_config_api.json` или из пути заданного в `GIGAMEMORY_CONFIG`.
+
+| key | type | description |
+|---|---|---|
+| `session_dir` | str | директория для персистентного хранения состояний диалогов; каждый диалог → `<session_dir>/<dialogue_id>/state.json`; пустая строка = только in-memory |
+| `ragu_storage_path` | str | путь к общему RAGU-хранилищу для всех диалогов API; если пусто — используется значение из `shared.ragu_storage_path`; рекомендуется задать отдельный путь, например `api_sessions/ragu` |
+| `host` | str | хост для uvicorn (default `0.0.0.0`) |
+| `port` | int | порт для uvicorn (default `8000`) |
+
+**Env-переменные для API:**
+
+| переменная | описание |
+|---|---|
+| `GIGAMEMORY_CONFIG` | путь к конфигу (override, по умолчанию `DST_memory/run_config_api.json` рядом с `api.py`) |
+| `OPENROUTER_API_KEY` | ключ OpenRouter; подставляется через `"llm_api_key": "${OPENROUTER_API_KEY}"` в конфиге |
+
+**Запуск:**
+
+```bash
+# через make
+OPENROUTER_API_KEY=sk-or-... make serve
+
+# вручную
+OPENROUTER_API_KEY=sk-or-... uv run uvicorn api:app --app-dir DST_memory --host 0.0.0.0 --port 8000 --reload
+
+# с кастомным конфигом
+GIGAMEMORY_CONFIG=path/to/config.json uv run uvicorn api:app --app-dir DST_memory --port 8000
+```
+
 ## `pipeline_jsonl`
 
 - `dataset_path`: path to jsonl
