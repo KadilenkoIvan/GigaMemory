@@ -4,21 +4,25 @@
 # Usage:
 #   make install       — set up CUDA environment (default, cu126)
 #   make install-cpu   — set up CPU-only environment
+#   make install-api   — install API extras (fastapi + uvicorn)
 #   make lint          — run ruff linter
 #   make format        — apply black formatting
 #   make test          — run pytest in stub mode (no GPU/LLM needed)
 #   make smoke         — quick pipeline smoke-test in stub mode
+#   make serve         — start REST API server (port 8000)
 #   make docker-up     — start with docker compose (CUDA)
 #   make docker-up-cpu — start with docker compose (CPU-only)
+#   make docker-api    — start API service with docker compose
 
 UV              := uv
 PYTHON_VERSION  ?= 3.11
 CUDA_VERSION    ?= cu126
 
-.PHONY: all install install-cpu install-dev \
+.PHONY: all install install-cpu install-dev install-api \
         lint lint-fix format format-check type-check \
         test test-cov smoke \
-        docker-build docker-build-cpu docker-up docker-up-cpu docker-down \
+        serve \
+        docker-build docker-build-cpu docker-up docker-up-cpu docker-api docker-down \
         clean help
 
 all: help
@@ -44,6 +48,10 @@ install-cpu: ## Set up CPU-only environment with uv (Linux/macOS)
 install-dev: ## Install dev tools only (no torch — for CI lint/type jobs)
 	$(UV) sync --extra dev
 	@echo "Dev-only environment ready."
+
+install-api: ## Install API extras (fastapi + uvicorn) on top of existing env
+	$(UV) sync --extra api
+	@echo "API extras installed. Run: make serve"
 
 hooks: ## Install pre-commit hooks (run once after cloning)
 	$(UV) run pre-commit install
@@ -77,6 +85,13 @@ test-cov: ## Run tests with coverage report
 		--cov-report=term-missing \
 		--cov-report=html:htmlcov
 
+serve: ## Start REST API server on port 8000 (requires make install-api)
+	$(UV) run uvicorn api:app \
+		--app-dir DST_memory \
+		--host 0.0.0.0 \
+		--port 8000 \
+		--reload
+
 smoke: ## Quick pipeline smoke-test in stub mode (no GPU/LLM)
 	$(UV) run python DST_memory/run.py \
 		--llm-mode stub \
@@ -101,6 +116,9 @@ docker-up: ## Start pipeline with docker compose (CUDA)
 
 docker-up-cpu: ## Start pipeline with docker compose (CPU-only)
 	TORCH_EXTRA=cpu docker compose up --build
+
+docker-api: ## Start only the API service with docker compose
+	docker compose up --build api
 
 docker-down: ## Stop and remove containers
 	docker compose down

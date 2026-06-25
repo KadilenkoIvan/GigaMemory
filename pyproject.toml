@@ -49,6 +49,13 @@ cpu = [
 flash-attn = [
     "flash-attn",
 ]
+# REST API server
+api = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "matplotlib>=3.7",
+    "networkx>=3.0",
+]
 # Dev tools: linting, formatting, type checking, testing
 dev = [
     "pytest>=7.0",
@@ -128,6 +135,7 @@ known-first-party = ["dst_memory"]
 [tool.ruff.lint.per-file-ignores]
 "DST_memory/dst_memory/prompts/**" = ["E501"]  # long few-shot strings
 "DST_memory/run.py" = ["E402"]                 # sys.path manipulation before imports
+"DST_memory/api.py" = ["E402"]                 # sys.path manipulation before imports
 
 # ─── Black ────────────────────────────────────────────────────────────────────
 

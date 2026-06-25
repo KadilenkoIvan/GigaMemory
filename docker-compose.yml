@@ -23,5 +23,35 @@ services:
               count: 1
               capabilities: [gpu]
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_EXTRA: ${TORCH_EXTRA:-cuda}
+    image: gigamemory:latest
+    command: >
+      uv run python DST_memory/api.py
+        --config DST_memory/run_config_api.json
+        --host 0.0.0.0
+        --port 8000
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - api_sessions:/app/api_sessions
+    environment:
+      - PYTHONPATH=/app/DST_memory
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - GIGAMEMORY_CONFIG=/app/DST_memory/run_config_api.json
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 volumes:
   ragu_storage:
+  api_sessions:
