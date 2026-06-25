@@ -73,27 +73,30 @@ flowchart TD
 
 ## Что это за проект
 
-- Память строится из сообщений пользователя.
-- Из важных сообщений извлекаются триплеты `subject-relation-object`.
-- Триплеты пишутся в состояние DST и синхронно зеркалятся в граф RAGU.
-- Для поддержания актуальности памяти работают три независимых метода (см. ниже).
-- При ответе формируется memory context одной из стратегий и передается в final LLM.
-- Дополнительно передаются последние пары `user/assistant`.
+- Память строится из сообщений пользователя в реальном времени.
+- Из важных сообщений извлекаются триплеты `subject-relation-object` и записываются в DST-граф.
+- Параллельный режим: ответ строится немедленно, запись в граф — в фоновом потоке.
+- Для поддержания актуальности памяти: TTL (время жизни фактов), семантическая дедупликация, три режима удаления.
+- При ответе формируется memory context одной из трёх стратегий и передаётся в финальную LLM.
+- Продуктовый слой: REST API сервер с 6 endpoints, визуализация графа (PNG и интерактивный HTML).
 
 ## Что входит в каталог
 
-- `run.py` — единая CLI-точка запуска.
+- `run.py` — единая CLI-точка запуска (pipeline test / inference interactive / inference single-turn).
+- `api.py` — FastAPI REST сервер (Этап 2); запускается через `make serve`.
 - `dst_memory/` — вся логика пайплайна (разбита по подпакетам):
   - `core/` — pipeline, dst_manager, models, config, graph_backend
-  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в `run_config.json` / `--prompt-language` (включая тексты **финальной** LLM: `prompts/<ru|en>/final_llm_messages.py`)
+  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в конфиге (включая тексты **финальной** LLM и real-time/parallel-write notices)
   - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
   - `triplets/` — extraction, conflict, deletion, negation_detector
   - `storage/` — RAGU backend (ragu_graph_processor)
   - `clients/` — serving, classifier, memory_gate_client, llm_client
   - `utils/` — io_utils, dotenv_loader, run_config_loader
-- `run_config.json` — runtime-конфиг по умолчанию.
-- `CONFIG.md` — описание параметров.
-- `PIPELINE.md` — максимально подробная техническая документация по архитектуре и сценариям.
+- `run_config.json` — runtime-конфиг по умолчанию (для валидации/тестов).
+- `run_config_local.json` — конфиг для локального интерактивного режима.
+- `run_config_api.json` — конфиг для REST API сервера.
+- `CONFIG.md` — полное описание всех параметров конфига.
+- `PIPELINE.md` — техническая документация по архитектуре, этапам и форматам данных.
 
 ## REST API
 
@@ -205,20 +208,35 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 
 ## Важные флаги
 
-- `--memory-strategy`
-- `--graph-top-k-records`
-- `--recent-history-pairs`
-- `--slot-model-path`
-- `--slot-llm-load-quantization` (`none`\|`8bit`\|`4bit`) — BitsAndBytes для локальной slot/triplet модели (CUDA); в JSON: `shared.slot_llm_load_quantization`
-- `--importance-model-path`
-- `--ragu-embedder-model`
-- `--ragu-storage-path`
-- `--llm-mode` (`openrouter|api|puter|stub|local`)
-- `--no-final-llm`
-- `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict и финальной LLM (в `run_config.json`: `prompt_language`)
-- `--no-conflict-rule-same-relation-updates` — отключить детерминированную замену при том же `subject`+`relation` и другом `object` (решение только через LLM-конфликт); по умолчанию правило включено (`shared.conflict_rule_same_relation_updates`)
+**Память и стратегия:**
+- `--memory-strategy` (`full_graph_json` | `relevant_slots_full` | `topk_graph_records`)
+- `--graph-top-k-records` — top-k для стратегии `topk_graph_records`
+- `--recent-history-pairs` — размер окна последних пар user/assistant
 
-Для ограничения входного контекста final LLM используйте `shared.llm_max_context_tokens` в `run_config.json` (или соответствующий `giga_memory.llm_max_context_tokens` в конфиге валидации). Это особенно важно для моделей с меньшим окном контекста (например, 32768).
+**Модели:**
+- `--slot-model-path` — путь/id к локальной Qwen-модели для слотов/триплетов
+- `--slot-llm-load-quantization` (`none`|`8bit`|`4bit`) — BitsAndBytes для slot/triplet модели; в JSON: `shared.slot_llm_load_quantization`
+- `--importance-model-path` — путь к BERT-классификатору важности (пусто = stub, важность всегда True)
+- `--ragu-embedder-model` — модель эмбеддингов для RAGU
+
+**Хранение и сессии:**
+- `--ragu-storage-path` — путь к RAGU storage
+- `--session-dir` — директория сессий; каждый запуск создаёт `<session_dir>/<dialogue_id>_<datetime>/`
+- `--dialogue-id` — базовый id диалога (суффикс datetime добавляется автоматически)
+
+**Финальная LLM:**
+- `--llm-mode` (`openrouter` | `api` | `puter` | `stub` | `local`)
+- `--llm-model` — model id провайдера (напр. `openai/gpt-4o-mini`)
+- `--no-final-llm` — вернуть только структуру без вызова final LLM
+
+**Интерактивный режим:**
+- `--parallel-write` (флаг после `pipeline inference interactive`) — параллельная запись в граф; ответ строится немедленно, граф обновляется в фоне
+
+**Язык и конфликты:**
+- `--prompt-language` (`ru` | `en`) — язык промптов для всего стека включая финальную LLM
+- `--no-conflict-rule-same-relation-updates` — отключить детерминированную замену (только через LLM-конфликт)
+
+Для ограничения входного контекста final LLM: `shared.llm_max_context_tokens` в конфиге (0 = без ограничения). Важно для моделей с окном 32K.
 
 ## Режимы удаления фактов
 

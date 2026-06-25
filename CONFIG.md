@@ -1,12 +1,23 @@
-# CONFIG reference (`run_config.json`)
+# CONFIG reference
+
+В проекте три готовых конфига:
+
+| Файл | Назначение |
+|---|---|
+| `DST_memory/run_config.json` | Default для валидации и `pipeline test` |
+| `DST_memory/run_config_local.json` | Локальный интерактивный режим (Qwen локально + OpenRouter) |
+| `DST_memory/run_config_api.json` | REST API сервер (`api.py`) |
 
 `run.py` читает конфиг из:
-
 1. `--config`, либо
-2. `DST_MEMORY_CONFIG`, либо
+2. `DST_MEMORY_CONFIG` env, либо
 3. `DST_memory/run_config.json`.
 
-Перед этим загружается `DST_memory/.env` (`dotenv_loader.py`).
+`api.py` читает из:
+1. `GIGAMEMORY_CONFIG` env, либо
+2. `DST_memory/run_config_api.json` (рядом с `api.py`).
+
+Перед этим загружается `DST_memory/.env` (`dotenv_loader.py`). Значения вида `"${VAR}"` в JSON заменяются из окружения.
 
 ## `shared`
 
@@ -44,7 +55,10 @@
 | `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
 | `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
 | `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
-| `ragu_storage_path` | str | путь к RAGU storage |
+| `ragu_storage_path` | str | путь к RAGU storage; в интерактивном режиме автоматически переопределяется как `<session_dir>/<dialogue_id>/ragu` если задан `session_dir` |
+| `session_dir` | str | директория сессий; каждый запуск интерактивного режима создаёт `<session_dir>/<dialogue_id>_<YYYY-MM-DD_HH-MM-SS>/`; DST state сохраняется как `state.json`, RAGU граф — в подпапке `ragu/`; пустая строка = только in-memory |
+| `parallel_write_mode` | bool | включить параллельный режим записи в граф: ответ строится немедленно из текущего графа, запись в граф идёт в фоновом потоке; аналог флага `--parallel-write` в CLI |
+| `force_infinite_ttl` | bool | если `true` (default в конфигах для продакшна) — каждый факт получает TTL `inf`; вывод TTL модели игнорируется; TTL expiry не происходит. Установить `false` для реального TTL-режима |
 | `ttl_mode` | str | режим TTL: `mode1` (per-slot defaults из `SLOT_DEFAULT_TTL`), `mode2` (модель генерирует поле `ttl` вместе с триплетом), `mode3` (отдельный вызов — резервировано) |
 | `ttl_slot_overrides` | dict | JSON-словарь переопределений TTL по слоту, напр. `{"EVENTS":"1d","TRAVEL":"1m"}` |
 | `ttl_semantic_dedup_enabled` | bool | включить семантическую дедупликацию триплетов внутри слота |
@@ -156,7 +170,11 @@ GIGAMEMORY_CONFIG=path/to/config.json uv run uvicorn api:app --app-dir DST_memor
 
 ## `pipeline_interactive`
 
-- `dialogue_id`: default id для `pipeline inference interactive`.
+| key | type | description |
+|---|---|---|
+| `dialogue_id` | str | базовый id диалога; при запуске автоматически получает суффикс `_YYYY-MM-DD_HH-MM-SS` для изоляции сессий |
+| `parallel_write_mode` | bool | если `true` — параллельная запись; аналог флага `--parallel-write` в CLI |
+| `session_dir` | str | директория сессий; переопределяет `shared.session_dir` для интерактивного режима |
 
 ## Пояснение стратегий
 

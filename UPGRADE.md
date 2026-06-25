@@ -12,12 +12,14 @@
 - Три стратегии памяти (`full_graph_json`, `relevant_slots_full`, `topk_graph_records`)
 - Валидация на LongMemEval: измерены accuracy и memory hit rate для 3 моделей и 3 стратегий
 - Инженерная инфраструктура: CI/CD, Docker, mypy, pre-commit, 89 тестов
+- Real-time интерактивный режим с изоляцией сессий по datetime
+- Параллельный путь записи: ответ немедленно, граф обновляется в фоне
+- REST API сервер (FastAPI) с 6 endpoints и автодокументацией Swagger
 
 ### Что пока отсутствует
-- Продуктовый слой (нет бота / API / UI — нечего показать на питче)
+- Telegram-бот (строится поверх REST API)
 - Графики экспериментов не добавлены в репозиторий (есть отдельно, будут добавлены)
-- Нет real-time режима (сейчас работа только на уже сформированном диалоге)
-- Нет параллельного пути: ответ и запись в память выполняются последовательно
+- DS артефакты (Jupyter notebook с анализом результатов валидации)
 
 ---
 
@@ -38,59 +40,59 @@
 
 ---
 
-### Этап 1 — улучшение и тестирование core-функциональности
+### Этап 1 — улучшение и тестирование core-функциональности ✅ DONE
 
-Приоритет: доработать проект до стабильного состояния прежде чем строить поверх него бота.
+#### 1.1 Real-time режим (inference interactive) ✅
 
-#### 1.1 Real-time режим (inference interactive)
-Текущее состояние: `pipeline inference interactive` технически существует, но не удобен для реального использования.
+**Реализовано:**
+- Автоматическая изоляция сессий: к `dialogue_id` добавляется суффикс `_YYYY-MM-DD_HH-MM-SS` при каждом запуске, каждая сессия хранится в отдельной папке
+- Сохранение сессий на диск через `session_dir` (DST state + RAGU граф)
+- Корректная обработка прерываний (Ctrl+C, пустой ввод, `/exit`)
+- `realtime_mode_notice()` — аддитивный промпт в системном сообщении, переключает финальную LLM с «ассистент на основе памяти» на «общий AI-ассистент, память — контекст для персонализации»
+- Команды в интерактивном режиме: `/clear`, `/exit`, `/memory`, `/expired`
 
-Задачи:
-- Проверить и исправить edge cases в интерактивном режиме
-- Убедиться, что диалог сохраняется корректно между сессиями
-- Добавить корректную обработку прерываний (Ctrl+C, пустой ввод)
+**Конфиг:** `DST_memory/run_config_local.json`
 
-#### 1.2 Параллельный путь записи и ответа
-**Идея:** когда приходит новое сообщение пользователя — ответ строится немедленно (последние k пар диалога уже в контексте), а извлечение фактов и запись в граф происходят параллельно в фоне.
+#### 1.2 Параллельный путь записи и ответа ✅
 
-**Обоснование:**
-- Latency ответа ≈ 0 добавочного времени на память
-- Последние k пар (recent_history_pairs) уже содержат новую информацию — финальная LLM не теряет контекст
-- Для финальной LLM нужна небольшая доработка промпта: явно указывать, что последние сообщения — самые актуальные
+**Реализовано:**
+- Флаг `--parallel-write` в `pipeline inference interactive`
+- Запись в граф (extraction → dedup → conflict → DST → RAGU) запускается в фоновом потоке (`threading.Thread`)
+- Ответ строится немедленно из текущего графа (без фактов из текущего сообщения)
+- Промпт `parallel_write_notice()` — явно указывает финальной LLM, что последние сообщения в `recent_pairs` актуальнее графа
+- Параметр `parallel_write_mode: bool` в `PipelineConfig` и `run_config.json`
 
-**Реализация:**
-- `asyncio` или `threading`: два независимых пути запускаются одновременно
-- Путь ответа: `recent_history_pairs` + граф памяти (без новых фактов из текущего сообщения)
-- Путь записи: полный pipeline extraction → dedup → conflict → DST → RAGU
-- Синхронизация: блокировка только при чтении/записи в граф (уже есть?)
+**Дополнительные исправления этапа:**
+- Python 3.13 + tokenizers Rust: `use_fast=False` для BERT-классификатора, `backend_tokenizer.encode()` fallback в serving.py
+- `uv sync` conflicting indexes: переход с `extra = "cuda"` на `sys_platform != 'darwin'` маркеры в `[tool.uv.sources]`
 
-**Ограничения:**
-- Требует проверки потокобезопасности RAGU storage
-- Промпт финальной LLM нужно адаптировать под этот режим
-
-#### 1.3 Покрытие тестами новой функциональности
-- Тесты для параллельного режима (mock async)
-- Интеграционные тесты interactive-режима
+#### 1.3 Покрытие тестами
+- Тесты для параллельного режима (mock async) — TODO (в следующих этапах)
 
 ---
 
-### Этап 2 — продуктовый слой: REST API
+### Этап 2 — продуктовый слой: REST API ✅ DONE
 
-Прежде чем делать бота — сделать API. Бот будет клиентом к нему.
+#### 2.1 FastAPI сервер (`DST_memory/api.py`)
 
-#### 2.1 FastAPI сервер
-Endpoints:
-- `POST /dialogue/{dialogue_id}/message` — принять сообщение, вернуть ответ LLM
-- `GET /dialogue/{dialogue_id}/graph` — вернуть текущий граф памяти (JSON)
-- `GET /dialogue/{dialogue_id}/graph/image` — вернуть граф как PNG (через pyvis, уже есть зависимость)
+**Реализованные endpoints:**
+- `POST /dialogue/{dialogue_id}/message` — принять сообщение, вернуть ответ LLM; поддерживает `parallel_write: true`
+- `GET /dialogue/{dialogue_id}/graph` — полный граф памяти (JSON со всеми метаданными)
+- `GET /dialogue/{dialogue_id}/graph_short` — только активные триплеты + `expires_at` (ISO или null)
+- `GET /dialogue/{dialogue_id}/graph/image` — PNG-визуализация (networkx + matplotlib, цвет по слоту)
+- `GET /dialogue/{dialogue_id}/graph/html` — интерактивный HTML (pyvis, тёмная тема, drag & drop)
 - `DELETE /dialogue/{dialogue_id}` — сбросить память диалога
 
-Конфигурация:
-- Параметры берутся из `run_config.json` + переменные окружения
-- Документация через Swagger UI автоматически
+**Конфигурация:**
+- Отдельный конфиг `DST_memory/run_config_api.json`
+- Ключ OpenRouter через `OPENROUTER_API_KEY` env
+- Путь к конфигу через `GIGAMEMORY_CONFIG` env
+- Swagger UI автоматически на `/docs`
 
-Docker:
-- Добавить `api` сервис в `docker-compose.yml`
+**Инфраструктура:**
+- `pyproject.toml`: новый extra `[api]` — fastapi, uvicorn, matplotlib, networkx
+- `Makefile`: `make install` = всё, `make install-local` = только пайплайн, `make install-api` = CUDA + API; `make serve` запускает сервер
+- `docker-compose.yml`: сервис `api` на порту 8000, volume `api_sessions`
 
 ---
 
