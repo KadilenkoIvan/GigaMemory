@@ -31,7 +31,6 @@ _TRIPLET_ITEM: dict[str, Any] = {
         "ttl": {"type": "string"},
     },
     "required": ["slot", "subject", "relation", "object"],
-    "additionalProperties": False,
 }
 
 _DELETE_ITEM: dict[str, Any] = {
@@ -42,7 +41,6 @@ _DELETE_ITEM: dict[str, Any] = {
         "object": {"type": "string"},
     },
     "required": ["subject", "relation", "object"],
-    "additionalProperties": False,
 }
 
 # Triplet extraction without inline deletion signals.
@@ -52,7 +50,6 @@ TRIPLET_JSON_SCHEMA: dict[str, Any] = {
         "triplets": {"type": "array", "items": _TRIPLET_ITEM},
     },
     "required": ["triplets"],
-    "additionalProperties": False,
 }
 
 # Same as above but allows optional "delete" list (llm_inline deletion mode).
@@ -63,5 +60,4 @@ TRIPLET_JSON_SCHEMA_WITH_DELETE: dict[str, Any] = {
         "delete": {"type": "array", "items": _DELETE_ITEM},
     },
     "required": ["triplets"],
-    "additionalProperties": False,
 }

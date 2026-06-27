@@ -10,7 +10,7 @@ from ..clients.lm_json_schemas import (
     TRIPLET_JSON_SCHEMA,
     TRIPLET_JSON_SCHEMA_WITH_DELETE,
 )
-from ..clients.serving import GenerationConfig, LocalHFServing
+from ..clients.serving import GenerationConfig, SlotServing
 from ..core.models import VALID_TTL_VALUES
 from ..prompts.loader import PromptModules, load_prompt_modules
 from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
@@ -47,12 +47,13 @@ class TripletExtractionClient:
         self,
         *,
         use_stub: bool,
-        serving: LocalHFServing | None = None,
+        serving: SlotServing | None = None,
         ontology: SlotOntology = DEFAULT_USER_SLOTS,
         max_triplets: int = 12,
         max_retries: int = 1,
         ttl_mode: str = "mode2",
         prompt_language: str = "ru",
+        max_new_tokens: int = 512,
         parse_retry_temperature: float = 0.65,
         parse_retry_temperature_increment: float = 0.08,
     ):
@@ -63,6 +64,7 @@ class TripletExtractionClient:
         self.max_retries = max_retries
         self.ttl_mode = ttl_mode
         self.prompt_language = prompt_language
+        self.max_new_tokens = int(max_new_tokens)
         self.parse_retry_temperature = float(parse_retry_temperature)
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
@@ -175,7 +177,7 @@ class TripletExtractionClient:
         for attempt in range(1, tries + 1):
             if attempt == 1:
                 gen_cfg = GenerationConfig(
-                    max_new_tokens=512,
+                    max_new_tokens=self.max_new_tokens,
                     do_sample=False,
                     lm_enforcer_json_schema=json_schema,
                 )
@@ -186,7 +188,7 @@ class TripletExtractionClient:
                     + self.parse_retry_temperature_increment * float(attempt - 2),
                 )
                 gen_cfg = GenerationConfig(
-                    max_new_tokens=512,
+                    max_new_tokens=self.max_new_tokens,
                     do_sample=True,
                     temperature=t,
                     lm_enforcer_json_schema=json_schema,

@@ -5,7 +5,7 @@ import logging
 from typing import Any, List, Optional
 
 from ..clients.lm_json_schemas import SLOT_SELECT_JSON_SCHEMA
-from ..clients.serving import GenerationConfig, LocalHFServing
+from ..clients.serving import GenerationConfig, SlotServing
 from ..prompts.loader import PromptModules, load_prompt_modules
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology, filter_resolve_slots
 
@@ -17,11 +17,12 @@ class SlotSelectClient:
         self,
         *,
         use_stub: bool,
-        serving: LocalHFServing | None = None,
+        serving: SlotServing | None = None,
         ontology: SlotOntology = DEFAULT_USER_SLOTS,
         max_slots: int = 5,
         max_retries: int = 1,
         prompt_language: str = "ru",
+        max_new_tokens: int = 220,
         parse_retry_temperature: float = 0.65,
         parse_retry_temperature_increment: float = 0.08,
     ):
@@ -31,6 +32,7 @@ class SlotSelectClient:
         self.max_slots = max_slots
         self.max_retries = max_retries
         self.prompt_language = prompt_language
+        self.max_new_tokens = int(max_new_tokens)
         self.parse_retry_temperature = float(parse_retry_temperature)
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
@@ -56,7 +58,7 @@ class SlotSelectClient:
             )
             if attempt == 1:
                 gen_cfg = GenerationConfig(
-                    max_new_tokens=220,
+                    max_new_tokens=self.max_new_tokens,
                     do_sample=False,
                     lm_enforcer_json_schema=schema,
                 )
@@ -67,7 +69,7 @@ class SlotSelectClient:
                     + self.parse_retry_temperature_increment * float(attempt - 2),
                 )
                 gen_cfg = GenerationConfig(
-                    max_new_tokens=220,
+                    max_new_tokens=self.max_new_tokens,
                     do_sample=True,
                     temperature=t,
                     lm_enforcer_json_schema=schema,

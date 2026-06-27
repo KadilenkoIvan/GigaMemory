@@ -10,7 +10,9 @@
 #   make format        — apply black formatting
 #   make test          — run pytest in stub mode (no GPU/LLM needed)
 #   make smoke         — quick pipeline smoke-test in stub mode
-#   make serve         — start REST API server (port 8000)
+#   make vllm          — start vLLM inference server (slot model, Linux/WSL)
+#   make serve         — start FastAPI REST server (port 8000)
+#   make start         — start vLLM + FastAPI together (Linux/WSL)
 #   make docker-up     — start with docker compose (CUDA)
 #   make docker-up-cpu — start with docker compose (CPU-only)
 #   make docker-api    — start API service with docker compose
@@ -18,11 +20,18 @@
 UV              := uv
 PYTHON_VERSION  ?= 3.11
 CUDA_VERSION    ?= cu126
+VLLM_MODEL      ?= /mnt/d/Users/IvanK/Desktop/GigaMemory/models/Qwen3.5-4B-AWQ
+VLLM_SERVED_NAME ?= models/Qwen3.5-4B-AWQ
+VLLM_PORT       ?= 8001
+VLLM_GPU_UTIL   ?= 0.65
+VLLM_MAX_LEN    ?= 8192
+VLLM_MAX_SEQS   ?= 4
+API_PORT        ?= 8000
 
 .PHONY: all install install-local install-cpu install-dev install-api \
         lint lint-fix format format-check type-check \
         test test-cov smoke \
-        serve \
+        serve vllm start \
         docker-build docker-build-cpu docker-up docker-up-cpu docker-api docker-down \
         clean help
 
@@ -95,12 +104,30 @@ test-cov: ## Run tests with coverage report
 		--cov-report=term-missing \
 		--cov-report=html:htmlcov
 
-serve: ## Start REST API server on port 8000 (requires make install-api)
+serve: ## Start FastAPI REST server on port $(API_PORT) (requires vLLM running separately)
 	$(UV) run uvicorn api:app \
 		--app-dir DST_memory \
 		--host 0.0.0.0 \
-		--port 8000 \
-		--reload
+		--port $(API_PORT)
+
+vllm: ## Start vLLM inference server (slot model, Linux/WSL only)
+	@echo "Starting vLLM: model=$(VLLM_MODEL) port=$(VLLM_PORT) quant=compressed-tensors(auto)"
+	vllm serve $(VLLM_MODEL) \
+		--served-model-name $(VLLM_SERVED_NAME) \
+		--port $(VLLM_PORT) \
+		--dtype auto \
+		--reasoning-parser qwen3 \
+		--gpu-memory-utilization $(VLLM_GPU_UTIL) \
+		--max-model-len $(VLLM_MAX_LEN) \
+		--max-num-seqs $(VLLM_MAX_SEQS) \
+		--limit-mm-per-prompt '{"image":0,"video":0}' \
+		--trust-remote-code \
+		--disable-log-stats
+
+start: ## Start BOTH vLLM server and FastAPI in parallel (Linux/WSL only)
+	@echo "Starting vLLM on port $(VLLM_PORT) and API on port $(API_PORT)..."
+	@$(MAKE) vllm & \
+	 sleep 30 && $(MAKE) serve
 
 smoke: ## Quick pipeline smoke-test in stub mode (no GPU/LLM)
 	$(UV) run python DST_memory/run.py \

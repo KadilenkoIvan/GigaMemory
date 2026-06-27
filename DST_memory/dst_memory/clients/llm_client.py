@@ -258,17 +258,24 @@ class FinalLLMClient:
         self._last_prompt_chars_after_clamp = _messages_char_count(messages)
         self._last_prompt_messages = messages
 
-        logger.info(
-            "FinalLLM generate mode=%s question_len=%d has_memory=%s pairs=%d",
-            self.mode,
-            len(question),
-            bool(memory_context),
-            len(recent_pairs or []),
+        mem_summary = (
+            json.dumps(memory_context, ensure_ascii=False)[:600]
+            if memory_context
+            else "EMPTY"
         )
-        # Full prompt at DEBUG level (console / file handler)
-        logger.debug(
-            "FinalLLM full prompt:\nSYSTEM:\n%s\n\nUSER:\n%s",
+        logger.info(
+            "FinalLLM generate mode=%s question=%r pairs=%d memory_context=%s",
+            self.mode,
+            question[:200],
+            len(recent_pairs or []),
+            mem_summary,
+        )
+        logger.info(
+            "FinalLLM system_prompt_preview=%.300s",
             messages[0]["content"],
+        )
+        logger.info(
+            "FinalLLM user_prompt_preview=%.500s",
             messages[1]["content"],
         )
 
@@ -395,11 +402,13 @@ class FinalLLMClient:
                 text = _normalize_assistant_message_text(message)
                 if not text:
                     logger.warning(
-                        "Final LLM returned blank assistant text (model=%s); message keys=%s",
+                        "Final LLM returned blank assistant text (model=%s); message keys=%s raw=%s",
                         self.model or "(none)",
                         list(message.keys()),
+                        str(data)[:300],
                     )
                     raise RuntimeError("Final LLM returned blank text")
+                logger.info("FinalLLM answer_preview=%.300s", text)
                 return text
 
             except urllib.error.HTTPError as e:

@@ -54,6 +54,12 @@ class PipelineConfig:
     # - "topk_graph_records": RAGU semantic top-k over all graph.
     memory_strategy: str = "relevant_slots_full"
 
+    # When True and memory_strategy == "relevant_slots_full": the IDENTITY slot
+    # (if it has any active facts) is ALWAYS added to the slots passed to the
+    # final LLM, even if the memory gate did not select it or rejected memory
+    # entirely. Workaround for small slot models that under-select IDENTITY.
+    relevant_slots_always_include_identity: bool = False
+
     # LLM mode:
     # - "stub": no external LLM call, returns template response
     # - "local": HuggingFace causal LM via LocalHFServing (llm_model = path or HF id)
@@ -200,6 +206,18 @@ class PipelineConfig:
     # "none" | "8bit" | "4bit" — requires GPU + bitsandbytes.
     slot_llm_load_quantization: str = "none"
 
+    # -------------------------------------------------------------------
+    # Slot model serving mode
+    # -------------------------------------------------------------------
+    # "local" — load model in-process via HF transformers (LocalHFServing).
+    # "vllm"  — call external vLLM OpenAI-compatible server (recommended for production).
+    #           Start the server with ``make vllm`` before launching the API.
+    slot_llm_mode: str = "local"
+    # vLLM server base URL (used only when slot_llm_mode == "vllm").
+    slot_llm_api_url: str = "http://localhost:8001/v1"
+    # API key for vLLM server; vLLM accepts any non-empty string by default.
+    slot_llm_api_key: str = "EMPTY"
+
     # Prompt UI language for slot/triplet/gate/deletion/conflict/final LLM ("ru" | "en").
     prompt_language: str = "ru"
 
@@ -247,3 +265,16 @@ class PipelineConfig:
     # increasing temperature so the model does not repeat the same bad output.
     llm_parse_retry_temperature: float = 0.65
     llm_parse_retry_temperature_increment: float = 0.08
+
+    # -------------------------------------------------------------------
+    # Slot-model generation token budgets (max_new_tokens per sub-task)
+    # -------------------------------------------------------------------
+    # Output token budget for each slot-model call. Must be large enough to fit
+    # the full JSON answer; too small truncates the output (e.g. a cut-off
+    # triplet list). With thinking disabled these defaults are generous; raise
+    # them if you enable thinking or expect many slots/triplets per message.
+    slot_select_max_tokens: int = 220
+    triplet_extract_max_tokens: int = 512
+    conflict_max_tokens: int = 256
+    deletion_max_tokens: int = 256
+    memory_gate_max_tokens: int = 200

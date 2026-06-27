@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from ..clients.serving import GenerationConfig, LocalHFServing
+from ..clients.serving import GenerationConfig, SlotServing
 from ..prompts.loader import PromptModules, load_prompt_modules
 from ..prompts.parsers import parse_deletion_response
 
@@ -30,14 +30,16 @@ class TripletDeletionClient:
         self,
         *,
         use_stub: bool,
-        serving: LocalHFServing | None = None,
+        serving: SlotServing | None = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
+        max_new_tokens: int = 256,
     ):
         self.use_stub = use_stub
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
+        self.max_new_tokens = int(max_new_tokens)
         self._prompt_modules: PromptModules | None = None
 
         if not use_stub and serving is None:
@@ -84,7 +86,9 @@ class TripletDeletionClient:
         messages = self._prompt_modules.deletion_messages.build_deletion_messages(
             user_message, slot_name, existing_triplets
         )
-        cfg = GenerationConfig(max_new_tokens=256, temperature=0.0, do_sample=False)
+        cfg = GenerationConfig(
+            max_new_tokens=self.max_new_tokens, temperature=0.0, do_sample=False
+        )
 
         for attempt in range(self.max_retries + 1):
             raw = self.serving.generate_chat(messages, cfg)
