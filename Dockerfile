@@ -16,7 +16,9 @@ COPY DST_memory/ ./DST_memory/
 
 # Always include the "api" extra (fastapi, uvicorn, matplotlib, networkx).
 # TORCH_EXTRA selects the PyTorch wheel set (cuda vs cpu).
-RUN uv pip install --system --no-cache ".[${TORCH_EXTRA},api]"
+# --no-editable: install graph-ragu (local path dep) as a regular package so
+# the runtime stage doesn't need the source tree on sys.path.
+RUN uv pip install --system --no-cache --no-editable ".[${TORCH_EXTRA},api]"
 
 # ─── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -38,6 +40,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # RAGU must live at /app/RAGU so that api.py's _ensure_ragu_on_path() finds it.
 COPY --chown=appuser:appuser DST_memory/ ./DST_memory/
 COPY --chown=appuser:appuser RAGU/ ./RAGU/
+
+# Pre-create the session/storage directory so the named volume is mounted with
+# the correct ownership (appuser).  Without this Docker creates the dir as root
+# when the volume is first attached, causing permission errors at runtime.
+RUN mkdir -p /app/api_sessions && chown appuser:appuser /app/api_sessions
 
 USER appuser
 
