@@ -32,15 +32,23 @@ uv run python DST_memory/run.py \
   --config DST_memory/run_config_local.json \
   pipeline inference interactive
 
-# 5б. Запустить REST API сервер
-make serve   # или: OPENROUTER_API_KEY=sk-or-... make serve
+# 5б. Запустить REST API сервер (с vLLM — рекомендуется)
+# Terminal 1 (Linux/WSL): запустить vLLM inference server для слот-модели
+make vllm   # vllm serve <AWQ-модель> --port 8001 --gpu-memory-utilization 0.65 ...
+
+# Terminal 2 (Windows/Linux): запустить FastAPI
+make serve  # или: OPENROUTER_API_KEY=sk-or-... make serve
+
+# Или оба вместе (Linux/WSL):
+make start
 ```
 
-При первом запуске `Qwen/Qwen3.5-9B-Instruct` скачается с HuggingFace (~18 GB).  
 Конфиги: `DST_memory/run_config_local.json` — для интерактивного режима, `DST_memory/run_config_api.json` — для API сервера.
 
-> Слот-модель (локальная Qwen) и финальная LLM (OpenRouter) настраиваются независимо.  
-> Доступны batch-прогон по датасету (`pipeline test`), разные стратегии памяти, режимы удаления фактов и stub-режим без GPU.  
+> Слот-модель (Qwen3.5, 4-bit AWQ / compressed-tensors) работает через **vLLM** — отдельный inference-сервер с PagedAttention и Flash Attention 2; 4B-модель умещается в ~4 GB VRAM.  
+> vLLM не поддерживает Windows нативно — на Windows слот-сервер запускается в **WSL2** (модель видна по `/mnt/...`), а FastAPI на Windows ходит к нему по `localhost:8001`.  
+> Финальная LLM — OpenRouter (`gpt-4o-mini` или любая другая модель через API).  
+> Слот-модель и финальная LLM настраиваются независимо через `run_config_api.json` (`slot_llm_mode: "local"|"vllm"`).  
 > Для быстрой проверки без GPU и LLM: `make smoke`.
 
 ## Архитектура пайплайна
@@ -124,6 +132,8 @@ OPENROUTER_API_KEY=sk-or-... make serve
 | `GET` | `/dialogue/{id}/graph/image` | PNG-визуализация графа (networkx + matplotlib) |
 | `GET` | `/dialogue/{id}/graph/html` | Интерактивный HTML-граф (pyvis, открывать в браузере) |
 | `DELETE` | `/dialogue/{id}` | Сбросить память диалога |
+
+Визуализация (`/graph/image` и `/graph/html`) повторяет логику отрисовки графа RAGU, но реализована автономно (без зависимости от пакета RAGU): узлы окрашены по слоту и масштабированы по числу связей, рёбра окрашены по TTL, есть легенды слотов и TTL. Сущности **scoped по слоту** — у каждого слота своя копия узлов (включая «пользователь»), поэтому слоты рисуются раздельными непересекающимися кластерами.
 
 ### Примеры запросов (Windows PowerShell)
 
@@ -214,10 +224,21 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 - `--recent-history-pairs` — размер окна последних пар user/assistant
 
 **Модели:**
-- `--slot-model-path` — путь/id к локальной Qwen-модели для слотов/триплетов
-- `--slot-llm-load-quantization` (`none`|`8bit`|`4bit`) — BitsAndBytes для slot/triplet модели; в JSON: `shared.slot_llm_load_quantization`
+- `--slot-model-path` — путь/id к Qwen-модели для слотов/триплетов (локальной или запущенной в vLLM)
+- `--slot-llm-load-quantization` (`none`|`8bit`|`4bit`) — BitsAndBytes для slot/triplet модели (только `slot_llm_mode=local`); в JSON: `shared.slot_llm_load_quantization`
 - `--importance-model-path` — путь к BERT-классификатору важности (пусто = stub, важность всегда True)
 - `--ragu-embedder-model` — модель эмбеддингов для RAGU
+
+**vLLM-режим (JSON config only — нет CLI-флагов):**
+- `shared.slot_llm_mode` — `"local"` (HF transformers in-process) или `"vllm"` (внешний vLLM-сервер)
+- `shared.slot_llm_api_url` — URL vLLM-сервера, по умолчанию `"http://localhost:8001/v1"`
+- `shared.slot_llm_api_key` — API-ключ vLLM (default `"EMPTY"`)
+
+**Бюджеты токенов slot-модели (JSON config only):**
+- `shared.slot_select_max_tokens` (220), `shared.triplet_extract_max_tokens` (512), `shared.conflict_max_tokens` (256), `shared.deletion_max_tokens` (256), `shared.memory_gate_max_tokens` (200) — `max_new_tokens` для каждого вызова slot-модели (см. CONFIG.md)
+
+**Память / memory gate (JSON config only):**
+- `shared.relevant_slots_always_include_identity` — в режиме `relevant_slots_full` всегда передавать слот `IDENTITY` в финальную LLM (обход недобора у маленьких моделей)
 
 **Хранение и сессии:**
 - `--ragu-storage-path` — путь к RAGU storage

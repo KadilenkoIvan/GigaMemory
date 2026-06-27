@@ -21,7 +21,9 @@ jobs:
         run: pip install uv
 
       - name: Install dev tools
-        run: uv pip install --system ruff black
+        # Pin to the same versions as .pre-commit-config.yaml so local hooks and
+        # CI can never disagree (newer black/ruff change formatting rules).
+        run: uv pip install --system ruff==0.15.18 black==25.1.0
 
       - name: Ruff lint
         run: ruff check .

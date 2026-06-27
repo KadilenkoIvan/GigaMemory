@@ -168,6 +168,7 @@ GigaMemory/
     │   └── ragu_graph_processor.py — RaguGraphProcessor, build_ragu_processor
     ├── clients/                — LLM-клиенты и serving
     │   ├── serving.py          — LocalHFServing (HF CausalLM; Python 3.13 compat)
+    │   ├── vllm_serving.py     — VLLMSlotServing (вызов внешнего vLLM через OpenAI API)
     │   ├── classifier.py       — ImportanceClassifier (use_fast=False для Py3.13)
     │   ├── memory_gate_client.py  — MemoryGateClient
     │   └── llm_client.py       — FinalLLMClient (realtime_mode, parallel_write_mode)
@@ -235,13 +236,33 @@ GigaMemory/
 - `dst_memory/clients/memory_gate_client.py` — выбор релевантных слотов для ответа.
 - `dst_memory/clients/llm_client.py` — финальная генерация ответа.
 
+### 3.6 Slot serving backends
+
+Pipeline поддерживает два backend-а для слот-модели (slot selector, triplet extractor, memory gate, conflict resolver):
+
+| Backend | Класс | `slot_llm_mode` | Описание |
+|---------|-------|-----------------|----------|
+| HF transformers | `LocalHFServing` | `"local"` | Модель загружается in-process. Поддержка 4/8bit через bitsandbytes. Удобно для разработки. |
+| vLLM | `VLLMSlotServing` | `"vllm"` | Модель запущена как отдельный сервер. PagedAttention + Flash Attention 2. Рекомендуется для production. |
+
+`pipeline.py` выбирает backend через фабричный метод `_build_slot_serving(config)`.
+
+`VLLMSlotServing` имеет `use_lm_format_enforcer = True`, что заставляет все slot-клиенты передавать JSON-схему. Схема уходит в запрос как `guided_json` — vLLM применяет server-side constrained decoding (xgrammar/outlines, рекомендуется бэкенд `xgrammar`), что надёжнее и быстрее lm-format-enforcer.
+
+Отключение thinking: `VLLMSlotServing.generate_chat()` всегда передаёт `extra_body.chat_template_kwargs.enable_thinking = slot_model_enable_thinking` (по умолчанию `false`). Это критично для моделей Qwen3/3.5: иначе модель тратит весь бюджет токенов на `<think>`-блок (который reasoning-parser vLLM вырезает в `reasoning_content`), и JSON-ответ приходит пустым или обрывается. Клиент логирует `finish_reason` и длину `reasoning_content`, предупреждая о пустом/обрезанном ответе.
+
+Бюджеты токенов на каждый вызов (`*_max_tokens`) больше не захардкожены в клиентах — задаются в конфиге и пробрасываются через `PipelineConfig` в конструкторы клиентов (см. CONFIG.md → «Бюджеты генерации slot-модели»).
+
 ### 3.6 RAGU интеграция
 
+RAGU — **активный семантический слой**, а не вспомогательный модуль для визуализации (визуализация графа на pyvis/networkx читает DST state напрямую и RAGU не использует).
+
 - `dst_memory/storage/ragu_graph_processor.py`
-  - адаптер `SentenceTransformerEmbedder`;
+  - адаптер `SentenceTransformerEmbedder` (эмбеддер `deepvk/USER-bge-m3`);
   - мост sync/async;
-  - upsert/delete triplets;
-  - semantic search через `LocalSearchEngine`.
+  - upsert/delete triplets — каждый insert/delete в DST зеркалится в граф RAGU;
+  - semantic search через `LocalSearchEngine` (стратегия `topk_graph_records`, `answer_without_final_llm`);
+  - `embed_text_sync` — эмбеддинги для **семантической дедупликации** в `dst_manager`.
 
 ---
 
@@ -434,8 +455,10 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 | `POST /dialogue/{id}/message` | Принять `content`, запустить `write_to_memory` → `answer` → `add_recent_pair`. При `parallel_write=true` — запись в фоновом потоке, ответ строится сразу из текущего графа. |
 | `GET /dialogue/{id}/graph` | Вызов `dst.slots_with_messages(id)` — все активные факты со всеми метаданными. |
 | `GET /dialogue/{id}/graph_short` | Только активные триплеты (subject/relation/object/ttl) + вычисленное поле `expires_at` (ISO datetime или null для `inf`). |
-| `GET /dialogue/{id}/graph/image` | PNG-визуализация через networkx + matplotlib. Узлы — сущности, рёбра — отношения, цвет — по слоту. |
-| `GET /dialogue/{id}/graph/html` | Интерактивный HTML через pyvis (тёмный фон, drag & drop узлов, hover tooltips, легенда слотов). |
+| `GET /dialogue/{id}/graph/image` | PNG-визуализация через networkx + matplotlib. Узлы — сущности (цвет = слот, размер = число связей), рёбра — отношения (цвет = TTL). Каждый слот раскладывается в свою ячейку сетки (`_layout_disjoint`). Легенды слотов и TTL. |
+| `GET /dialogue/{id}/graph/html` | Интерактивный HTML через pyvis (тёмный фон, forceAtlas2, drag & drop, hover tooltips, легенды слотов + TTL). |
+
+Визуализация повторяет логику отрисовки графа RAGU (`RAGU/scripts/visualize_knowledge_graph.py`), но реализована автономно в `api.py` — без импорта пакета RAGU. Ключевая деталь: сущности **scoped по слоту** (id вида `slot\0entity`), поэтому каждый слот образует **полностью раздельный** подграф со своим узлом «пользователь» — слоты не схлопываются в один общий узел и не пересекаются.
 | `DELETE /dialogue/{id}` | `pipeline.clear_memory(id)` — сброс DST-состояния и RAGU-графа. |
 
 ### Параллельная запись
@@ -582,6 +605,8 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 ## 13. Текущие технические ограничения
 
 - **Python 3.13 + tokenizers Rust**: `encode_batch` падает с TypeError на Python 3.13. Обход: `use_fast=False` для BERT-классификатора, `backend_tokenizer.encode()` fallback в LocalHFServing. Долгосрочный фикс: `pip install tokenizers --upgrade` до версии ≥ 0.21.
+- **Python 3.13 + numpy 1.26**: `OverflowError` в `numpy.core.getlimits` при импорте matplotlib. Решение: `uv pip install "numpy>=2.0"` (или `override-dependencies = ["numpy>=2.0"]` в `pyproject.toml`).
+- **vLLM + Windows**: vLLM не поддерживает Windows нативно. Используйте WSL2 или Docker. Клиентская часть (`VLLMSlotServing`) работает на любой ОС, серверная часть (vLLM process) — только Linux/WSL2.
 - `ttl_mode=mode3` (отдельный вызов модели для TTL) не реализован — используется `mode2`.
 - Качество retrieval зависит от embedder-модели и качества триплетов.
 - Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен — пропускается с предупреждением.

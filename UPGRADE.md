@@ -79,8 +79,8 @@
 - `POST /dialogue/{dialogue_id}/message` — принять сообщение, вернуть ответ LLM; поддерживает `parallel_write: true`
 - `GET /dialogue/{dialogue_id}/graph` — полный граф памяти (JSON со всеми метаданными)
 - `GET /dialogue/{dialogue_id}/graph_short` — только активные триплеты + `expires_at` (ISO или null)
-- `GET /dialogue/{dialogue_id}/graph/image` — PNG-визуализация (networkx + matplotlib, цвет по слоту)
-- `GET /dialogue/{dialogue_id}/graph/html` — интерактивный HTML (pyvis, тёмная тема, drag & drop)
+- `GET /dialogue/{dialogue_id}/graph/image` — PNG-визуализация (networkx + matplotlib; узлы по слотам, рёбра по TTL)
+- `GET /dialogue/{dialogue_id}/graph/html` — интерактивный HTML (pyvis, тёмная тема, forceAtlas2, drag & drop)
 - `DELETE /dialogue/{dialogue_id}` — сбросить память диалога
 
 **Конфигурация:**
@@ -90,9 +90,65 @@
 - Swagger UI автоматически на `/docs`
 
 **Инфраструктура:**
-- `pyproject.toml`: новый extra `[api]` — fastapi, uvicorn, matplotlib, networkx
-- `Makefile`: `make install` = всё, `make install-local` = только пайплайн, `make install-api` = CUDA + API; `make serve` запускает сервер
+- `pyproject.toml`: extras `[api]` — fastapi, uvicorn, matplotlib, networkx; `[vllm]` — vllm>=0.8.0
+- `Makefile`: `make install` = всё, `make install-local` = только пайплайн, `make install-api` = CUDA + API; `make serve` запускает FastAPI; `make vllm` запускает vLLM; `make start` запускает оба вместе
 - `docker-compose.yml`: сервис `api` на порту 8000, volume `api_sessions`
+
+#### 2.2 vLLM inference backend для слот-модели ✅ DONE
+
+**Реализовано:**
+- Новый класс `VLLMSlotServing` (`DST_memory/dst_memory/clients/vllm_serving.py`) — drop-in замена `LocalHFServing`
+- Вызывает vLLM через OpenAI-compatible API (`/v1/chat/completions`)
+- Структурированный вывод через `guided_json` (server-side constrained decoding, аналог lm-format-enforcer но быстрее)
+- Поддержка retry с temperature при ошибках парсинга
+- Новые поля в `PipelineConfig`: `slot_llm_mode` ("local" | "vllm"), `slot_llm_api_url`, `slot_llm_api_key`
+- `pipeline.py`: фабричный метод `_build_slot_serving()` — автоматически выбирает backend
+- `run_config_api.json`: `slot_llm_mode: "vllm"` по умолчанию
+
+**Преимущества vLLM перед transformers:**
+- PagedAttention — революционный KV-cache менеджмент, 4B-модель в AWQ умещается в ~4GB VRAM
+- Flash Attention 2 — встроено, автоматически
+- Throughput выше в 5-10× за счёт continuous batching
+- Отдельный процесс — FastAPI не ждёт inference, может масштабироваться независимо
+
+**Отключение thinking:** `VLLMSlotServing` всегда передаёт `chat_template_kwargs.enable_thinking=false` (для Qwen3/3.5), иначе reasoning съедает бюджет токенов и JSON-ответ приходит пустым/обрезанным. Бэкенд constrained decoding — `xgrammar` (быстрее outlines); из триплет-схем убран `additionalProperties:false`, провоцировавший фолбэк в медленный outlines.
+
+**Запуск (Linux/WSL — vLLM не работает на Windows нативно):**
+```bash
+# Установить vLLM (в отдельном venv WSL)
+pip install vllm
+
+# Скачать 4-bit AWQ модель слотов, напр.:
+huggingface-cli download cyankiwi/Qwen3.5-9B-AWQ-4bit --local-dir models/Qwen3.5-AWQ
+
+# Запустить vLLM сервер (WSL, Terminal 1) — модель видна по /mnt/...
+make vllm
+
+# Запустить FastAPI (Terminal 2) — ходит к vLLM по localhost:8001
+make serve
+
+# Или оба вместе (Linux/WSL)
+make start
+```
+
+#### 2.3 Доработки пайплайна и визуализации ✅ DONE
+
+**Конфигурируемые бюджеты токенов:**
+- Убран хардкод `max_new_tokens` из всех slot-клиентов; вынесено в `PipelineConfig`:
+  `slot_select_max_tokens`, `triplet_extract_max_tokens`, `conflict_max_tokens`,
+  `deletion_max_tokens`, `memory_gate_max_tokens`.
+
+**Флаг `relevant_slots_always_include_identity`:**
+- В режиме `relevant_slots_full` принудительно добавляет слот `IDENTITY` в контекст финальной LLM, даже если memory gate его не выбрал (обход недобора у маленьких slot-моделей).
+
+**Переписана визуализация графа (PNG + HTML):**
+- Автономная реализация логики отрисовки RAGU (без зависимости от пакета RAGU): узлы по слотам, размер по степени, рёбра по TTL, легенды слотов + TTL.
+- Сущности scoped по слоту (`slot\0entity`) — каждый слот образует раздельный непересекающийся кластер со своим узлом «пользователь».
+- PNG: `_layout_disjoint` раскладывает каждый слот в свою ячейку сетки; HTML: pyvis forceAtlas2.
+
+**Расширенное логирование:**
+- `llm_client`: вопрос, memory_context, превью system/user промптов, ответ.
+- `vllm_serving`: `finish_reason` + длина reasoning, предупреждения о пустом/обрезанном ответе.
 
 ---
 
