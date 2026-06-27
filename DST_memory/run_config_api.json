@@ -1,0 +1,63 @@
+{
+  "shared": {
+    "importance_model_path": "",
+    "importance_threshold": 0.25,
+    "retrieval_top_k": 5,
+    "graph_top_k_records": 20,
+    "recent_history_pairs": 0,
+    "disable_memory_gate": false,
+    "memory_gate_use_stub": false,
+    "memory_strategy": "full_graph_json",
+    "relevant_slots_always_include_identity": true,
+
+    "llm_mode": "openrouter",
+    "llm_api_url": "https://openrouter.ai/api/v1",
+    "llm_api_key": "${OPENROUTER_API_KEY}",
+    "llm_model": "openai/gpt-4o-mini",
+    "llm_tokenizer_model": "",
+    "llm_temperature": 0.0,
+    "llm_max_tokens": 1024,
+    "llm_enable_thinking": false,
+
+    "slot_use_stub": false,
+    "slot_model_path": "models/Qwen3.5-4B-AWQ",
+    "slot_max_slots_per_message": 5,
+    "slot_model_enable_thinking": false,
+    "slot_llm_inject_no_think_prompt": true,
+    "slot_llm_load_quantization": "none",
+    "slot_llm_mode": "vllm",
+    "slot_llm_api_url": "${SLOT_LLM_API_URL}",
+    "slot_llm_api_key": "EMPTY",
+
+    "slot_select_max_tokens": 512,
+    "triplet_extract_max_tokens": 2048,
+    "conflict_max_tokens": 512,
+    "deletion_max_tokens": 512,
+    "memory_gate_max_tokens": 512,
+
+    "use_ragu": true,
+    "ragu_embedder_model": "deepvk/USER-bge-m3",
+    "ragu_storage_path": "",
+
+    "ttl_mode": "mode2",
+    "ttl_semantic_dedup_enabled": true,
+    "ttl_semantic_dedup_threshold": 0.9,
+    "slot_context_enabled": false,
+    "slot_context_max_facts": 10,
+    "triplet_deletion_mode": "none",
+    "deletion_use_pymorphy": false,
+    "conflict_allow_multi_relation_same_object": true,
+    "conflict_rule_same_relation_updates": true,
+    "slot_fallback_on_no_slots": true,
+    "triplet_fallback_on_empty": true,
+    "prompt_language": "ru",
+    "use_dataset_datetime": false,
+    "force_infinite_ttl": false
+  },
+  "api": {
+    "session_dir": "api_sessions",
+    "ragu_storage_path": "api_sessions/ragu",
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}

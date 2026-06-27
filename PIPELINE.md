@@ -134,50 +134,66 @@ flowchart TD
 ## 3. Модульная структура
 
 ```
-dst_memory/
-├── __init__.py          — экспорт PipelineConfig, Message, MemoryFact
-├── core/                — ядро пайплайна
-│   ├── pipeline.py      — DSTMemoryPipeline (write/answer/clear)
-│   ├── dst_manager.py   — DSTManager: слоты, TTL, конфликты, дедуп, RAGU-sync
-│   ├── models.py        — Message, FactRecord, MemoryFact, DialogueMemoryState
-│   ├── config.py        — PipelineConfig, SLOT_DEFAULT_TTL
-│   └── graph_backend.py — GraphEdge (dataclass)
-├── prompts/             — сборщики промптов и few-shot банки по языку UI
-│   ├── loader.py , parsers.py — выбор `ru`/`en`, общие JSON-парсеры ответов LLM
-│   ├── ru/              — русскоязычные тексты (system/user, few-shots)
-│   └── en/              — English UI (тот же формат JSON; триплеты в графе — русские леммы)
-├── slots/               — слоты и онтология
-│   ├── ontology.py             — SlotOntology, DEFAULT_USER_SLOTS, метки RU
-│   ├── slot_name_normalize.py  — нормализация имён слотов
-│   ├── slot_model_path.py      — разрешение путей к модели слотов
-│   ├── slot_select_client.py   — SlotSelectClient (выбор слота из онтологии)
-│   └── slot_update_client.py   — SlotUpdateClient (add/update/delete записей)
-├── triplets/            — извлечение и управление триплетами
-│   ├── triplet_client.py       — TripletExtractionClient
-│   ├── conflict_client.py      — TripletConflictClient (rule + LLM)
-│   ├── deletion_client.py      — TripletDeletionClient (llm_separate режим)
-│   └── negation_detector.py    — NegationDeletionDetector (heuristic режим)
-├── storage/             — RAGU backend
-│   └── ragu_graph_processor.py — RaguGraphProcessor, build_ragu_processor
-├── clients/             — LLM-клиенты и serving
-│   ├── serving.py              — LocalHFServing (HF CausalLM)
-│   ├── classifier.py           — ImportanceClassifier
-│   ├── memory_gate_client.py   — MemoryGateClient
-│   └── llm_client.py           — FinalLLMClient
-└── utils/               — вспомогательные утилиты
-    ├── io_utils.py             — read_jsonl, iter_user_messages, iter_dialogue_messages
-    ├── dotenv_loader.py        — загрузка .env
-    └── run_config_loader.py    — загрузка run_config.json
+GigaMemory/
+├── run.py                      — CLI точка запуска (pipeline test / inference)
+├── api.py                      — FastAPI REST сервер (Этап 2)
+├── run_config.json             — default конфиг (валидация, pipeline test)
+├── run_config_local.json       — конфиг для локального интерактивного режима
+├── run_config_api.json         — конфиг для REST API сервера
+└── dst_memory/
+    ├── __init__.py             — экспорт PipelineConfig, Message, MemoryFact
+    ├── core/                   — ядро пайплайна
+    │   ├── pipeline.py         — DSTMemoryPipeline (write/answer/clear/save_session)
+    │   ├── dst_manager.py      — DSTManager: слоты, TTL, конфликты, дедуп, RAGU-sync
+    │   ├── models.py           — Message, FactRecord, MemoryFact, DialogueMemoryState, TTL_TO_TIMEDELTA
+    │   ├── config.py           — PipelineConfig, SLOT_DEFAULT_TTL
+    │   └── graph_backend.py    — GraphEdge (dataclass)
+    ├── prompts/                — сборщики промптов и few-shot банки по языку UI
+    │   ├── loader.py, parsers.py  — выбор `ru`/`en`, общие JSON-парсеры
+    │   ├── ru/                 — русскоязычные тексты (system/user, few-shots,
+    │   │                         realtime_mode_notice, parallel_write_notice)
+    │   └── en/                 — English UI (аналогичная структура)
+    ├── slots/                  — слоты и онтология
+    │   ├── ontology.py         — SlotOntology, DEFAULT_USER_SLOTS, метки RU
+    │   ├── slot_name_normalize.py
+    │   ├── slot_model_path.py  — разрешение путей к модели слотов
+    │   ├── slot_select_client.py  — SlotSelectClient
+    │   └── slot_update_client.py  — SlotUpdateClient
+    ├── triplets/               — извлечение и управление триплетами
+    │   ├── triplet_client.py   — TripletExtractionClient
+    │   ├── conflict_client.py  — TripletConflictClient (rule + LLM)
+    │   ├── deletion_client.py  — TripletDeletionClient (llm_separate)
+    │   └── negation_detector.py   — NegationDeletionDetector (heuristic)
+    ├── storage/                — RAGU backend
+    │   └── ragu_graph_processor.py — RaguGraphProcessor, build_ragu_processor
+    ├── clients/                — LLM-клиенты и serving
+    │   ├── serving.py          — LocalHFServing (HF CausalLM; Python 3.13 compat)
+    │   ├── vllm_serving.py     — VLLMSlotServing (вызов внешнего vLLM через OpenAI API)
+    │   ├── classifier.py       — ImportanceClassifier (use_fast=False для Py3.13)
+    │   ├── memory_gate_client.py  — MemoryGateClient
+    │   └── llm_client.py       — FinalLLMClient (realtime_mode, parallel_write_mode)
+    └── utils/
+        ├── io_utils.py         — read_jsonl, iter_user_messages, iter_dialogue_messages
+        ├── dotenv_loader.py    — загрузка .env
+        └── run_config_loader.py   — load_run_config, shared_section, subsection
 ```
 
-### 3.1 Entry-point
+### 3.1 Entry-points
 
-- `run.py`
+- `run.py` — CLI-пайплайн:
   - парсинг CLI;
   - загрузка конфига (`run_config.json` + `.env`);
   - bootstrap RAGU-пути (`_ensure_local_ragu_import`);
+  - автогенерация datetime-суффикса для `dialogue_id` в интерактивном режиме;
   - сборка `DSTMemoryPipeline`;
   - выполнение `module`/`pipeline` команд.
+
+- `api.py` — FastAPI REST сервер (Этап 2):
+  - singleton `DSTMemoryPipeline` инициализируется при старте (`lifespan`);
+  - конфиг из `GIGAMEMORY_CONFIG` env или `run_config_api.json`;
+  - per-dialogue threading.Lock для последовательного режима;
+  - поддержка parallel_write через background threading.Thread;
+  - 6 HTTP endpoints (message, graph, graph_short, graph/image, graph/html, DELETE).
 
 ### 3.2 Core pipeline
 
@@ -220,13 +236,33 @@ dst_memory/
 - `dst_memory/clients/memory_gate_client.py` — выбор релевантных слотов для ответа.
 - `dst_memory/clients/llm_client.py` — финальная генерация ответа.
 
+### 3.6 Slot serving backends
+
+Pipeline поддерживает два backend-а для слот-модели (slot selector, triplet extractor, memory gate, conflict resolver):
+
+| Backend | Класс | `slot_llm_mode` | Описание |
+|---------|-------|-----------------|----------|
+| HF transformers | `LocalHFServing` | `"local"` | Модель загружается in-process. Поддержка 4/8bit через bitsandbytes. Удобно для разработки. |
+| vLLM | `VLLMSlotServing` | `"vllm"` | Модель запущена как отдельный сервер. PagedAttention + Flash Attention 2. Рекомендуется для production. |
+
+`pipeline.py` выбирает backend через фабричный метод `_build_slot_serving(config)`.
+
+`VLLMSlotServing` имеет `use_lm_format_enforcer = True`, что заставляет все slot-клиенты передавать JSON-схему. Схема уходит в запрос как `guided_json` — vLLM применяет server-side constrained decoding (xgrammar/outlines, рекомендуется бэкенд `xgrammar`), что надёжнее и быстрее lm-format-enforcer.
+
+Отключение thinking: `VLLMSlotServing.generate_chat()` всегда передаёт `extra_body.chat_template_kwargs.enable_thinking = slot_model_enable_thinking` (по умолчанию `false`). Это критично для моделей Qwen3/3.5: иначе модель тратит весь бюджет токенов на `<think>`-блок (который reasoning-parser vLLM вырезает в `reasoning_content`), и JSON-ответ приходит пустым или обрывается. Клиент логирует `finish_reason` и длину `reasoning_content`, предупреждая о пустом/обрезанном ответе.
+
+Бюджеты токенов на каждый вызов (`*_max_tokens`) больше не захардкожены в клиентах — задаются в конфиге и пробрасываются через `PipelineConfig` в конструкторы клиентов (см. CONFIG.md → «Бюджеты генерации slot-модели»).
+
 ### 3.6 RAGU интеграция
 
+RAGU — **активный семантический слой**, а не вспомогательный модуль для визуализации (визуализация графа на pyvis/networkx читает DST state напрямую и RAGU не использует).
+
 - `dst_memory/storage/ragu_graph_processor.py`
-  - адаптер `SentenceTransformerEmbedder`;
+  - адаптер `SentenceTransformerEmbedder` (эмбеддер `deepvk/USER-bge-m3`);
   - мост sync/async;
-  - upsert/delete triplets;
-  - semantic search через `LocalSearchEngine`.
+  - upsert/delete triplets — каждый insert/delete в DST зеркалится в граф RAGU;
+  - semantic search через `LocalSearchEngine` (стратегия `topk_graph_records`, `answer_without_final_llm`);
+  - `embed_text_sync` — эмбеддинги для **семантической дедупликации** в `dst_manager`.
 
 ---
 
@@ -369,14 +405,24 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 
 ## 7.2 `pipeline inference interactive`
 
-Назначение: онлайн-диалог.
+Назначение: онлайн real-time диалог с долговременной памятью.
 
-Логика на шаг:
-- user message → `write_to_memory`;
-- ответ → `answer`;
-- пара добавляется в `recent_pairs`.
+**Изоляция сессий:** при каждом старте к `dialogue_id` автоматически добавляется суффикс `_YYYY-MM-DD_HH-MM-SS`. Каждая сессия хранится в `<session_dir>/<dialogue_id>/` — DST-state (`state.json`) и RAGU-граф (`ragu/`). Явный `--dialogue-id full_id_with_timestamp` восстанавливает конкретную сессию.
 
-Команды:
+**Логика на шаг (sequential mode):**
+1. `write_to_memory` — важность → слоты → триплеты → dedup → конфликты → DST → RAGU
+2. `answer` — memory context + recent_pairs → финальная LLM → ответ
+3. `add_recent_pair` — добавить пару в окно истории
+
+**Логика на шаг (parallel_write mode, `--parallel-write`):**
+1. Запускается фоновый поток: `write_to_memory` (весь write-path)
+2. Одновременно: `answer` из текущего графа (до нового сообщения)
+3. `add_recent_pair` — сразу после получения ответа
+4. Финальная LLM получает `parallel_write_notice()` в system prompt: явно указывает, что `recent_pairs` актуальнее графа
+
+**Real-time prompt:** при интерактивном режиме финальная LLM получает `realtime_mode_notice()` в system prompt — переключает фрейм с «ассистент на основе памяти» на «общий AI-ассистент, память — контекст персонализации». Не влияет на оценочный пайплайн (`pipeline test`).
+
+**Команды в диалоге:**
 - `/clear` — сбросить память текущего диалога
 - `/exit` — завершить сессию
 - `/memory` — вывести активные слоты и факты в JSON
@@ -390,6 +436,46 @@ python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl 
 - одно сообщение записывается;
 - сразу один ответ;
 - возвращается json с write_log + answer.
+
+## 7.4 REST API (`DST_memory/api.py`)
+
+Назначение: продуктовый HTTP-слой поверх пайплайна. FastAPI приложение с одним singleton-пайплайном на процесс.
+
+### Инициализация
+
+При запуске сервера:
+1. Читается конфиг (`GIGAMEMORY_CONFIG` env → `DST_memory/run_config_api.json`).
+2. Загружается `DSTMemoryPipeline` (все модели + RAGU backend).
+3. На `pipeline.final_llm` устанавливается `realtime_mode=True` (real-time промпт для финальной LLM).
+
+### Endpoints
+
+| Метод | Путь | Логика |
+|---|---|---|
+| `POST /dialogue/{id}/message` | Принять `content`, запустить `write_to_memory` → `answer` → `add_recent_pair`. При `parallel_write=true` — запись в фоновом потоке, ответ строится сразу из текущего графа. |
+| `GET /dialogue/{id}/graph` | Вызов `dst.slots_with_messages(id)` — все активные факты со всеми метаданными. |
+| `GET /dialogue/{id}/graph_short` | Только активные триплеты (subject/relation/object/ttl) + вычисленное поле `expires_at` (ISO datetime или null для `inf`). |
+| `GET /dialogue/{id}/graph/image` | PNG-визуализация через networkx + matplotlib. Узлы — сущности (цвет = слот, размер = число связей), рёбра — отношения (цвет = TTL). Каждый слот раскладывается в свою ячейку сетки (`_layout_disjoint`). Легенды слотов и TTL. |
+| `GET /dialogue/{id}/graph/html` | Интерактивный HTML через pyvis (тёмный фон, forceAtlas2, drag & drop, hover tooltips, легенды слотов + TTL). |
+
+Визуализация повторяет логику отрисовки графа RAGU (`RAGU/scripts/visualize_knowledge_graph.py`), но реализована автономно в `api.py` — без импорта пакета RAGU. Ключевая деталь: сущности **scoped по слоту** (id вида `slot\0entity`), поэтому каждый слот образует **полностью раздельный** подграф со своим узлом «пользователь» — слоты не схлопываются в один общий узел и не пересекаются.
+| `DELETE /dialogue/{id}` | `pipeline.clear_memory(id)` — сброс DST-состояния и RAGU-графа. |
+
+### Параллельная запись
+
+`POST /message` с `parallel_write: true`:
+- Запись в граф стартует в background-треде.
+- Ответ строится немедленно на основе текущего состояния памяти (до текущего сообщения).
+- Поведение аналогично `--parallel-write` в интерактивном CLI-режиме.
+
+### Изоляция диалогов
+
+Каждый `dialogue_id` — независимое состояние. Один сервер может обслуживать произвольное количество диалогов одновременно. Per-dialogue lock гарантирует последовательность операций внутри одного диалога в синхронном режиме.
+
+### Персистентность
+
+Если `api.session_dir` задан, после каждого `write_to_memory` состояние сохраняется в `<session_dir>/<dialogue_id>/state.json`.  
+RAGU-граф хранится в `api.ragu_storage_path` (разделяется между всеми диалогами).
 
 ---
 
@@ -469,20 +555,26 @@ TTL хранится в поле `description` ребра в виде аннот
 
 ## 11. Конфиг-параметры (критичные)
 
-- `memory_strategy`
-- `graph_top_k_records`
-- `recent_history_pairs`
-- `disable_memory_gate`
-- `memory_gate_use_stub`
-- `slot_use_stub`
-- `importance_model_path`
-- `ragu_embedder_model`
-- `ragu_storage_path`
+**Стратегия и память:**
+- `memory_strategy` — `full_graph_json` | `relevant_slots_full` | `topk_graph_records`
+- `graph_top_k_records` — top-k для `topk_graph_records`
+- `recent_history_pairs` — размер окна последних пар user/assistant
+- `disable_memory_gate`, `memory_gate_use_stub`
+
+**Модели:**
+- `slot_use_stub`, `importance_model_path`
+- `ragu_embedder_model`, `ragu_storage_path`
 - `llm_mode`, `llm_api_url`, `llm_api_key`, `llm_model`
-- `ttl_mode` — режим TTL: `mode1` (per-slot defaults), `mode2` (модель генерирует TTL вместе с триплетом), `mode3` (отдельный вызов)
-- `ttl_slot_overrides` — JSON-словарь переопределений TTL по слоту, напр. `{"EVENTS": "1d"}`
-- `ttl_semantic_dedup_enabled` — включить семантическую дедупликацию
-- `ttl_semantic_dedup_threshold` — порог косинусного сходства для дедупликации (default 0.9)
+
+**Сессии и параллельный режим:**
+- `session_dir` — директория сессий; автоматически создаёт изолированные подпапки с datetime
+- `parallel_write_mode` — параллельная запись (или `--parallel-write` в CLI)
+- `force_infinite_ttl` — если `true`, все факты получают TTL `inf`; установить `false` для реального TTL
+
+**TTL и дедупликация:**
+- `ttl_mode` — `mode1` (per-slot defaults) | `mode2` (модель генерирует поле `ttl`)
+- `ttl_slot_overrides` — JSON-словарь переопределений, напр. `{"EVENTS": "1d"}`
+- `ttl_semantic_dedup_enabled`, `ttl_semantic_dedup_threshold`
 
 Полная таблица: `CONFIG.md`.
 
@@ -512,10 +604,14 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 
 ## 13. Текущие технические ограничения
 
-- На Python 3.13 возможны проблемы совместимости зависимостей RAGU (в т.ч. transitive deps).
+- **Python 3.13 + tokenizers Rust**: `encode_batch` падает с TypeError на Python 3.13. Обход: `use_fast=False` для BERT-классификатора, `backend_tokenizer.encode()` fallback в LocalHFServing. Долгосрочный фикс: `pip install tokenizers --upgrade` до версии ≥ 0.21.
+- **Python 3.13 + numpy 1.26**: `OverflowError` в `numpy.core.getlimits` при импорте matplotlib. Решение: `uv pip install "numpy>=2.0"` (или `override-dependencies = ["numpy>=2.0"]` в `pyproject.toml`).
+- **vLLM + Windows**: vLLM не поддерживает Windows нативно. Используйте WSL2 или Docker. Клиентская часть (`VLLMSlotServing`) работает на любой ОС, серверная часть (vLLM process) — только Linux/WSL2.
 - `ttl_mode=mode3` (отдельный вызов модели для TTL) не реализован — используется `mode2`.
-- Качество retrieval зависит от выбранной embedder-модели и качества триплетов.
-- Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен, дедупликация пропускается с предупреждением в логе.
+- Качество retrieval зависит от embedder-модели и качества триплетов.
+- Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен — пропускается с предупреждением.
+- REST API: RAGU-граф разделяется между всеми диалогами (один `ragu_storage_path`); для полной изоляции — запускать отдельные процессы с разными конфигами.
+- Параллельный режим (`--parallel-write`) не защищён от конкурентных POST-запросов к одному `dialogue_id` через API — в sequential режиме это гарантирует per-dialogue lock.
 
 ---
 

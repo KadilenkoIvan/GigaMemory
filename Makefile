@@ -2,38 +2,68 @@
 # Requires: uv (https://docs.astral.sh/uv/getting-started/installation/)
 #
 # Usage:
-#   make install       — set up CUDA environment (default, cu126)
-#   make install-cpu   — set up CPU-only environment
+#   make install       — install everything (CUDA + API + dev tools) — recommended for development
+#   make install-local — install for local pipeline run only (CUDA, no API server deps)
+#   make install-api   — install for API server only (CUDA + fastapi/uvicorn)
+#   make install-cpu   — CPU-only environment (no GPU)
 #   make lint          — run ruff linter
 #   make format        — apply black formatting
 #   make test          — run pytest in stub mode (no GPU/LLM needed)
 #   make smoke         — quick pipeline smoke-test in stub mode
-#   make docker-up     — start with docker compose (CUDA)
-#   make docker-up-cpu — start with docker compose (CPU-only)
+#   make vllm          — start vLLM inference server (slot model, Linux/WSL)
+#   make serve         — start FastAPI REST server (port 8000)
+#   make start         — start vLLM + FastAPI together (Linux/WSL)
+#   make docker-up      — start API only (bring your own vLLM)
+#   make docker-up-vllm — start vLLM + API together via Docker
+#   make docker-up-cpu  — CPU-only API (no GPU, no vLLM)
+#   make docker-down    — stop and remove containers
 
 UV              := uv
 PYTHON_VERSION  ?= 3.11
 CUDA_VERSION    ?= cu126
+VLLM_MODEL      ?= /mnt/d/Users/IvanK/Desktop/GigaMemory/models/Qwen3.5-4B-AWQ
+VLLM_SERVED_NAME ?= models/Qwen3.5-4B-AWQ
+VLLM_PORT       ?= 8001
+VLLM_GPU_UTIL   ?= 0.65
+VLLM_MAX_LEN    ?= 8192
+VLLM_MAX_SEQS   ?= 4
+API_PORT        ?= 8000
 
-.PHONY: all install install-cpu install-dev \
+.PHONY: all install install-local install-cpu install-dev install-api \
         lint lint-fix format format-check type-check \
         test test-cov smoke \
-        docker-build docker-build-cpu docker-up docker-up-cpu docker-down \
+        serve vllm start \
+        docker-build docker-build-cpu docker-up docker-up-cpu docker-api docker-down \
         clean help
 
 all: help
 
 # ─── Environment setup ────────────────────────────────────────────────────────
 
-install: ## Set up CUDA environment (cu126) with uv
-	$(UV) sync --extra cuda --extra dev
+install: ## Install everything: CUDA + API server + dev tools (recommended for development)
+	$(UV) sync --extra cuda --extra api --extra dev
 	@echo ""
-	@echo "CUDA environment ready."
+	@echo "Full environment ready (CUDA + API + dev)."
 	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
 	@echo "          .venv\\Scripts\\activate     (Windows)"
 
-install-cpu: ## Set up CPU-only environment with uv
-	$(UV) sync --extra cpu --extra dev
+install-local: ## Install for local pipeline run only (CUDA, no API server, no dev tools)
+	$(UV) sync --extra cuda
+	@echo ""
+	@echo "Local environment ready (CUDA only)."
+	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
+	@echo "          .venv\\Scripts\\activate     (Windows)"
+
+install-api: ## Install for API server (CUDA + fastapi/uvicorn)
+	$(UV) sync --extra cuda --extra api
+	@echo ""
+	@echo "API environment ready."
+	@echo "Set OPENROUTER_API_KEY, then: make serve"
+
+install-cpu: ## Set up CPU-only environment with uv (Linux/macOS)
+	$(UV) sync --extra dev
+	$(UV) pip install torch torchvision torchaudio \
+		--extra-index-url https://download.pytorch.org/whl/cpu
 	@echo ""
 	@echo "CPU environment ready."
 	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
@@ -75,6 +105,31 @@ test-cov: ## Run tests with coverage report
 		--cov-report=term-missing \
 		--cov-report=html:htmlcov
 
+serve: ## Start FastAPI REST server on port $(API_PORT) (requires vLLM running separately)
+	$(UV) run uvicorn api:app \
+		--app-dir DST_memory \
+		--host 0.0.0.0 \
+		--port $(API_PORT)
+
+vllm: ## Start vLLM inference server (slot model, Linux/WSL only)
+	@echo "Starting vLLM: model=$(VLLM_MODEL) port=$(VLLM_PORT) quant=compressed-tensors(auto)"
+	vllm serve $(VLLM_MODEL) \
+		--served-model-name $(VLLM_SERVED_NAME) \
+		--port $(VLLM_PORT) \
+		--dtype auto \
+		--reasoning-parser qwen3 \
+		--gpu-memory-utilization $(VLLM_GPU_UTIL) \
+		--max-model-len $(VLLM_MAX_LEN) \
+		--max-num-seqs $(VLLM_MAX_SEQS) \
+		--limit-mm-per-prompt '{"image":0,"video":0}' \
+		--trust-remote-code \
+		--disable-log-stats
+
+start: ## Start BOTH vLLM server and FastAPI in parallel (Linux/WSL only)
+	@echo "Starting vLLM on port $(VLLM_PORT) and API on port $(API_PORT)..."
+	@$(MAKE) vllm & \
+	 sleep 30 && $(MAKE) serve
+
 smoke: ## Quick pipeline smoke-test in stub mode (no GPU/LLM)
 	$(UV) run python DST_memory/run.py \
 		--llm-mode stub \
@@ -94,13 +149,16 @@ docker-build: ## Build Docker image with CUDA support (default)
 docker-build-cpu: ## Build Docker image CPU-only (for CI/testing)
 	docker build --build-arg TORCH_EXTRA=cpu -t gigamemory:cpu .
 
-docker-up: ## Start pipeline with docker compose (CUDA)
+docker-up: ## Start API service only — vLLM managed externally (set SLOT_LLM_API_URL)
 	docker compose up --build
 
-docker-up-cpu: ## Start pipeline with docker compose (CPU-only)
+docker-up-vllm: ## Start vLLM inference server + API together (requires NVIDIA GPU + MODEL_DIR)
+	docker compose --profile vllm up --build
+
+docker-up-cpu: ## Start API in CPU-only mode (no GPU, no vLLM; stub slot model)
 	TORCH_EXTRA=cpu docker compose up --build
 
-docker-down: ## Stop and remove containers
+docker-down: ## Stop and remove all containers
 	docker compose down
 
 # ─── Cleanup ──────────────────────────────────────────────────────────────────

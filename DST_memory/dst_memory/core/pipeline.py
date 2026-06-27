@@ -6,6 +6,7 @@ from ..clients.classifier import ImportanceClassifier
 from ..clients.llm_client import FinalLLMClient
 from ..clients.memory_gate_client import MemoryGateClient
 from ..clients.serving import LocalHFServing
+from ..clients.vllm_serving import VLLMSlotServing
 from ..slots.slot_select_client import SlotSelectClient
 from ..triplets.conflict_client import TripletConflictClient
 from ..triplets.triplet_client import TripletExtractionClient
@@ -68,18 +69,9 @@ class DSTMemoryPipeline:
 
         # Store slot_serving for unload/reload capability
         self._slot_serving = None
+        self._slot_llm_mode = getattr(config, "slot_llm_mode", "local")
         if not config.slot_use_stub:
-            self._slot_serving = LocalHFServing(
-                config.slot_model_path,
-                enable_thinking=config.slot_model_enable_thinking,
-                inject_no_think_prompt=getattr(
-                    config, "slot_llm_inject_no_think_prompt", True
-                ),
-                use_lm_format_enforcer=getattr(
-                    config, "slot_llm_lm_format_enforcer", False
-                ),
-                load_quantization=getattr(config, "slot_llm_load_quantization", "none"),
-            )
+            self._slot_serving = self._build_slot_serving(config)
         slot_serving = self._slot_serving
 
         triplet_extractor = TripletExtractionClient(
@@ -89,6 +81,7 @@ class DSTMemoryPipeline:
             max_retries=1,
             ttl_mode=config.ttl_mode,
             prompt_language=config.prompt_language,
+            max_new_tokens=getattr(config, "triplet_extract_max_tokens", 512),
             parse_retry_temperature=getattr(
                 config, "llm_parse_retry_temperature", 0.65
             ),
@@ -102,6 +95,7 @@ class DSTMemoryPipeline:
             max_slots=config.slot_max_slots_per_message,
             max_retries=1,
             prompt_language=config.prompt_language,
+            max_new_tokens=getattr(config, "slot_select_max_tokens", 220),
             parse_retry_temperature=getattr(
                 config, "llm_parse_retry_temperature", 0.65
             ),
@@ -116,6 +110,7 @@ class DSTMemoryPipeline:
             rule_same_relation_updates=config.conflict_rule_same_relation_updates,
             allow_multi_relation_same_object=config.conflict_allow_multi_relation_same_object,
             prompt_language=config.prompt_language,
+            max_new_tokens=getattr(config, "conflict_max_tokens", 256),
         )
 
         # --- Deletion components ---
@@ -141,6 +136,7 @@ class DSTMemoryPipeline:
                 serving=slot_serving,
                 max_retries=1,
                 prompt_language=config.prompt_language,
+                max_new_tokens=getattr(config, "deletion_max_tokens", 256),
             )
             logger.info("TripletDeletionClient (llm_separate) enabled")
 
@@ -168,6 +164,7 @@ class DSTMemoryPipeline:
             serving=slot_serving,
             max_retries=1,
             prompt_language=config.prompt_language,
+            max_new_tokens=getattr(config, "memory_gate_max_tokens", 200),
             parse_retry_temperature=getattr(
                 config, "llm_parse_retry_temperature", 0.65
             ),
@@ -190,6 +187,7 @@ class DSTMemoryPipeline:
             enable_thinking=getattr(config, "llm_enable_thinking", True),
             load_quantization=getattr(config, "llm_load_quantization", "none"),
             max_context_tokens=getattr(config, "llm_max_context_tokens", 128 * 1024),
+            parallel_write_mode=getattr(config, "parallel_write_mode", False),
         )
 
     def set_dialogue_dataset_clock(
@@ -366,7 +364,18 @@ class DSTMemoryPipeline:
                 question, slot_names, for_vector_context=False
             )
             selected = list(sel.slot_names) if sel.slot_names else []
-            if not sel.use_memory or not selected:
+
+            # Optionally force IDENTITY in, regardless of gate decision, as long
+            # as it is an actually-active slot. Overrides gate rejection too.
+            force_identity = (
+                getattr(self.config, "relevant_slots_always_include_identity", False)
+                and "IDENTITY" in slot_names
+            )
+            if force_identity and "IDENTITY" not in selected:
+                selected.append("IDENTITY")
+
+            use_memory = sel.use_memory or force_identity
+            if not use_memory or not selected:
                 return {"slots": []}, {
                     **meta_base,
                     "use_memory": False,
@@ -378,6 +387,7 @@ class DSTMemoryPipeline:
                 **meta_base,
                 "use_memory": bool(slots),
                 "selected_slots": selected,
+                "forced_identity": force_identity,
                 "mode": "relevant_slots_full_gate_selected",
             }
 
@@ -450,6 +460,40 @@ class DSTMemoryPipeline:
             ),
         }
 
+    def _build_slot_serving(
+        self, config: PipelineConfig
+    ) -> "LocalHFServing | VLLMSlotServing":
+        """Create the appropriate slot serving backend from config."""
+        mode = getattr(config, "slot_llm_mode", "local")
+        if mode == "vllm":
+            logger.info(
+                "Slot serving mode=vllm model=%s url=%s",
+                config.slot_model_path,
+                getattr(config, "slot_llm_api_url", "http://localhost:8001/v1"),
+            )
+            return VLLMSlotServing(
+                model=config.slot_model_path,
+                api_url=getattr(config, "slot_llm_api_url", "http://localhost:8001/v1"),
+                api_key=getattr(config, "slot_llm_api_key", "EMPTY"),
+                enable_thinking=config.slot_model_enable_thinking,
+            )
+        logger.info(
+            "Slot serving mode=local model=%s quant=%s",
+            config.slot_model_path,
+            getattr(config, "slot_llm_load_quantization", "none"),
+        )
+        return LocalHFServing(
+            config.slot_model_path,
+            enable_thinking=config.slot_model_enable_thinking,
+            inject_no_think_prompt=getattr(
+                config, "slot_llm_inject_no_think_prompt", True
+            ),
+            use_lm_format_enforcer=getattr(
+                config, "slot_llm_lm_format_enforcer", False
+            ),
+            load_quantization=getattr(config, "slot_llm_load_quantization", "none"),
+        )
+
     def unload_local_models(self) -> None:
         """
         Unload all local models (slot serving, classifier) from GPU/memory.
@@ -509,21 +553,7 @@ class DSTMemoryPipeline:
             self.final_llm.release_local_serving()
 
         if not self.config.slot_use_stub and self._slot_serving is None:
-            from ..clients.serving import LocalHFServing
-
-            self._slot_serving = LocalHFServing(
-                self.config.slot_model_path,
-                enable_thinking=self.config.slot_model_enable_thinking,
-                inject_no_think_prompt=getattr(
-                    self.config, "slot_llm_inject_no_think_prompt", True
-                ),
-                use_lm_format_enforcer=getattr(
-                    self.config, "slot_llm_lm_format_enforcer", False
-                ),
-                load_quantization=getattr(
-                    self.config, "slot_llm_load_quantization", "none"
-                ),
-            )
+            self._slot_serving = self._build_slot_serving(self.config)
 
         # Re-attach serving to clients
         if hasattr(self.dst, "triplet_extractor"):
@@ -596,3 +626,45 @@ class DSTMemoryPipeline:
     def clear_memory(self, dialogue_id: str) -> None:
         logger.info("clear_memory dialogue_id=%s", dialogue_id)
         self.dst.clear_dialogue(dialogue_id)
+
+    def save_session(self, dialogue_id: str, session_dir: str) -> None:
+        """Persist DialogueMemoryState for dialogue_id to <session_dir>/<dialogue_id>/state.json."""
+        import json
+        from pathlib import Path
+
+        state = self.dst.get_state(dialogue_id)
+        path = Path(session_dir) / dialogue_id / "state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(asdict(state), f, ensure_ascii=False, indent=2)
+        logger.debug("Session saved dialogue_id=%s path=%s", dialogue_id, path)
+
+    def load_session(self, dialogue_id: str, session_dir: str) -> bool:
+        """Load DialogueMemoryState from <session_dir>/<dialogue_id>/state.json. Returns True if found."""
+        import json
+        from pathlib import Path
+
+        from .models import DeletedFact, DialogueMemoryState, FactRecord
+
+        path = Path(session_dir) / dialogue_id / "state.json"
+        if not path.exists():
+            return False
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        slots = {
+            slot_name: [FactRecord(**r) for r in records]
+            for slot_name, records in data.get("slots", {}).items()
+        }
+        deleted_facts = [DeletedFact(**df) for df in data.get("deleted_facts", [])]
+        state = DialogueMemoryState(
+            dialogue_id=data["dialogue_id"],
+            step=data.get("step", 0),
+            slots=slots,
+            next_record_id=data.get("next_record_id", 1),
+            recent_pairs=data.get("recent_pairs", []),
+            deleted_facts=deleted_facts,
+            dataset_clock_iso=data.get("dataset_clock_iso"),
+        )
+        self.dst._states[dialogue_id] = state
+        logger.info("Session loaded dialogue_id=%s step=%d", dialogue_id, state.step)
+        return True

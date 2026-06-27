@@ -2,16 +2,23 @@ import gc
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 # torch and transformers are heavy optional deps — imported lazily inside LocalHFServing
 # so that the rest of the codebase (and tests in stub mode) can be imported without GPU.
 if TYPE_CHECKING:
     import torch
 
+    from .vllm_serving import VLLMSlotServing
+
 from ..slots.slot_model_path import resolve_slot_model_path
 
 logger = logging.getLogger(__name__)
+
+# Either backend the slot clients (selector / extractor / gate / conflict /
+# deletion) can run against: in-process HF transformers or an external vLLM
+# server. VLLMSlotServing is a structural drop-in for LocalHFServing.
+SlotServing = Union["LocalHFServing", "VLLMSlotServing"]
 
 
 def _normalize_load_quantization(raw: str | None) -> str:
@@ -141,7 +148,7 @@ class LocalHFServing:
                 resolved,
                 trust_remote_code=True,
                 quantization_config=bnb,
-                device_map="auto",
+                device_map={"": self.device},
             )
         else:
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -257,7 +264,23 @@ class LocalHFServing:
             in_dev = next(self.model.parameters()).device
         except (StopIteration, AttributeError):
             in_dev = torch.device(self.device)
-        inputs = self.tokenizer(text, return_tensors="pt").to(in_dev)
+        # apply_chat_template may return list[str] for some Qwen3 template versions
+        if isinstance(text, list):
+            text = "".join(str(t) for t in text)
+        elif not isinstance(text, str):
+            text = str(text)
+        # Python 3.13 + old tokenizers Rust library: tokenizer.__call__ goes through
+        # encode_batch which fails. Use backend_tokenizer.encode() (single-item Rust
+        # path) to build tensors manually and bypass the batch code path.
+        try:
+            inputs = self.tokenizer(text, return_tensors="pt").to(in_dev)
+        except TypeError:
+            enc = self.tokenizer.backend_tokenizer.encode(
+                text, add_special_tokens=False
+            )
+            ids = torch.tensor([enc.ids], dtype=torch.long).to(in_dev)
+            mask = torch.tensor([enc.attention_mask], dtype=torch.long).to(in_dev)
+            inputs = {"input_ids": ids, "attention_mask": mask}
         eos_id = getattr(self.tokenizer, "eos_token_id", None)
         pad_id = getattr(self.tokenizer, "pad_token_id", None) or eos_id
         # Transformers only uses temperature/top_p when sampling is enabled.

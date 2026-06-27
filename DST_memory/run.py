@@ -99,7 +99,16 @@ def build_pipeline(args: argparse.Namespace):
         slot_fallback_on_no_slots=getattr(args, "slot_fallback_on_no_slots", True),
         triplet_fallback_on_empty=getattr(args, "triplet_fallback_on_empty", True),
         prompt_language=getattr(args, "prompt_language", "ru"),
+        parallel_write_mode=getattr(args, "parallel_write_mode", False),
+        session_dir=getattr(args, "session_dir", ""),
     )
+
+    # When session_dir is set, derive ragu_storage_path from it (per dialogue)
+    # unless the user already set it explicitly.
+    session_dir = getattr(args, "session_dir", "")
+    dialogue_id = getattr(args, "dialogue_id", "")
+    if session_dir and dialogue_id and not getattr(args, "ragu_storage_path", ""):
+        cfg.ragu_storage_path = str(Path(session_dir) / dialogue_id / "ragu")
 
     logger.info(
         "Initializing RAGU backend embedder=%s storage=%s",
@@ -443,6 +452,20 @@ def create_parser(
         dest="dialogue_id",
         type=str,
         default=pi_cfg.get("dialogue_id", "interactive"),
+    )
+    pi_parser.add_argument(
+        "--parallel-write",
+        dest="parallel_write_mode",
+        action="store_true",
+        default=bool(pi_cfg.get("parallel_write_mode", False)),
+        help="Answer and write to memory in parallel threads (answer uses pre-message graph state)",
+    )
+    pi_parser.add_argument(
+        "--session-dir",
+        dest="session_dir",
+        type=str,
+        default=pi_cfg.get("session_dir", ""),
+        help="Directory for persisting session state between runs (e.g. sessions/)",
     )
     pi_parser.set_defaults(func=cmd_pipeline_inference_interactive)
 
@@ -804,41 +827,120 @@ def cmd_pipeline_test_jsonl(args: argparse.Namespace) -> None:
 
 
 def cmd_pipeline_inference_interactive(args: argparse.Namespace) -> None:
+    import datetime
+    import threading
+
     from dst_memory.core.models import Message
 
+    # Each run gets an isolated session folder with a datetime suffix.
+    # This prevents state from bleeding between separate runs.
+    session_dir = getattr(args, "session_dir", "")
+    if session_dir:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        base_id = getattr(args, "dialogue_id", "session") or "session"
+        args.dialogue_id = f"{base_id}_{timestamp}"
+
     pipeline = build_pipeline(args)
+    pipeline.final_llm.realtime_mode = True
     did = args.dialogue_id
-    print("Inference mode. Commands: /clear, /exit, /memory, /expired")
+    parallel = getattr(args, "parallel_write_mode", False)
+
+    if session_dir:
+        print(f"[session: {session_dir}/{did}/]")
+
+    mode_label = " [parallel-write]" if parallel else ""
+    print(
+        f"Inference mode{mode_label}. Commands: /clear, /exit, /memory, /expired, /save"
+    )
+
+    # Track background write thread so next message waits for previous write to finish
+    _pending_write: list[threading.Thread] = []
+
+    def _wait_pending() -> None:
+        if _pending_write:
+            _pending_write[0].join()
+            _pending_write.clear()
+
     while True:
         raw = input("user> ").strip()
         if not raw:
             continue
         if raw == "/exit":
+            _wait_pending()
+            if session_dir:
+                pipeline.save_session(did, session_dir)
+                print(f"[session saved to {session_dir}/{did}/state.json]")
             break
         if raw == "/clear":
+            _wait_pending()
             pipeline.clear_memory(did)
+            if session_dir:
+                pipeline.save_session(did, session_dir)
             print("memory cleared")
             continue
         if raw == "/memory":
+            _wait_pending()
             slots = pipeline.dst.slots_with_messages(did)
             print(json.dumps(slots, ensure_ascii=False, indent=2))
             continue
         if raw == "/expired":
+            _wait_pending()
             expired = pipeline.dst.expired_facts(did)
             print(json.dumps(expired, ensure_ascii=False, indent=2))
             continue
-        log = pipeline.write_to_memory(did, Message(role="user", content=raw))
-        if args.no_final_llm:
-            out = pipeline.answer_without_final_llm(did, raw)
-            print(
-                json.dumps(
-                    {"write_log": log, "answer": out}, ensure_ascii=False, indent=2
-                )
-            )
+        if raw == "/save":
+            _wait_pending()
+            if session_dir:
+                pipeline.save_session(did, session_dir)
+                print(f"[session saved to {session_dir}/{did}/state.json]")
+            else:
+                print("[no --session-dir specified, nothing saved]")
             continue
-        answer = pipeline.answer(did, raw)
-        pipeline.add_recent_pair(did, raw, answer)
-        print(answer)
+
+        # Ensure previous background write is done before starting a new turn
+        _wait_pending()
+
+        if parallel and not args.no_final_llm:
+            # Parallel path: answer from current graph state, write in background thread
+            write_log: list = []
+            write_exc: list = []
+
+            def _write_bg() -> None:
+                try:
+                    write_log.append(
+                        pipeline.write_to_memory(did, Message(role="user", content=raw))
+                    )
+                except Exception as e:
+                    write_exc.append(e)
+                    logger.error("Background write_to_memory failed: %s", e)
+
+            t = threading.Thread(target=_write_bg, daemon=True)
+            t.start()
+            _pending_write.append(t)
+
+            answer = pipeline.answer(did, raw)
+            pipeline.add_recent_pair(did, raw, answer)
+            print(answer)
+
+            # Save session after write completes (done lazily at next turn or /exit)
+        else:
+            # Sequential path (original behavior or no_final_llm mode)
+            log = pipeline.write_to_memory(did, Message(role="user", content=raw))
+            if args.no_final_llm:
+                out = pipeline.answer_without_final_llm(did, raw)
+                print(
+                    json.dumps(
+                        {"write_log": log, "answer": out}, ensure_ascii=False, indent=2
+                    )
+                )
+                if session_dir:
+                    pipeline.save_session(did, session_dir)
+                continue
+            answer = pipeline.answer(did, raw)
+            pipeline.add_recent_pair(did, raw, answer)
+            print(answer)
+            if session_dir:
+                pipeline.save_session(did, session_dir)
 
 
 def cmd_pipeline_inference_single_turn(args: argparse.Namespace) -> None:

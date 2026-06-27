@@ -215,10 +215,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-torch-2.8.0-cp313-cp313-win_amd64.whl
+# Downloaded build/package artifacts (wheels, debs, archives)
+*.whl
+*.deb
+*.zip
 **/models/
 !RAGU/ragu/models/
-*.zip
 
 # DST_memory pipeline outputs and test artifacts
 DST_memory/*_output*.json
@@ -235,3 +237,9 @@ slot_eval/judge_*.json
 # RAGU graph storage (runtime-generated, run-specific)
 DST_memory/ragu_storage/
 DST_memory/ragu_storage_*/
+
+uv.lock
+
+validation/
+
+api_sessions/

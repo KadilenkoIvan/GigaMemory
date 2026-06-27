@@ -1,12 +1,23 @@
-# CONFIG reference (`run_config.json`)
+# CONFIG reference
+
+В проекте три готовых конфига:
+
+| Файл | Назначение |
+|---|---|
+| `DST_memory/run_config.json` | Default для валидации и `pipeline test` |
+| `DST_memory/run_config_local.json` | Локальный интерактивный режим (Qwen локально + OpenRouter) |
+| `DST_memory/run_config_api.json` | REST API сервер (`api.py`) |
 
 `run.py` читает конфиг из:
-
 1. `--config`, либо
-2. `DST_MEMORY_CONFIG`, либо
+2. `DST_MEMORY_CONFIG` env, либо
 3. `DST_memory/run_config.json`.
 
-Перед этим загружается `DST_memory/.env` (`dotenv_loader.py`).
+`api.py` читает из:
+1. `GIGAMEMORY_CONFIG` env, либо
+2. `DST_memory/run_config_api.json` (рядом с `api.py`).
+
+Перед этим загружается `DST_memory/.env` (`dotenv_loader.py`). Значения вида `"${VAR}"` в JSON заменяются из окружения.
 
 ## `shared`
 
@@ -20,6 +31,7 @@
 | `disable_memory_gate` | bool | отключить LLM gate для `relevant_slots_full` |
 | `memory_gate_use_stub` | bool | использовать эвристику вместо локальной gate LLM |
 | `memory_strategy` | str | `full_graph_json` \| `relevant_slots_full` \| `topk_graph_records` |
+| `relevant_slots_always_include_identity` | bool | только для `relevant_slots_full`: при `true` слот `IDENTITY` всегда добавляется в контекст финальной LLM, даже если memory gate его не выбрал или вовсе отклонил память (срабатывает лишь если у `IDENTITY` есть активные факты). Обходной путь для маленьких slot-моделей, недобирающих `IDENTITY`. Default `false` |
 | `llm_mode` | str | `openrouter` \| `api` \| `puter` \| `stub` \| `local` |
 | `llm_api_url` | str | OpenAI-compatible endpoint |
 | `llm_api_key` | str | API key, можно через `${OPENROUTER_API_KEY}` |
@@ -39,12 +51,23 @@
 | `slot_max_slots_per_message` | int | лимит слотов на сообщение |
 | `slot_model_enable_thinking` | bool | гибридный thinking у Qwen3/3.5 для slot-стека (default `false`) |
 | `slot_llm_inject_no_think_prompt` | bool | при `true` (default) к system добавляется `/no_think`, если thinking выключен; при `false` только `enable_thinking` в chat template |
-| `slot_llm_lm_format_enforcer` | bool | JSON schema через `lm-format-enforcer` для slot selector и triplet extraction (default `false`) |
-| `slot_llm_load_quantization` | str | квантизация BitsAndBytes для **той же** локальной модели, что `slot_model_path` (слоты, триплеты, memory gate, конфликты): `none` (default), `8bit`, `4bit`. Нужны **CUDA** и пакет `bitsandbytes`. Отдельно от `llm_load_quantization` (финальная LLM). |
+| `slot_llm_lm_format_enforcer` | bool | JSON schema через `lm-format-enforcer` для slot selector и triplet extraction (default `false`); при `slot_llm_mode=vllm` не нужен — используется `guided_json` |
+| `slot_llm_load_quantization` | str | квантизация BitsAndBytes **только** для `slot_llm_mode=local`: `none` (default), `8bit`, `4bit`. При `slot_llm_mode=vllm` квантизацию задаёт сам vLLM-сервер при старте. |
+| `slot_llm_mode` | str | backend слот-модели: `"local"` — загружает модель в процесс через HF transformers; `"vllm"` — вызывает внешний vLLM-сервер через OpenAI API (рекомендуется для production) |
+| `slot_llm_api_url` | str | URL vLLM-сервера (только при `slot_llm_mode=vllm`): `"http://localhost:8001/v1"` |
+| `slot_llm_api_key` | str | API-ключ vLLM-сервера; по умолчанию `"EMPTY"` (vLLM не требует auth) |
+| `slot_select_max_tokens` | int | бюджет выходных токенов для выбора слотов (default `220`) |
+| `triplet_extract_max_tokens` | int | бюджет выходных токенов для экстракции триплетов (default `512`) |
+| `conflict_max_tokens` | int | бюджет выходных токенов для конфликт-резолвера (default `256`) |
+| `deletion_max_tokens` | int | бюджет выходных токенов для отдельного deletion-вызова (default `256`) |
+| `memory_gate_max_tokens` | int | бюджет выходных токенов для memory gate (default `200`) |
 | `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
 | `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
 | `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
-| `ragu_storage_path` | str | путь к RAGU storage |
+| `ragu_storage_path` | str | путь к RAGU storage; в интерактивном режиме автоматически переопределяется как `<session_dir>/<dialogue_id>/ragu` если задан `session_dir` |
+| `session_dir` | str | директория сессий; каждый запуск интерактивного режима создаёт `<session_dir>/<dialogue_id>_<YYYY-MM-DD_HH-MM-SS>/`; DST state сохраняется как `state.json`, RAGU граф — в подпапке `ragu/`; пустая строка = только in-memory |
+| `parallel_write_mode` | bool | включить параллельный режим записи в граф: ответ строится немедленно из текущего графа, запись в граф идёт в фоновом потоке; аналог флага `--parallel-write` в CLI |
+| `force_infinite_ttl` | bool | если `true` (default в конфигах для продакшна) — каждый факт получает TTL `inf`; вывод TTL модели игнорируется; TTL expiry не происходит. Установить `false` для реального TTL-режима |
 | `ttl_mode` | str | режим TTL: `mode1` (per-slot defaults из `SLOT_DEFAULT_TTL`), `mode2` (модель генерирует поле `ttl` вместе с триплетом), `mode3` (отдельный вызов — резервировано) |
 | `ttl_slot_overrides` | dict | JSON-словарь переопределений TTL по слоту, напр. `{"EVENTS":"1d","TRAVEL":"1m"}` |
 | `ttl_semantic_dedup_enabled` | bool | включить семантическую дедупликацию триплетов внутри слота |
@@ -116,6 +139,41 @@
 - Поддерживаются оба варианта JSON: `{"deactivate":[...], "skip_new":[...]}` и сокращённый `{"deactivate":[...]}`.
 - При отсутствии `skip_new` парсер трактует его как пустой список (без ошибки пайплайна).
 
+## Бюджеты генерации slot-модели
+
+`*_max_tokens` задают `max_new_tokens` для каждого вызова slot-модели (раньше были захардкожены в коде клиентов). Бюджет должен вмещать **весь** JSON-ответ; слишком малый — обрывает вывод (`finish_reason=length` в логах vLLM). Дефолты подобраны под режим **без** thinking (`slot_model_enable_thinking=false`), когда модель сразу выдаёт JSON. Если включить thinking или ожидать много слотов/триплетов — поднимите соответствующее значение. Цепочка проброса: JSON-конфиг → `PipelineConfig` → конструкторы клиентов (`SlotSelectClient`, `TripletExtractionClient`, `TripletConflictClient`, `TripletDeletionClient`, `MemoryGateClient`).
+
+## `api`
+
+Настройки REST API сервера (`DST_memory/api.py`). Конфиг читается из `DST_memory/run_config_api.json` или из пути заданного в `GIGAMEMORY_CONFIG`.
+
+| key | type | description |
+|---|---|---|
+| `session_dir` | str | директория для персистентного хранения состояний диалогов; каждый диалог → `<session_dir>/<dialogue_id>/state.json`; пустая строка = только in-memory |
+| `ragu_storage_path` | str | путь к общему RAGU-хранилищу для всех диалогов API; если пусто — используется значение из `shared.ragu_storage_path`; рекомендуется задать отдельный путь, например `api_sessions/ragu` |
+| `host` | str | хост для uvicorn (default `0.0.0.0`) |
+| `port` | int | порт для uvicorn (default `8000`) |
+
+**Env-переменные для API:**
+
+| переменная | описание |
+|---|---|
+| `GIGAMEMORY_CONFIG` | путь к конфигу (override, по умолчанию `DST_memory/run_config_api.json` рядом с `api.py`) |
+| `OPENROUTER_API_KEY` | ключ OpenRouter; подставляется через `"llm_api_key": "${OPENROUTER_API_KEY}"` в конфиге |
+
+**Запуск:**
+
+```bash
+# через make
+OPENROUTER_API_KEY=sk-or-... make serve
+
+# вручную
+OPENROUTER_API_KEY=sk-or-... uv run uvicorn api:app --app-dir DST_memory --host 0.0.0.0 --port 8000 --reload
+
+# с кастомным конфигом
+GIGAMEMORY_CONFIG=path/to/config.json uv run uvicorn api:app --app-dir DST_memory --port 8000
+```
+
 ## `pipeline_jsonl`
 
 - `dataset_path`: path to jsonl
@@ -125,7 +183,11 @@
 
 ## `pipeline_interactive`
 
-- `dialogue_id`: default id для `pipeline inference interactive`.
+| key | type | description |
+|---|---|---|
+| `dialogue_id` | str | базовый id диалога; при запуске автоматически получает суффикс `_YYYY-MM-DD_HH-MM-SS` для изоляции сессий |
+| `parallel_write_mode` | bool | если `true` — параллельная запись; аналог флага `--parallel-write` в CLI |
+| `session_dir` | str | директория сессий; переопределяет `shared.session_dir` для интерактивного режима |
 
 ## Пояснение стратегий
 

@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..clients.serving import GenerationConfig, LocalHFServing
+from ..clients.serving import GenerationConfig, SlotServing
 from ..core.graph_backend import GraphEdge
 from ..prompts.loader import PromptModules, load_prompt_modules
 from ..prompts.parsers import parse_conflict_response
@@ -60,11 +60,12 @@ class TripletConflictClient:
         self,
         *,
         use_stub: bool,
-        serving: LocalHFServing | None = None,
+        serving: SlotServing | None = None,
         max_retries: int = 1,
         rule_same_relation_updates: bool = True,
         allow_multi_relation_same_object: bool = True,
         prompt_language: str = "ru",
+        max_new_tokens: int = 256,
     ):
         self.use_stub = use_stub
         self.serving = serving
@@ -72,6 +73,7 @@ class TripletConflictClient:
         self.rule_same_relation_updates = rule_same_relation_updates
         self.allow_multi_relation_same_object = allow_multi_relation_same_object
         self.prompt_language = prompt_language
+        self.max_new_tokens = int(max_new_tokens)
         self._prompt_modules: PromptModules | None = None
 
         if not use_stub and serving is None:
@@ -238,7 +240,9 @@ class TripletConflictClient:
         messages = self._prompt_modules.conflict_messages.build_conflict_messages(
             slot_name, existing, new_triplets
         )
-        cfg = GenerationConfig(max_new_tokens=256, temperature=0.0, do_sample=False)
+        cfg = GenerationConfig(
+            max_new_tokens=self.max_new_tokens, temperature=0.0, do_sample=False
+        )
 
         for attempt in range(self.max_retries + 1):
             last = self.serving.generate_chat(messages, cfg)

@@ -8,35 +8,139 @@
 
 ## Quick Start
 
-**Требования:** GPU с CUDA и [uv](https://docs.astral.sh/uv/getting-started/installation/).
+**Требования:** GPU с CUDA, [uv](https://docs.astral.sh/uv/getting-started/installation/) и ключ [OpenRouter](https://openrouter.ai/).
 
 ```bash
 # 1. Клонировать репозиторий
 git clone https://github.com/KadilenkoIvan/GigaMemory.git
 cd GigaMemory
 
-# 2. Настроить окружение (CUDA)
-make install
+# 2. Настроить окружение
+make install          # всё: CUDA + API сервер + dev инструменты (рекомендуется)
+# make install-local  # только для локального запуска пайплайна (без API)
+# make install-api    # только для запуска API сервера (CUDA + fastapi/uvicorn)
 
-# 3. Установить pre-commit хуки (один раз после клонирования)
+# 3. Установить pre-commit хуки (один раз)
 make hooks
 
-# 4. Задать API ключ OpenRouter
-cp DST_memory/.env.example DST_memory/.env
-# Открыть DST_memory/.env и вписать: OPENROUTER_API_KEY=<ваш ключ>
+# 4. Задать ключ OpenRouter
+export OPENROUTER_API_KEY=sk-or-...   # Linux/Mac
+$env:OPENROUTER_API_KEY="sk-or-..."  # Windows PowerShell
 
-# 5. Запустить интерактивный диалог
-uv run python DST_memory/run.py pipeline inference interactive
+# 5а. Запустить интерактивный диалог (real-time режим)
+uv run python DST_memory/run.py \
+  --config DST_memory/run_config_local.json \
+  pipeline inference interactive
+
+# 5б. Запустить REST API сервер (с vLLM — рекомендуется)
+# Terminal 1 (Linux/WSL): запустить vLLM inference server для слот-модели
+make vllm   # vllm serve <AWQ-модель> --port 8001 --gpu-memory-utilization 0.65 ...
+
+# Terminal 2 (Windows/Linux): запустить FastAPI
+make serve  # или: OPENROUTER_API_KEY=sk-or-... make serve
+
+# Или оба вместе (Linux/WSL):
+make start
 ```
 
-При первом запуске `Qwen/Qwen3.5-9B-Instruct` скачается автоматически с HuggingFace (~18 GB).  
-Слот-модель и финальная LLM настраиваются в `DST_memory/run_config.json`.
+Конфиги: `DST_memory/run_config_local.json` — для интерактивного режима, `DST_memory/run_config_api.json` — для API сервера.
 
-> Это один из возможных режимов запуска. Модель используемая внутри проекта может быть как локкальной, 
-> так и с openRouter. То же самое для финальной LLM, которая будет использоваться для ответов.
-> Также, поддерживаются batch-тест по датасету (`pipeline test`),
-> разные стратегии памяти, режимы удаления фактов и stub-режим без GPU — см. разделы ниже.
+> Слот-модель (Qwen3.5, 4-bit AWQ / compressed-tensors) работает через **vLLM** — отдельный inference-сервер с PagedAttention и Flash Attention 2; 4B-модель умещается в ~4 GB VRAM.  
+> vLLM не поддерживает Windows нативно — на Windows слот-сервер запускается в **WSL2** (модель видна по `/mnt/...`), а FastAPI на Windows ходит к нему по `localhost:8001`.  
+> Финальная LLM — OpenRouter (`gpt-4o-mini` или любая другая модель через API).  
+> Слот-модель и финальная LLM настраиваются независимо через `run_config_api.json` (`slot_llm_mode: "local"|"vllm"`).  
 > Для быстрой проверки без GPU и LLM: `make smoke`.
+
+## Docker
+
+Контейнеризированный запуск — рекомендуемый способ для продакшена и для Windows (где vLLM требует WSL2, а API запускается в Docker).
+
+### Требования
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) или Docker Engine + Compose plugin (Linux)
+- NVIDIA GPU + [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) — только для режима `--profile vllm`
+
+### Первый запуск
+
+```bash
+# 1. Скопировать шаблон переменных окружения
+cp .env.example .env
+
+# 2. Заполнить обязательные поля в .env:
+#    OPENROUTER_API_KEY=sk-or-...
+#    MODEL_DIR=D:/Users/me/GigaMemory/models   (если нужен встроенный vLLM)
+```
+
+### Режимы запуска
+
+| Сценарий | Команда | Когда использовать |
+|---|---|---|
+| API + внешний vLLM | `docker compose up` | vLLM уже запущен (в WSL2 или на другой машине) |
+| API + vLLM вместе | `docker compose --profile vllm up` | Хотите всё в Docker, GPU доступен |
+| CPU-only (без GPU) | `TORCH_EXTRA=cpu docker compose up` | Тест без GPU; слот-модель через внешний OpenRouter |
+
+```bash
+# Makefile-обёртки:
+make docker-up          # API only (bring your own vLLM)
+make docker-up-vllm     # vLLM + API (требует GPU и MODEL_DIR)
+make docker-up-cpu      # CPU-only API
+make docker-down        # остановить всё
+```
+
+### Ключевые переменные .env
+
+```dotenv
+OPENROUTER_API_KEY=sk-or-...        # обязательно — финальная LLM
+HF_TOKEN=hf_...                     # необязательно — для приватных моделей HF
+
+# Порт, на котором API доступен снаружи (default 8000)
+API_PORT=8000
+
+# ── vLLM (только --profile vllm) ──────────────────────────────────────────
+MODEL_DIR=./models              # путь к папке с моделями на хосте
+MODEL_NAME=Qwen3.5-4B-AWQ      # имя подпапки внутри MODEL_DIR
+VLLM_GPU_UTIL=0.65              # доля VRAM под KV-кеш
+VLLM_MAX_LEN=8192               # максимальная длина контекста
+VLLM_PORT=8001                  # порт vLLM на хосте
+
+# ── Внешний vLLM (без --profile vllm) ─────────────────────────────────────
+# Docker Desktop (Windows/Mac):
+SLOT_LLM_API_URL=http://host.docker.internal:8001/v1
+# Linux native Docker:
+# SLOT_LLM_API_URL=http://172.17.0.1:8001/v1
+```
+
+### Как это работает
+
+```
+                    ┌─────────────────────────────────────┐
+                    │  docker compose --profile vllm up   │
+                    │                                     │
+                    │  ┌─────────┐      ┌─────────────┐   │
+ пользователь ────► │  │   api   │─────►│    vllm     │   │
+  :8000             │  │  :8000  │      │  :8000 int  │   │
+                    │  └─────────┘      └─────────────┘   │
+                    │       │                  │          │
+                    │  api_sessions       vllm_cache      │
+                    │    (volume)          (volume)       │
+                    └─────────────────────────────────────┘
+
+ Без --profile vllm:  api → SLOT_LLM_API_URL (внешний сервер)
+```
+
+- **`api`** — GigaMemory FastAPI-сервер; всегда запускается; healthcheck на `/health`
+- **`vllm`** — слот-модель (Qwen3.5-4B-AWQ по умолчанию); запускается только с `--profile vllm`; `api` ждёт его готовности через healthcheck перед стартом
+- **`api_sessions`** (volume) — DST-граф, RAGU storage, состояния диалогов; переживает рестарт контейнера
+- **`vllm_cache`** (volume) — KV-кеш vLLM; ускоряет холодный старт при перезапуске
+
+### Пересборка после изменений кода
+
+```bash
+docker compose up --build                    # пересобрать api-образ
+docker compose --profile vllm up --build     # пересобрать + запустить vllm
+```
+
+---
 
 ## Архитектура пайплайна
 
@@ -68,44 +172,123 @@ flowchart TD
 
 ## Что это за проект
 
-- Память строится из сообщений пользователя.
-- Из важных сообщений извлекаются триплеты `subject-relation-object`.
-- Триплеты пишутся в состояние DST и синхронно зеркалятся в граф RAGU.
-- **Поддерживается удаление фактов** тремя независимыми методами (см. ниже).
-- При ответе формируется memory context одной из стратегий и передается в final LLM.
-- Дополнительно передаются последние пары `user/assistant`.
+- Память строится из сообщений пользователя в реальном времени.
+- Из важных сообщений извлекаются триплеты `subject-relation-object` и записываются в DST-граф.
+- Параллельный режим: ответ строится немедленно, запись в граф — в фоновом потоке.
+- Для поддержания актуальности памяти: TTL (время жизни фактов), семантическая дедупликация, три режима удаления.
+- При ответе формируется memory context одной из трёх стратегий и передаётся в финальную LLM.
+- Продуктовый слой: REST API сервер с 6 endpoints, визуализация графа (PNG и интерактивный HTML).
 
 ## Что входит в каталог
 
-- `run.py` — единая CLI-точка запуска.
+- `run.py` — единая CLI-точка запуска (pipeline test / inference interactive / inference single-turn).
+- `api.py` — FastAPI REST сервер (Этап 2); запускается через `make serve`.
 - `dst_memory/` — вся логика пайплайна (разбита по подпакетам):
   - `core/` — pipeline, dst_manager, models, config, graph_backend
-  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в `run_config.json` / `--prompt-language` (включая тексты **финальной** LLM: `prompts/<ru|en>/final_llm_messages.py`)
+  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в конфиге (включая тексты **финальной** LLM и real-time/parallel-write notices)
   - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
   - `triplets/` — extraction, conflict, deletion, negation_detector
   - `storage/` — RAGU backend (ragu_graph_processor)
   - `clients/` — serving, classifier, memory_gate_client, llm_client
   - `utils/` — io_utils, dotenv_loader, run_config_loader
-- `run_config.json` — runtime-конфиг по умолчанию.
-- `CONFIG.md` — описание параметров.
-- `PIPELINE.md` — максимально подробная техническая документация по архитектуре и сценариям.
+- `run_config.json` — runtime-конфиг по умолчанию (для валидации/тестов).
+- `run_config_local.json` — конфиг для локального интерактивного режима.
+- `run_config_api.json` — конфиг для REST API сервера.
+- `CONFIG.md` — полное описание всех параметров конфига.
+- `PIPELINE.md` — техническая документация по архитектуре, этапам и форматам данных.
 
-## Режимы запуска
+## REST API
+
+FastAPI сервер с автоматической Swagger документацией.
+
+### Запуск
+
+```bash
+# Установить зависимости (если ещё не сделано)
+make install-api   # или make install
+
+# Запустить сервер (порт 8000, hot-reload)
+OPENROUTER_API_KEY=sk-or-... make serve
+
+# Swagger UI: http://localhost:8000/docs
+```
+
+### Endpoints
+
+| Метод | Путь | Описание |
+|---|---|---|
+| `POST` | `/dialogue/{id}/message` | Отправить сообщение, получить ответ LLM |
+| `GET` | `/dialogue/{id}/graph` | Полный граф памяти (JSON со всеми метаданными) |
+| `GET` | `/dialogue/{id}/graph_short` | Только активные триплеты + время истечения TTL |
+| `GET` | `/dialogue/{id}/graph/image` | PNG-визуализация графа (networkx + matplotlib) |
+| `GET` | `/dialogue/{id}/graph/html` | Интерактивный HTML-граф (pyvis, открывать в браузере) |
+| `DELETE` | `/dialogue/{id}` | Сбросить память диалога |
+
+Визуализация (`/graph/image` и `/graph/html`) повторяет логику отрисовки графа RAGU, но реализована автономно (без зависимости от пакета RAGU): узлы окрашены по слоту и масштабированы по числу связей, рёбра окрашены по TTL, есть легенды слотов и TTL. Сущности **scoped по слоту** — у каждого слота своя копия узлов (включая «пользователь»), поэтому слоты рисуются раздельными непересекающимися кластерами.
+
+### Примеры запросов (Windows PowerShell)
+
+```powershell
+# Отправить сообщение
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:8000/dialogue/user1/message" `
+  -ContentType "application/json" `
+  -Body '{"content": "Привет, я Ваня, работаю в Экспасофт"}'
+
+# Краткий граф памяти
+Invoke-RestMethod "http://localhost:8000/dialogue/user1/graph_short"
+
+# Открыть интерактивный HTML-граф в браузере
+Start-Process "http://localhost:8000/dialogue/user1/graph/html"
+
+# Скачать PNG граф
+Invoke-WebRequest "http://localhost:8000/dialogue/user1/graph/image" -OutFile graph.png
+
+# Сбросить память
+Invoke-RestMethod -Method DELETE "http://localhost:8000/dialogue/user1"
+```
+
+### Параллельная запись в API
+
+```powershell
+# Запись в память идёт в фоне, ответ возвращается немедленно
+Invoke-RestMethod -Method POST `
+  -Uri "http://localhost:8000/dialogue/user1/message" `
+  -ContentType "application/json" `
+  -Body '{"content": "Я купил новую машину", "parallel_write": true}'
+```
+
+### Конфиг API
+
+`DST_memory/run_config_api.json` — отдельный конфиг для API режима.  
+Ключ OpenRouter берётся из переменной `OPENROUTER_API_KEY` (или прописывается в конфиге).  
+Конфиг переопределяется через env-переменную `GIGAMEMORY_CONFIG`.
+
+---
+
+## Режимы запуска (CLI)
 
 ### Test
 
 Batch-прогон jsonl: сообщения проходят запись в память, затем вызывается ответ на финальный вопрос.
 
 ```bash
-python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
+uv run python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
 ```
 
 ### Inference Interactive
 
-Пошаговый режим: новое сообщение -> запись в память -> ответ LLM.
+Real-time диалог: новое сообщение → запись в память → ответ LLM. Каждая сессия изолирована по datetime.
 
 ```bash
-python DST_memory/run.py pipeline inference interactive --dialogue-id demo
+uv run python DST_memory/run.py \
+  --config DST_memory/run_config_local.json \
+  pipeline inference interactive
+
+# С параллельной записью (ответ не ждёт записи в память)
+uv run python DST_memory/run.py \
+  --config DST_memory/run_config_local.json \
+  pipeline inference interactive --parallel-write
 ```
 
 ### Inference Single-turn
@@ -113,7 +296,7 @@ python DST_memory/run.py pipeline inference interactive --dialogue-id demo
 Один запрос на вход, один ответ на выход.
 
 ```bash
-python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --message "..."
+uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --message "..."
 ```
 
 ## Стратегии памяти
@@ -126,20 +309,46 @@ python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 --messa
 
 ## Важные флаги
 
-- `--memory-strategy`
-- `--graph-top-k-records`
-- `--recent-history-pairs`
-- `--slot-model-path`
-- `--slot-llm-load-quantization` (`none`\|`8bit`\|`4bit`) — BitsAndBytes для локальной slot/triplet модели (CUDA); в JSON: `shared.slot_llm_load_quantization`
-- `--importance-model-path`
-- `--ragu-embedder-model`
-- `--ragu-storage-path`
-- `--llm-mode` (`openrouter|api|puter|stub|local`)
-- `--no-final-llm`
-- `--prompt-language` (`ru` \| `en`) — язык текстов промптов для slot/triplet/gate/deletion/conflict и финальной LLM (в `run_config.json`: `prompt_language`)
-- `--no-conflict-rule-same-relation-updates` — отключить детерминированную замену при том же `subject`+`relation` и другом `object` (решение только через LLM-конфликт); по умолчанию правило включено (`shared.conflict_rule_same_relation_updates`)
+**Память и стратегия:**
+- `--memory-strategy` (`full_graph_json` | `relevant_slots_full` | `topk_graph_records`)
+- `--graph-top-k-records` — top-k для стратегии `topk_graph_records`
+- `--recent-history-pairs` — размер окна последних пар user/assistant
 
-Для ограничения входного контекста final LLM используйте `shared.llm_max_context_tokens` в `run_config.json` (или соответствующий `giga_memory.llm_max_context_tokens` в конфиге валидации). Это особенно важно для моделей с меньшим окном контекста (например, 32768).
+**Модели:**
+- `--slot-model-path` — путь/id к Qwen-модели для слотов/триплетов (локальной или запущенной в vLLM)
+- `--slot-llm-load-quantization` (`none`|`8bit`|`4bit`) — BitsAndBytes для slot/triplet модели (только `slot_llm_mode=local`); в JSON: `shared.slot_llm_load_quantization`
+- `--importance-model-path` — путь к BERT-классификатору важности (пусто = stub, важность всегда True)
+- `--ragu-embedder-model` — модель эмбеддингов для RAGU
+
+**vLLM-режим (JSON config only — нет CLI-флагов):**
+- `shared.slot_llm_mode` — `"local"` (HF transformers in-process) или `"vllm"` (внешний vLLM-сервер)
+- `shared.slot_llm_api_url` — URL vLLM-сервера, по умолчанию `"http://localhost:8001/v1"`
+- `shared.slot_llm_api_key` — API-ключ vLLM (default `"EMPTY"`)
+
+**Бюджеты токенов slot-модели (JSON config only):**
+- `shared.slot_select_max_tokens` (220), `shared.triplet_extract_max_tokens` (512), `shared.conflict_max_tokens` (256), `shared.deletion_max_tokens` (256), `shared.memory_gate_max_tokens` (200) — `max_new_tokens` для каждого вызова slot-модели (см. CONFIG.md)
+
+**Память / memory gate (JSON config only):**
+- `shared.relevant_slots_always_include_identity` — в режиме `relevant_slots_full` всегда передавать слот `IDENTITY` в финальную LLM (обход недобора у маленьких моделей)
+
+**Хранение и сессии:**
+- `--ragu-storage-path` — путь к RAGU storage
+- `--session-dir` — директория сессий; каждый запуск создаёт `<session_dir>/<dialogue_id>_<datetime>/`
+- `--dialogue-id` — базовый id диалога (суффикс datetime добавляется автоматически)
+
+**Финальная LLM:**
+- `--llm-mode` (`openrouter` | `api` | `puter` | `stub` | `local`)
+- `--llm-model` — model id провайдера (напр. `openai/gpt-4o-mini`)
+- `--no-final-llm` — вернуть только структуру без вызова final LLM
+
+**Интерактивный режим:**
+- `--parallel-write` (флаг после `pipeline inference interactive`) — параллельная запись в граф; ответ строится немедленно, граф обновляется в фоне
+
+**Язык и конфликты:**
+- `--prompt-language` (`ru` | `en`) — язык промптов для всего стека включая финальную LLM
+- `--no-conflict-rule-same-relation-updates` — отключить детерминированную замену (только через LLM-конфликт)
+
+Для ограничения входного контекста final LLM: `shared.llm_max_context_tokens` в конфиге (0 = без ограничения). Важно для моделей с окном 32K.
 
 ## Режимы удаления фактов
 

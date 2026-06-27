@@ -22,10 +22,14 @@ class SlotUpdateClient:
         serving: LocalHFServing | None = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
+        max_new_tokens: int = 400,
+        fix_max_new_tokens: int = 250,
     ):
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
+        self.max_new_tokens = int(max_new_tokens)
+        self.fix_max_new_tokens = int(fix_max_new_tokens)
         self._prompt_modules: PromptModules | None = None
 
     def plan_operations(
@@ -72,7 +76,9 @@ class SlotUpdateClient:
         for attempt in range(1, tries + 1):
             last = self.serving.generate_chat(  # type: ignore[union-attr]
                 messages,
-                generation_config=GenerationConfig(max_new_tokens=400, do_sample=False),
+                generation_config=GenerationConfig(
+                    max_new_tokens=self.max_new_tokens, do_sample=False
+                ),
             )
             logger.info("SlotUpdate raw response attempt=%d: %s", attempt, last)
             if self._parse_operations(last) is not None:
@@ -102,7 +108,9 @@ class SlotUpdateClient:
         ]
         fixed = self.serving.generate_chat(  # type: ignore[union-attr]
             messages,
-            generation_config=GenerationConfig(max_new_tokens=250, do_sample=False),
+            generation_config=GenerationConfig(
+                max_new_tokens=self.fix_max_new_tokens, do_sample=False
+            ),
         )
         logger.info("SlotUpdate fixed JSON candidate: %s", fixed)
         return fixed

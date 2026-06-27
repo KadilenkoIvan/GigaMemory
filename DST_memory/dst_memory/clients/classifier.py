@@ -1,8 +1,8 @@
 import logging
-from typing import Dict
+from typing import TYPE_CHECKING, Any, Dict
 
-import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+if TYPE_CHECKING:
+    import torch
 
 logger = logging.getLogger(__name__)
 
@@ -10,6 +10,21 @@ logger = logging.getLogger(__name__)
 class ImportanceClassifier:
     def __init__(self, model_path: str, threshold: float = 0.5):
         self.threshold = threshold
+        self._stub = not model_path
+        self.tokenizer: Any = None
+        self.model: Any = None
+        self.device = "cpu"
+
+        if self._stub:
+            logger.info(
+                "ImportanceClassifier stub mode (no model_path) threshold=%.3f",
+                threshold,
+            )
+            return
+
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(
             "Initializing ImportanceClassifier model_path=%s threshold=%.3f device=%s",
@@ -17,8 +32,10 @@ class ImportanceClassifier:
             threshold,
             self.device,
         )
+        # use_fast=False: force pure-Python tokenizer to avoid Python 3.13
+        # incompatibility with the tokenizers Rust library (encode_batch TypeError).
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_path, trust_remote_code=True
+            model_path, trust_remote_code=True, use_fast=False
         )
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_path, trust_remote_code=True
@@ -26,6 +43,15 @@ class ImportanceClassifier:
         self.model.eval()
 
     def predict(self, text: str) -> dict[str, float]:
+        if self._stub:
+            return {
+                "p_not_important": 0.1,
+                "p_important": 0.9,
+                "is_important": True,
+            }
+
+        import torch
+
         logger.debug("Classifier predict text_len=%d", len(text))
         inputs = self.tokenizer(
             "query: " + text,

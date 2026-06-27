@@ -13,7 +13,7 @@ from ..slots.slot_name_normalize import (
     normalize_slot_label,
     resolve_slot_key_to_existing,
 )
-from .serving import GenerationConfig, LocalHFServing
+from .serving import GenerationConfig, SlotServing
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,10 @@ class MemoryGateClient:
     def __init__(
         self,
         use_stub: bool,
-        serving: LocalHFServing | None = None,
+        serving: SlotServing | None = None,
         max_retries: int = 1,
         prompt_language: str = "ru",
+        max_new_tokens: int = 200,
         parse_retry_temperature: float = 0.65,
         parse_retry_temperature_increment: float = 0.08,
     ):
@@ -56,6 +57,7 @@ class MemoryGateClient:
         self.serving = serving
         self.max_retries = max_retries
         self.prompt_language = prompt_language
+        self.max_new_tokens = int(max_new_tokens)
         self.parse_retry_temperature = float(parse_retry_temperature)
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
@@ -96,7 +98,9 @@ class MemoryGateClient:
         tries = self.max_retries + 1
         for attempt in range(1, tries + 1):
             if attempt == 1:
-                gen_cfg = GenerationConfig(max_new_tokens=200, do_sample=False)
+                gen_cfg = GenerationConfig(
+                    max_new_tokens=self.max_new_tokens, do_sample=False
+                )
             else:
                 t = min(
                     1.0,
@@ -104,7 +108,7 @@ class MemoryGateClient:
                     + self.parse_retry_temperature_increment * float(attempt - 2),
                 )
                 gen_cfg = GenerationConfig(
-                    max_new_tokens=200, do_sample=True, temperature=t
+                    max_new_tokens=self.max_new_tokens, do_sample=True, temperature=t
                 )
             raw = self.serving.generate_chat(messages, generation_config=gen_cfg)
             logger.info("Memory gate raw attempt=%d: %s", attempt, raw[:500])
