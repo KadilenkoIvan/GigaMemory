@@ -1,28 +1,27 @@
-services:
-  gigamemory:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        # Override to "cpu" for CPU-only: TORCH_EXTRA=cpu docker compose up --build
-        TORCH_EXTRA: ${TORCH_EXTRA:-cuda}
-    image: gigamemory:latest
-    volumes:
-      # Persist graph storage between runs
-      - ragu_storage:/app/DST_memory/ragu_storage
-    environment:
-      - PYTHONPATH=/app/DST_memory
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - HF_TOKEN=${HF_TOKEN:-}
-    # GPU passthrough — remove this section for CPU-only deployments
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+name: gigamemory
 
+# ─── How to choose what to run ─────────────────────────────────────────────────
+#
+#   docker compose up                       # API only  (bring your own vLLM)
+#   docker compose --profile vllm up        # vLLM + API together
+#
+# When the "vllm" profile is active the API container reaches the vLLM server
+# at http://vllm:8000/v1 (Docker-internal DNS).  Without the profile, set
+# SLOT_LLM_API_URL in your .env to point at an external vLLM instance.
+#
+# Environment variables (copy .env.example → .env and fill in):
+#   OPENROUTER_API_KEY  — required for the final-answer LLM
+#   HF_TOKEN            — optional, for gated HuggingFace models
+#   MODEL_DIR           — host directory that CONTAINS the model folder
+#                         (e.g. D:/Users/me/GigaMemory/models on Windows)
+#   MODEL_NAME          — subfolder name of the model (Qwen3.5-4B-AWQ)
+#   SLOT_LLM_API_URL    — vLLM endpoint when NOT using the vllm profile
+#                         (e.g. http://host.docker.internal:8001/v1)
+# ───────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── GigaMemory FastAPI server ─────────────────────────────────────────────
   api:
     build:
       context: .
@@ -30,11 +29,7 @@ services:
       args:
         TORCH_EXTRA: ${TORCH_EXTRA:-cuda}
     image: gigamemory:latest
-    command: >
-      uv run python DST_memory/api.py
-        --config DST_memory/run_config_api.json
-        --host 0.0.0.0
-        --port 8000
+    restart: unless-stopped
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -43,7 +38,65 @@ services:
       - PYTHONPATH=/app/DST_memory
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - HF_TOKEN=${HF_TOKEN:-}
-      - GIGAMEMORY_CONFIG=/app/DST_memory/run_config_api.json
+      # When --profile vllm is used: vLLM is at http://vllm:8000/v1 (Docker DNS).
+      # Without that profile: set SLOT_LLM_API_URL to your external vLLM address,
+      # e.g. http://host.docker.internal:8001/v1
+      - SLOT_LLM_API_URL=${SLOT_LLM_API_URL:-http://vllm:8000/v1}
+    depends_on:
+      vllm:
+        condition: service_healthy
+        required: false   # skip wait if vllm is not in the active profile
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  # ── vLLM inference server (slot model) ───────────────────────────────────
+  # Activated with:  docker compose --profile vllm up
+  #
+  # The official vllm/vllm-openai image provides vLLM + CUDA; no build step
+  # needed.  GPU access on Windows requires Docker Desktop with the NVIDIA
+  # GPU support enabled (WSL2 backend + nvidia-container-toolkit installed).
+  vllm:
+    image: vllm/vllm-openai:latest
+    profiles: [vllm]
+    restart: unless-stopped
+    ports:
+      - "${VLLM_PORT:-8001}:8000"
+    volumes:
+      # Mount the directory that CONTAINS your model subfolder.
+      # Windows example:  MODEL_DIR=D:/Users/me/GigaMemory/models
+      # Linux/WSL example: MODEL_DIR=/mnt/d/Users/me/GigaMemory/models
+      - ${MODEL_DIR:-./models}:/models:ro
+      # KV/prefix cache — persist for faster cold-start restarts
+      - vllm_cache:/root/.cache/vllm
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    command: >
+      --model /models/${MODEL_NAME:-Qwen3.5-4B-AWQ}
+      --served-model-name models/${MODEL_NAME:-Qwen3.5-4B-AWQ}
+      --host 0.0.0.0
+      --port 8000
+      --dtype auto
+      --reasoning-parser qwen3
+      --guided-decoding-backend xgrammar
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.65}
+      --max-model-len ${VLLM_MAX_LEN:-8192}
+      --max-num-seqs ${VLLM_MAX_SEQS:-4}
+      --limit-mm-per-prompt {"image":0,"video":0}
+      --trust-remote-code
+      --disable-log-stats
+    healthcheck:
+      # vLLM exposes /health once the model is loaded and ready to serve
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s  # loading a 4B AWQ model takes ~60-90 s
+    # GPU passthrough — works with Docker Desktop (Windows/Mac) and Linux
+    # with nvidia-container-toolkit installed.
     deploy:
       resources:
         reservations:
@@ -51,7 +104,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    ipc: host   # recommended by vLLM for shared memory performance
 
 volumes:
-  ragu_storage:
   api_sessions:
+  vllm_cache:

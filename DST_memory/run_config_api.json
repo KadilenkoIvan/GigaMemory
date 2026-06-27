@@ -26,7 +26,7 @@
     "slot_llm_inject_no_think_prompt": true,
     "slot_llm_load_quantization": "none",
     "slot_llm_mode": "vllm",
-    "slot_llm_api_url": "http://localhost:8001/v1",
+    "slot_llm_api_url": "${SLOT_LLM_API_URL}",
     "slot_llm_api_key": "EMPTY",
 
     "slot_select_max_tokens": 512,
