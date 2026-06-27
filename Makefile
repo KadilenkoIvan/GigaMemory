@@ -13,9 +13,10 @@
 #   make vllm          — start vLLM inference server (slot model, Linux/WSL)
 #   make serve         — start FastAPI REST server (port 8000)
 #   make start         — start vLLM + FastAPI together (Linux/WSL)
-#   make docker-up     — start with docker compose (CUDA)
-#   make docker-up-cpu — start with docker compose (CPU-only)
-#   make docker-api    — start API service with docker compose
+#   make docker-up      — start API only (bring your own vLLM)
+#   make docker-up-vllm — start vLLM + API together via Docker
+#   make docker-up-cpu  — CPU-only API (no GPU, no vLLM)
+#   make docker-down    — stop and remove containers
 
 UV              := uv
 PYTHON_VERSION  ?= 3.11
@@ -148,16 +149,16 @@ docker-build: ## Build Docker image with CUDA support (default)
 docker-build-cpu: ## Build Docker image CPU-only (for CI/testing)
 	docker build --build-arg TORCH_EXTRA=cpu -t gigamemory:cpu .
 
-docker-up: ## Start pipeline with docker compose (CUDA)
+docker-up: ## Start API service only — vLLM managed externally (set SLOT_LLM_API_URL)
 	docker compose up --build
 
-docker-up-cpu: ## Start pipeline with docker compose (CPU-only)
+docker-up-vllm: ## Start vLLM inference server + API together (requires NVIDIA GPU + MODEL_DIR)
+	docker compose --profile vllm up --build
+
+docker-up-cpu: ## Start API in CPU-only mode (no GPU, no vLLM; stub slot model)
 	TORCH_EXTRA=cpu docker compose up --build
 
-docker-api: ## Start only the API service with docker compose
-	docker compose up --build api
-
-docker-down: ## Stop and remove containers
+docker-down: ## Stop and remove all containers
 	docker compose down
 
 # ─── Cleanup ──────────────────────────────────────────────────────────────────

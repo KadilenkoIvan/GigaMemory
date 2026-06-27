@@ -124,7 +124,9 @@ def _load_pipeline(config_path: str) -> tuple[Any, str]:
             s.get("slot_llm_load_quantization", "none") or "none"
         ),
         slot_llm_mode=str(s.get("slot_llm_mode", "local")),
-        slot_llm_api_url=str(s.get("slot_llm_api_url", "http://localhost:8001/v1")),
+        slot_llm_api_url=str(
+            s.get("slot_llm_api_url", "") or "http://localhost:8001/v1"
+        ),
         slot_llm_api_key=str(s.get("slot_llm_api_key", "EMPTY")),
         slot_select_max_tokens=int(s.get("slot_select_max_tokens", 220)),
         triplet_extract_max_tokens=int(s.get("triplet_extract_max_tokens", 512)),
@@ -772,6 +774,14 @@ def delete_dialogue(dialogue_id: str) -> JSONResponse:
         pipeline.clear_memory(dialogue_id)
     logger.info("Dialogue cleared dialogue_id=%s", dialogue_id)
     return JSONResponse({"dialogue_id": dialogue_id, "status": "cleared"})
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    """Liveness probe used by Docker healthcheck and load balancers."""
+    return JSONResponse(
+        {"status": "ok", "pipeline_loaded": _state.pipeline is not None}
+    )
 
 
 # ---------------------------------------------------------------------------
