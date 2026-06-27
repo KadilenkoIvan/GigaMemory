@@ -14,7 +14,7 @@ dependencies = [
     "sentence-transformers>=2.0",
     "datasets",
     "evaluate",
-    "numpy>=1.26",
+    "numpy>=2.0",
     "huggingface-hub",
     "accelerate",
     "pymorphy2",
@@ -56,6 +56,13 @@ api = [
     "matplotlib>=3.7",
     "networkx>=3.0",
 ]
+# vLLM inference server (Linux/GPU only; install separately in its own environment)
+# Used only as a server process — the Python client is the openai package (core dep).
+# Install on the inference server: pip install vllm
+# Then start with: make vllm   or   vllm serve <model> --port 8001
+vllm = [
+    "vllm>=0.8.0",
+]
 # Dev tools: linting, formatting, type checking, testing
 dev = [
     "pytest>=7.0",
@@ -82,6 +89,11 @@ explicit = true
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
+
+[tool.uv]
+override-dependencies = [
+    "numpy>=2.0",
+]
 
 [tool.uv.sources]
 # RAGU is a local editable package

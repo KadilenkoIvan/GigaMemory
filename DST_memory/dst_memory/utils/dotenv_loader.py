@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _dst_memory_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def load_dst_memory_dotenv() -> None:
@@ -27,5 +27,5 @@ def load_dst_memory_dotenv() -> None:
         val = val.strip()
         if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
             val = val[1:-1]
-        if key and key not in os.environ:
+        if key and not os.environ.get(key):
             os.environ[key] = val

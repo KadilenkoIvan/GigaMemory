@@ -21,14 +21,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import networkx as nx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
+
+from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
+
+load_dst_memory_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -98,6 +98,9 @@ def _load_pipeline(config_path: str) -> tuple[Any, str]:
         use_memory_gate=not bool(s.get("disable_memory_gate", False)),
         memory_gate_use_stub=bool(s.get("memory_gate_use_stub", False)),
         memory_strategy=str(s.get("memory_strategy", "relevant_slots_full")),
+        relevant_slots_always_include_identity=bool(
+            s.get("relevant_slots_always_include_identity", False)
+        ),
         llm_mode=str(s.get("llm_mode", "openrouter")),
         llm_api_url=str(s.get("llm_api_url", "https://openrouter.ai/api/v1")),
         llm_api_key=str(s.get("llm_api_key", "")),
@@ -119,6 +122,14 @@ def _load_pipeline(config_path: str) -> tuple[Any, str]:
         slot_llm_load_quantization=str(
             s.get("slot_llm_load_quantization", "none") or "none"
         ),
+        slot_llm_mode=str(s.get("slot_llm_mode", "local")),
+        slot_llm_api_url=str(s.get("slot_llm_api_url", "http://localhost:8001/v1")),
+        slot_llm_api_key=str(s.get("slot_llm_api_key", "EMPTY")),
+        slot_select_max_tokens=int(s.get("slot_select_max_tokens", 220)),
+        triplet_extract_max_tokens=int(s.get("triplet_extract_max_tokens", 512)),
+        conflict_max_tokens=int(s.get("conflict_max_tokens", 256)),
+        deletion_max_tokens=int(s.get("deletion_max_tokens", 256)),
+        memory_gate_max_tokens=int(s.get("memory_gate_max_tokens", 200)),
         use_ragu=True,
         ragu_embedder_model=str(s.get("ragu_embedder_model", "deepvk/USER-bge-m3")),
         ragu_storage_path=ragu_storage,
@@ -235,22 +246,178 @@ def _ttl_expires_at(ttl: str, created_at_datetime: str) -> str | None:
         return None
 
 
-def _slot_color_palette(slot_names: list[str]) -> dict[str, str]:
-    palette = [
-        "#E74C3C",
-        "#3498DB",
-        "#2ECC71",
-        "#F39C12",
-        "#9B59B6",
-        "#1ABC9C",
-        "#E67E22",
-        "#34495E",
-        "#E91E63",
-        "#00BCD4",
-    ]
-    return {
-        name: palette[i % len(palette)] for i, name in enumerate(sorted(slot_names))
-    }
+# ---------------------------------------------------------------------------
+# Graph visualization — replicates RAGU's knowledge-graph rendering logic
+# (scripts/visualize_knowledge_graph.py) but written standalone to avoid any
+# coupling with the RAGU package: nodes coloured by slot, sized by degree;
+# edges coloured by TTL; per-slot + TTL legends.
+# ---------------------------------------------------------------------------
+
+# Entities are scoped per slot (see _build_graph_model): every node belongs to
+# exactly one slot and is coloured by it. Fallback if a colour is ever missing.
+_DEFAULT_NODE_COLOR = "#BDC3C7"
+
+# Separator for slot-scoped node IDs.
+_NODE_ID_SEP = "\x00"
+
+# TTL → edge colour (green = long-lived, amber = medium, red = short-lived).
+_TTL_EDGE_COLORS: dict[str, str] = {
+    "inf": "#27AE60",
+    "1y": "#2ECC71",
+    "6m": "#A9DFBF",
+    "3m": "#F39C12",
+    "1m": "#E67E22",
+    "3w": "#E67E22",
+    "2w": "#E67E22",
+    "10d": "#E74C3C",
+    "3d": "#C0392B",
+    "1d": "#922B21",
+}
+_TTL_DEFAULT_EDGE_COLOR = "#95A5A6"
+
+_TTL_DISPLAY: dict[str, str] = {
+    "inf": "бессрочно",
+    "1y": "1 год",
+    "6m": "6 месяцев",
+    "3m": "3 месяца",
+    "1m": "1 месяц",
+    "3w": "3 недели",
+    "2w": "2 недели",
+    "10d": "10 дней",
+    "3d": "3 дня",
+    "1d": "1 день",
+}
+
+
+def _ttl_edge_color(ttl: str | None) -> str:
+    if not ttl:
+        return _TTL_DEFAULT_EDGE_COLOR
+    return _TTL_EDGE_COLORS.get(ttl, _TTL_DEFAULT_EDGE_COLOR)
+
+
+def _ttl_display(ttl: str | None) -> str:
+    if not ttl:
+        return "не задан"
+    return _TTL_DISPLAY.get(ttl, ttl)
+
+
+def _generate_distinct_colors(n: int) -> list[str]:
+    """Golden-ratio HSL palette — same approach RAGU uses for entity types."""
+    import colorsys
+
+    colors: list[str] = []
+    golden_ratio = 0.618033988749895
+    for i in range(n):
+        hue = (i * golden_ratio) % 1.0
+        saturation = 0.65 + (i % 3) * 0.1
+        lightness = 0.5 + (i % 2) * 0.1
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        colors.append(
+            f"#{int(rgb[0] * 255):02x}{int(rgb[1] * 255):02x}{int(rgb[2] * 255):02x}"
+        )
+    return colors
+
+
+def _build_slot_color_map(slot_names: set[str]) -> dict[str, str]:
+    """Map each slot to a distinct colour (golden-ratio palette, like RAGU)."""
+    ordered = sorted(slot_names)
+    palette = _generate_distinct_colors(len(ordered))
+    return {slot: palette[i] for i, slot in enumerate(ordered)}
+
+
+def _collect_active_facts(state: Any) -> list[tuple[str, str, str, str, str, str]]:
+    """Flatten active records → (subject, relation, object, slot, ttl, created)."""
+    facts: list[tuple[str, str, str, str, str, str]] = []
+    for slot_name, records in state.slots.items():
+        for r in records:
+            if r.is_active:
+                facts.append(
+                    (
+                        r.subject,
+                        r.relation,
+                        r.object,
+                        slot_name,
+                        getattr(r, "ttl", "inf"),
+                        getattr(r, "created_at_datetime", ""),
+                    )
+                )
+    return facts
+
+
+def _node_id(slot: str, entity: str) -> str:
+    return f"{slot}{_NODE_ID_SEP}{entity}"
+
+
+def _layout_disjoint(
+    graph: nx.DiGraph,
+) -> tuple[dict[str, tuple[float, float]], int, int]:
+    """Lay out each connected component (= one slot) in its own grid cell.
+
+    A plain spring_layout piles disconnected components on top of each other;
+    placing each component in a separate cell keeps the slots visually apart.
+    Returns (positions, cols, rows).
+    """
+    import math
+
+    components = sorted(
+        nx.connected_components(graph.to_undirected()), key=len, reverse=True
+    )
+    ncomp = max(1, len(components))
+    cols = max(1, math.ceil(math.sqrt(ncomp)))
+    rows = max(1, math.ceil(ncomp / cols))
+    # Spread nodes well within each cell (scale) and keep cells far enough apart
+    # (spacing) that neighbouring slot clusters never touch. spacing must stay
+    # comfortably above 2*scale so the cells cannot overlap.
+    scale = 1.6
+    spacing = 6.0
+
+    pos: dict[str, tuple[float, float]] = {}
+    for idx, comp in enumerate(components):
+        sub = graph.subgraph(comp)
+        sub_pos = nx.spring_layout(sub, seed=42, k=2.5, scale=scale)
+        cx = (idx % cols) * spacing
+        cy = -(idx // cols) * spacing
+        for node, (x, y) in sub_pos.items():
+            pos[node] = (cx + x, cy + y)
+    return pos, cols, rows
+
+
+def _build_graph_model(
+    facts: list[tuple[str, str, str, str, str, str]],
+) -> tuple[
+    dict[str, str],
+    dict[str, str],
+    dict[str, int],
+    list[tuple[str, str, str, str, str]],
+]:
+    """Entity-relation model à la RAGU, with per-slot node scoping.
+
+    Crucially, entities are NOT shared across slots: each slot gets its OWN copy
+    of every entity (including "пользователь"), keyed by an id of ``slot\\0entity``.
+    This makes the slots completely disjoint subgraphs that never intersect — the
+    same way RAGU renders a separate "user" hub per slot/cluster.
+
+    Returns (node_label, node_slot, degree, edges):
+      - node_label: node_id → display label (the bare entity name).
+      - node_slot:  node_id → owning slot (drives node colour / group).
+      - degree:     node_id → incident-edge count (drives node size).
+      - edges:      (subject_id, object_id, relation, slot, ttl).
+    """
+    node_label: dict[str, str] = {}
+    node_slot: dict[str, str] = {}
+    degree: dict[str, int] = {}
+    edges: list[tuple[str, str, str, str, str]] = []
+    for subj, rel, obj, slot, ttl, _created in facts:
+        s_id = _node_id(slot, subj)
+        o_id = _node_id(slot, obj)
+        node_label[s_id] = subj
+        node_label[o_id] = obj
+        node_slot[s_id] = slot
+        node_slot[o_id] = slot
+        degree[s_id] = degree.get(s_id, 0) + 1
+        degree[o_id] = degree.get(o_id, 0) + 1
+        edges.append((s_id, o_id, rel, slot, ttl))
+    return node_label, node_slot, degree, edges
 
 
 # ---------------------------------------------------------------------------
@@ -337,19 +504,25 @@ def get_graph_short(dialogue_id: str) -> JSONResponse:
 
 @app.get("/dialogue/{dialogue_id}/graph/image")
 def get_graph_image(dialogue_id: str) -> Response:
-    """Return the memory graph as a PNG image (networkx + matplotlib)."""
+    """Return the memory graph as a PNG image.
+
+    Same logical model as RAGU's interactive view: one node per entity, coloured
+    by its slot and sized by degree; edges coloured by TTL and labelled with the
+    relation. Rendered statically with networkx + matplotlib.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.patches as mpatches
+    import matplotlib.pyplot as plt
+
     pipeline = _require_pipeline()
     state = pipeline.dst.get_state(dialogue_id)
-
-    triplets: list[tuple[str, str, str, str]] = []
-    for slot_name, records in state.slots.items():
-        for r in records:
-            if r.is_active:
-                triplets.append((r.subject, r.relation, r.object, slot_name))
+    facts = _collect_active_facts(state)
 
     buf = io.BytesIO()
 
-    if not triplets:
+    if not facts:
         fig, ax = plt.subplots(figsize=(6, 3))
         ax.text(
             0.5,
@@ -366,37 +539,58 @@ def get_graph_image(dialogue_id: str) -> Response:
         buf.seek(0)
         return Response(content=buf.read(), media_type="image/png")
 
+    node_label, node_slot, degree, edges = _build_graph_model(facts)
+    slot_color = _build_slot_color_map(set(node_slot.values()))
+
     G = nx.DiGraph()
-    edge_labels: dict[tuple, str] = {}
-    slot_names = sorted({t[3] for t in triplets})
-    colors = _slot_color_palette(slot_names)
+    for node in node_slot:
+        G.add_node(node)
+
+    # Collapse parallel relations between the same pair into one labelled edge;
+    # edge colour comes from the TTL of that relation. Identical relations are
+    # de-duplicated so a repeated fact does not print "имя\nимя".
+    edge_label: dict[tuple[str, str], str] = {}
+    drawn_edges: list[tuple[str, str]] = []
     edge_colors: list[str] = []
-
-    for subj, rel, obj, slot in triplets:
-        G.add_node(subj)
-        G.add_node(obj)
-        key = (subj, obj)
-        if key in edge_labels:
-            edge_labels[key] += f"\n{rel}"
+    for s_id, o_id, rel, _slot, ttl in edges:
+        key = (s_id, o_id)
+        if key in edge_label:
+            if rel not in edge_label[key].split("\n"):
+                edge_label[key] += f"\n{rel}"
         else:
-            G.add_edge(subj, obj)
-            edge_labels[key] = rel
-        edge_colors.append(colors.get(slot, "#888888"))
+            edge_label[key] = rel
+            drawn_edges.append(key)
+            G.add_edge(s_id, o_id)
+            edge_colors.append(_ttl_edge_color(ttl))
 
-    n = len(G.nodes)
-    fig_w = max(9, n * 1.4)
-    fig_h = max(7, n * 1.0)
+    pos, cols, rows = _layout_disjoint(G)
+    fig_w = max(9, cols * 5.5)
+    fig_h = max(7, rows * 5.0)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
 
-    pos = nx.spring_layout(G, seed=42, k=2.5 / max(1, n**0.5))
+    max_deg = max(degree.values()) if degree else 1
+    node_colors = [
+        slot_color.get(node_slot[node], _DEFAULT_NODE_COLOR) for node in G.nodes
+    ]
+    node_sizes = [800 + 2200 * (degree.get(node, 1) / max_deg) for node in G.nodes]
+    labels = {node: node_label[node] for node in G.nodes}
 
     nx.draw_networkx_nodes(
-        G, pos, node_color="#AED6F1", node_size=2000, ax=ax, alpha=0.9
+        G,
+        pos,
+        node_color=node_colors,
+        node_size=node_sizes,
+        ax=ax,
+        alpha=0.95,
+        edgecolors="#333333",
     )
-    nx.draw_networkx_labels(G, pos, font_size=9, font_weight="bold", ax=ax)
+    nx.draw_networkx_labels(
+        G, pos, labels=labels, font_size=9, font_weight="bold", ax=ax
+    )
     nx.draw_networkx_edges(
         G,
         pos,
+        edgelist=drawn_edges,
         edge_color=edge_colors,
         width=2.0,
         arrows=True,
@@ -406,16 +600,38 @@ def get_graph_image(dialogue_id: str) -> Response:
         min_source_margin=20,
         min_target_margin=20,
     )
-    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_size=8, ax=ax)
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_label, font_size=8, ax=ax)
 
-    legend_patches = [
-        plt.matplotlib.patches.Patch(facecolor=colors[s], label=s) for s in slot_names
+    # Two legends: slot → node colour, TTL → edge colour.
+    slot_patches = [
+        mpatches.Patch(facecolor=slot_color[s], label=s) for s in sorted(slot_color)
     ]
-    ax.legend(handles=legend_patches, loc="upper left", fontsize=8, framealpha=0.8)
-    ax.set_title(f"Memory: {dialogue_id}  ({len(triplets)} facts)", fontsize=11)
+    ttls_present = sorted({ttl for *_rest, ttl in edges})
+    ttl_patches = [
+        mpatches.Patch(
+            facecolor=_ttl_edge_color(t), label=f"TTL {t} ({_ttl_display(t)})"
+        )
+        for t in ttls_present
+    ]
+    leg1 = ax.legend(
+        handles=slot_patches,
+        loc="upper left",
+        fontsize=8,
+        framealpha=0.85,
+        title="Слоты (узлы)",
+    )
+    ax.add_artist(leg1)
+    ax.legend(
+        handles=ttl_patches,
+        loc="lower left",
+        fontsize=8,
+        framealpha=0.85,
+        title="TTL (рёбра)",
+    )
+
+    ax.set_title(f"Memory: {dialogue_id}  ({len(facts)} facts)", fontsize=11)
     ax.axis("off")
     fig.tight_layout()
-
     fig.savefig(buf, format="png", dpi=120, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
@@ -433,14 +649,9 @@ def get_graph_html(dialogue_id: str) -> Response:
 
     pipeline = _require_pipeline()
     state = pipeline.dst.get_state(dialogue_id)
+    facts = _collect_active_facts(state)
 
-    triplets: list[tuple[str, str, str, str]] = []
-    for slot_name, records in state.slots.items():
-        for r in records:
-            if r.is_active:
-                triplets.append((r.subject, r.relation, r.object, slot_name))
-
-    if not triplets:
+    if not facts:
         html = (
             "<!DOCTYPE html><html><body style='font-family:sans-serif;padding:40px'>"
             f"<h2>No memory yet for <code>{dialogue_id}</code></h2>"
@@ -448,69 +659,106 @@ def get_graph_html(dialogue_id: str) -> Response:
         )
         return Response(content=html, media_type="text/html; charset=utf-8")
 
-    slot_names = sorted({t[3] for t in triplets})
-    colors = _slot_color_palette(slot_names)
+    node_label, node_slot, degree, edges = _build_graph_model(facts)
+    slot_color = _build_slot_color_map(set(node_slot.values()))
 
     net = Network(
-        height="700px",
+        height="900px",
         width="100%",
         directed=True,
         notebook=False,
-        bgcolor="#1a1a2e",
-        font_color="#e0e0e0",
+        bgcolor="#222222",
+        font_color="white",
     )
     net.set_options(
-        """{
-        "physics": {"stabilization": {"iterations": 120}},
-        "edges": {"smooth": {"type": "dynamic"}, "arrows": {"to": {"enabled": true}}},
-        "nodes": {"font": {"size": 14}},
-        "interaction": {"hover": true, "tooltipDelay": 100}
-    }"""
+        """
+    {
+        "nodes": {"font": {"size": 14, "face": "arial"}, "borderWidth": 2, "borderWidthSelected": 4},
+        "edges": {"color": {"inherit": false}, "smooth": {"type": "continuous", "forceDirection": "none"}, "font": {"size": 10, "align": "middle"}},
+        "physics": {"enabled": true, "solver": "forceAtlas2Based", "forceAtlas2Based": {"gravitationalConstant": -50, "centralGravity": 0.01, "springLength": 150, "springConstant": 0.08, "damping": 0.4}, "stabilization": {"enabled": true, "iterations": 200, "updateInterval": 25}},
+        "interaction": {"hover": true, "tooltipDelay": 100, "hideEdgesOnDrag": true}
+    }
+    """
     )
 
-    seen_nodes: set[str] = set()
-    for subj, rel, obj, slot in triplets:
-        color = colors.get(slot, "#888888")
-        if subj not in seen_nodes:
-            net.add_node(
-                subj,
-                label=subj,
-                title=f"slot: {slot}",
-                color=color,
-                size=20,
-            )
-            seen_nodes.add(subj)
-        if obj not in seen_nodes:
-            net.add_node(
-                obj,
-                label=obj,
-                title=f"slot: {slot}",
-                color=color,
-                size=16,
-            )
-            seen_nodes.add(obj)
-        net.add_edge(subj, obj, label=rel, title=rel, color=color)
+    # Nodes: one per (slot, entity), coloured by slot, sized by degree, grouped
+    # by slot. Because ids are slot-scoped, every slot keeps its own "user" node
+    # and the slots render as completely disjoint clusters.
+    max_deg = max(degree.values()) if degree else 1
+    min_size, max_size = 15.0, 50.0
+    for node, slot in node_slot.items():
+        deg = degree.get(node, 1)
+        size = min_size + (max_size - min_size) * (deg / max_deg)
+        color = slot_color.get(slot, _DEFAULT_NODE_COLOR)
+        label = node_label[node]
+        title = (
+            f"<b>Сущность:</b> {label}<br>"
+            f"<b>Слот:</b> {slot}<br>"
+            f"<b>Связей:</b> {deg}"
+        )
+        net.add_node(
+            node,
+            label=label,
+            title=title,
+            size=size,
+            color=color,
+            shape="dot",
+            group=slot,
+        )
 
-    # Legend as an HTML overlay (pyvis doesn't have native legend support)
-    legend_items = "".join(
-        f'<span style="margin-right:12px">'
-        f'<span style="display:inline-block;width:12px;height:12px;'
-        f'background:{colors[s]};border-radius:50%;margin-right:4px"></span>'
-        f"{s}</span>"
-        for s in slot_names
+    # Edges: coloured by TTL, labelled with the relation. Skip exact duplicate
+    # (subject, object, relation) edges so a repeated fact is not drawn twice.
+    seen_edges: set[tuple[str, str, str]] = set()
+    for s_id, o_id, rel, slot, ttl in edges:
+        if (s_id, o_id, rel) in seen_edges:
+            continue
+        seen_edges.add((s_id, o_id, rel))
+        title = (
+            f"<b>Отношение:</b> {rel}<br>"
+            f"<b>Слот:</b> {slot}<br>"
+            f"<b>TTL:</b> {ttl} ({_ttl_display(ttl)})"
+        )
+        net.add_edge(s_id, o_id, label=rel, title=title, color=_ttl_edge_color(ttl))
+
+    # Legend overlay: slot colours (nodes) + TTL colours (edges) + stats.
+    slot_legend = "".join(
+        f'<div style="display:flex;align-items:center;margin:3px 0;">'
+        f'<span style="display:inline-block;width:14px;height:14px;'
+        f'background:{slot_color[s]};border-radius:50%;margin-right:8px;"></span>'
+        f"<span>{s}</span></div>"
+        for s in sorted(slot_color)
     )
-    title_bar = (
-        f'<div style="position:fixed;top:0;left:0;right:0;z-index:999;'
-        f"background:rgba(26,26,46,.9);color:#e0e0e0;padding:8px 16px;"
-        f'font-family:sans-serif;font-size:13px">'
-        f"<b>Memory graph:</b> {dialogue_id} &nbsp;|&nbsp; {len(triplets)} facts"
-        f"&nbsp;&nbsp;{legend_items}"
-        f"</div>"
+    ttls_present = sorted({ttl for *_rest, ttl in edges})
+    ttl_legend = "".join(
+        f'<div style="margin:2px 0;">'
+        f'<span style="color:{_ttl_edge_color(t)}">&#9632;</span> '
+        f"{t} — {_ttl_display(t)}</div>"
+        for t in ttls_present
+    )
+    legend_html = (
+        '<div id="legend" style="position:absolute;top:10px;right:10px;'
+        "background:rgba(0,0,0,0.85);padding:15px;border-radius:8px;color:white;"
+        "font-family:Arial,sans-serif;font-size:12px;max-height:600px;"
+        'overflow-y:auto;z-index:1000;min-width:200px;">'
+        f'<div style="font-weight:bold;margin-bottom:8px;font-size:14px;">'
+        f"Memory: {dialogue_id}</div>"
+        '<div style="font-weight:bold;margin-bottom:6px;">Слоты (цвет узлов)</div>'
+        f"{slot_legend}"
+        '<hr style="border-color:#444;margin:10px 0;">'
+        '<div style="font-weight:bold;margin-bottom:6px;">TTL (цвет рёбер)</div>'
+        f"{ttl_legend}"
+        '<hr style="border-color:#444;margin:10px 0;">'
+        f'<div style="font-size:11px;color:#aaa;">'
+        f"<div>Узлов: {len(node_slot)}</div>"
+        f"<div>Рёбер: {len(edges)}</div>"
+        f"<div>Фактов: {len(facts)}</div>"
+        '<div style="margin-top:5px;">Размер узла = число связей</div>'
+        "<div>Цвет ребра = TTL</div></div>"
+        "</div>"
     )
 
     raw_html = net.generate_html()
-    # Inject title bar right after <body>
-    html_out = raw_html.replace("<body>", f"<body>\n{title_bar}", 1)
+    html_out = raw_html.replace("</body>", legend_html + "</body>", 1)
     return Response(content=html_out, media_type="text/html; charset=utf-8")
 
 

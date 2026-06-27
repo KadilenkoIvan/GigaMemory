@@ -4,10 +4,11 @@
     "importance_threshold": 0.25,
     "retrieval_top_k": 5,
     "graph_top_k_records": 20,
-    "recent_history_pairs": 5,
+    "recent_history_pairs": 0,
     "disable_memory_gate": false,
     "memory_gate_use_stub": false,
-    "memory_strategy": "relevant_slots_full",
+    "memory_strategy": "full_graph_json",
+    "relevant_slots_always_include_identity": true,
 
     "llm_mode": "openrouter",
     "llm_api_url": "https://openrouter.ai/api/v1",
@@ -19,11 +20,20 @@
     "llm_enable_thinking": false,
 
     "slot_use_stub": false,
-    "slot_model_path": "Qwen/Qwen3.5-9B-Instruct",
+    "slot_model_path": "models/Qwen3.5-4B-AWQ",
     "slot_max_slots_per_message": 5,
     "slot_model_enable_thinking": false,
     "slot_llm_inject_no_think_prompt": true,
     "slot_llm_load_quantization": "none",
+    "slot_llm_mode": "vllm",
+    "slot_llm_api_url": "http://localhost:8001/v1",
+    "slot_llm_api_key": "EMPTY",
+
+    "slot_select_max_tokens": 512,
+    "triplet_extract_max_tokens": 2048,
+    "conflict_max_tokens": 512,
+    "deletion_max_tokens": 512,
+    "memory_gate_max_tokens": 512,
 
     "use_ragu": true,
     "ragu_embedder_model": "deepvk/USER-bge-m3",
@@ -42,7 +52,7 @@
     "triplet_fallback_on_empty": true,
     "prompt_language": "ru",
     "use_dataset_datetime": false,
-    "force_infinite_ttl": true
+    "force_infinite_ttl": false
   },
   "api": {
     "session_dir": "api_sessions",
