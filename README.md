@@ -51,6 +51,97 @@ make start
 > Слот-модель и финальная LLM настраиваются независимо через `run_config_api.json` (`slot_llm_mode: "local"|"vllm"`).  
 > Для быстрой проверки без GPU и LLM: `make smoke`.
 
+## Docker
+
+Контейнеризированный запуск — рекомендуемый способ для продакшена и для Windows (где vLLM требует WSL2, а API запускается в Docker).
+
+### Требования
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) или Docker Engine + Compose plugin (Linux)
+- NVIDIA GPU + [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) — только для режима `--profile vllm`
+
+### Первый запуск
+
+```bash
+# 1. Скопировать шаблон переменных окружения
+cp .env.example .env
+
+# 2. Заполнить обязательные поля в .env:
+#    OPENROUTER_API_KEY=sk-or-...
+#    MODEL_DIR=D:/Users/me/GigaMemory/models   (если нужен встроенный vLLM)
+```
+
+### Режимы запуска
+
+| Сценарий | Команда | Когда использовать |
+|---|---|---|
+| API + внешний vLLM | `docker compose up` | vLLM уже запущен (в WSL2 или на другой машине) |
+| API + vLLM вместе | `docker compose --profile vllm up` | Хотите всё в Docker, GPU доступен |
+| CPU-only (без GPU) | `TORCH_EXTRA=cpu docker compose up` | Тест без GPU; слот-модель через внешний OpenRouter |
+
+```bash
+# Makefile-обёртки:
+make docker-up          # API only (bring your own vLLM)
+make docker-up-vllm     # vLLM + API (требует GPU и MODEL_DIR)
+make docker-up-cpu      # CPU-only API
+make docker-down        # остановить всё
+```
+
+### Ключевые переменные .env
+
+```dotenv
+OPENROUTER_API_KEY=sk-or-...        # обязательно — финальная LLM
+HF_TOKEN=hf_...                     # необязательно — для приватных моделей HF
+
+# Порт, на котором API доступен снаружи (default 8000)
+API_PORT=8000
+
+# ── vLLM (только --profile vllm) ──────────────────────────────────────────
+MODEL_DIR=./models              # путь к папке с моделями на хосте
+MODEL_NAME=Qwen3.5-4B-AWQ      # имя подпапки внутри MODEL_DIR
+VLLM_GPU_UTIL=0.65              # доля VRAM под KV-кеш
+VLLM_MAX_LEN=8192               # максимальная длина контекста
+VLLM_PORT=8001                  # порт vLLM на хосте
+
+# ── Внешний vLLM (без --profile vllm) ─────────────────────────────────────
+# Docker Desktop (Windows/Mac):
+SLOT_LLM_API_URL=http://host.docker.internal:8001/v1
+# Linux native Docker:
+# SLOT_LLM_API_URL=http://172.17.0.1:8001/v1
+```
+
+### Как это работает
+
+```
+                    ┌─────────────────────────────────────┐
+                    │  docker compose --profile vllm up   │
+                    │                                     │
+                    │  ┌─────────┐      ┌─────────────┐  │
+ пользователь ──────►  │   api   │─────►│    vllm     │  │
+  :8000               │  :8000  │      │  :8000 int  │  │
+                    │  └─────────┘      └─────────────┘  │
+                    │       │                  │          │
+                    │  api_sessions       vllm_cache      │
+                    │    (volume)          (volume)       │
+                    └─────────────────────────────────────┘
+
+ Без --profile vllm:  api → SLOT_LLM_API_URL (внешний сервер)
+```
+
+- **`api`** — GigaMemory FastAPI-сервер; всегда запускается; healthcheck на `/health`
+- **`vllm`** — слот-модель (Qwen3.5-4B-AWQ по умолчанию); запускается только с `--profile vllm`; `api` ждёт его готовности через healthcheck перед стартом
+- **`api_sessions`** (volume) — DST-граф, RAGU storage, состояния диалогов; переживает рестарт контейнера
+- **`vllm_cache`** (volume) — KV-кеш vLLM; ускоряет холодный старт при перезапуске
+
+### Пересборка после изменений кода
+
+```bash
+docker compose up --build                    # пересобрать api-образ
+docker compose --profile vllm up --build     # пересобрать + запустить vllm
+```
+
+---
+
 ## Архитектура пайплайна
 
 ```mermaid

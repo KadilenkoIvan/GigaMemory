@@ -1,0 +1,42 @@
+.git
+.gitignore
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+*.egg-info
+dist
+build
+
+# Runtime artifacts — don't ship into image
+api_sessions
+DST_memory/api_sessions
+DST_memory/smoke_output.json
+DST_memory/smoke_*.json
+
+# Development / docs
+validation
+dataset_generation
+slot_eval
+*.md
+!README.md
+
+# Datasets and models — large, not needed in image
+data
+models
+
+# Local config / secrets
+.env
+DST_memory/.env
+
+# IDE
+.vscode
+.idea
+*.iml
