@@ -31,6 +31,7 @@
 | `disable_memory_gate` | bool | отключить LLM gate для `relevant_slots_full` |
 | `memory_gate_use_stub` | bool | использовать эвристику вместо локальной gate LLM |
 | `memory_strategy` | str | `full_graph_json` \| `relevant_slots_full` \| `topk_graph_records` |
+| `relevant_slots_always_include_identity` | bool | только для `relevant_slots_full`: при `true` слот `IDENTITY` всегда добавляется в контекст финальной LLM, даже если memory gate его не выбрал или вовсе отклонил память (срабатывает лишь если у `IDENTITY` есть активные факты). Обходной путь для маленьких slot-моделей, недобирающих `IDENTITY`. Default `false` |
 | `llm_mode` | str | `openrouter` \| `api` \| `puter` \| `stub` \| `local` |
 | `llm_api_url` | str | OpenAI-compatible endpoint |
 | `llm_api_key` | str | API key, можно через `${OPENROUTER_API_KEY}` |
@@ -50,8 +51,16 @@
 | `slot_max_slots_per_message` | int | лимит слотов на сообщение |
 | `slot_model_enable_thinking` | bool | гибридный thinking у Qwen3/3.5 для slot-стека (default `false`) |
 | `slot_llm_inject_no_think_prompt` | bool | при `true` (default) к system добавляется `/no_think`, если thinking выключен; при `false` только `enable_thinking` в chat template |
-| `slot_llm_lm_format_enforcer` | bool | JSON schema через `lm-format-enforcer` для slot selector и triplet extraction (default `false`) |
-| `slot_llm_load_quantization` | str | квантизация BitsAndBytes для **той же** локальной модели, что `slot_model_path` (слоты, триплеты, memory gate, конфликты): `none` (default), `8bit`, `4bit`. Нужны **CUDA** и пакет `bitsandbytes`. Отдельно от `llm_load_quantization` (финальная LLM). |
+| `slot_llm_lm_format_enforcer` | bool | JSON schema через `lm-format-enforcer` для slot selector и triplet extraction (default `false`); при `slot_llm_mode=vllm` не нужен — используется `guided_json` |
+| `slot_llm_load_quantization` | str | квантизация BitsAndBytes **только** для `slot_llm_mode=local`: `none` (default), `8bit`, `4bit`. При `slot_llm_mode=vllm` квантизацию задаёт сам vLLM-сервер при старте. |
+| `slot_llm_mode` | str | backend слот-модели: `"local"` — загружает модель в процесс через HF transformers; `"vllm"` — вызывает внешний vLLM-сервер через OpenAI API (рекомендуется для production) |
+| `slot_llm_api_url` | str | URL vLLM-сервера (только при `slot_llm_mode=vllm`): `"http://localhost:8001/v1"` |
+| `slot_llm_api_key` | str | API-ключ vLLM-сервера; по умолчанию `"EMPTY"` (vLLM не требует auth) |
+| `slot_select_max_tokens` | int | бюджет выходных токенов для выбора слотов (default `220`) |
+| `triplet_extract_max_tokens` | int | бюджет выходных токенов для экстракции триплетов (default `512`) |
+| `conflict_max_tokens` | int | бюджет выходных токенов для конфликт-резолвера (default `256`) |
+| `deletion_max_tokens` | int | бюджет выходных токенов для отдельного deletion-вызова (default `256`) |
+| `memory_gate_max_tokens` | int | бюджет выходных токенов для memory gate (default `200`) |
 | `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
 | `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
 | `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
@@ -129,6 +138,10 @@
 Формат ответа LLM-конфликт-резолвера:
 - Поддерживаются оба варианта JSON: `{"deactivate":[...], "skip_new":[...]}` и сокращённый `{"deactivate":[...]}`.
 - При отсутствии `skip_new` парсер трактует его как пустой список (без ошибки пайплайна).
+
+## Бюджеты генерации slot-модели
+
+`*_max_tokens` задают `max_new_tokens` для каждого вызова slot-модели (раньше были захардкожены в коде клиентов). Бюджет должен вмещать **весь** JSON-ответ; слишком малый — обрывает вывод (`finish_reason=length` в логах vLLM). Дефолты подобраны под режим **без** thinking (`slot_model_enable_thinking=false`), когда модель сразу выдаёт JSON. Если включить thinking или ожидать много слотов/триплетов — поднимите соответствующее значение. Цепочка проброса: JSON-конфиг → `PipelineConfig` → конструкторы клиентов (`SlotSelectClient`, `TripletExtractionClient`, `TripletConflictClient`, `TripletDeletionClient`, `MemoryGateClient`).
 
 ## `api`
 

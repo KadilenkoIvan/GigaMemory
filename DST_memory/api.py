@@ -5,6 +5,7 @@ Endpoints:
   GET    /dialogue/{dialogue_id}/graph          — full memory graph (JSON)
   GET    /dialogue/{dialogue_id}/graph_short    — compact: active triplets + TTL deadline only
   GET    /dialogue/{dialogue_id}/graph/image    — memory graph as PNG
+  GET    /dialogue/{dialogue_id}/graph/html     — interactive memory graph (pyvis HTML)
   DELETE /dialogue/{dialogue_id}               — reset dialogue memory
 """
 
