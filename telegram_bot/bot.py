@@ -9,8 +9,10 @@ single-language, so switching language clears the user's memory.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from io import BytesIO
+from typing import Any
 
 from telegram import (
     BotCommand,
@@ -60,6 +62,14 @@ def _store(context: ContextTypes.DEFAULT_TYPE) -> UserStore:
 def _dialogue_id(update: Update) -> str:
     user = update.effective_user
     return str(user.id) if user else "anonymous"
+
+
+async def _safe_delete(message: Any) -> None:
+    """Delete a status message, ignoring failures (already gone, no rights…)."""
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001 — best-effort cleanup of a transient message
+        pass
 
 
 def _language_keyboard() -> InlineKeyboardMarkup:
@@ -304,22 +314,44 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     uid = _dialogue_id(update)
-    cfg = _cfg(context)
     lang = _store(context).get_language(uid)
+    text = update.message.text
+    client = _client(context)
 
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
-    try:
-        answer = await _client(context).send_message(
-            uid,
-            update.message.text,
-            parallel_write=cfg.parallel_write,
-            prompt_language=lang,
-        )
-    except GigaMemoryAPIError:
+
+    # Two transient status messages so the user sees both things are happening
+    # (answer generation and memory update) and doesn't think the bot froze.
+    # Each is deleted as soon as its own phase finishes.
+    status_answer = await update.message.reply_text(texts.WAIT_ANSWER)
+    status_memory = await update.message.reply_text(texts.WAIT_MEMORY)
+
+    async def _answer_phase() -> str:
+        try:
+            return await client.answer(uid, text, prompt_language=lang)
+        finally:
+            await _safe_delete(status_answer)
+
+    async def _memory_phase() -> None:
+        try:
+            await client.remember(uid, text, prompt_language=lang)
+        finally:
+            await _safe_delete(status_memory)
+
+    answer_res, memory_res = await asyncio.gather(
+        _answer_phase(), _memory_phase(), return_exceptions=True
+    )
+
+    if isinstance(answer_res, BaseException):
+        # No answer to deliver — surface the failure (status messages already gone).
+        logger.error("Answer phase failed", exc_info=answer_res)
         await update.message.reply_text(texts.api_unavailable())
         return
+    if isinstance(memory_res, BaseException):
+        # Memory failed but the answer is fine — log and still reply.
+        logger.error("Memory phase failed", exc_info=memory_res)
 
-    await update.message.reply_text(answer or "…")
+    await update.message.reply_text(answer_res or "…")
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -51,6 +51,10 @@ MENU_KEYBOARD = [
 
 MENU_HINT = "Готово! Команды всегда под рукой — кнопки ниже 👇"
 
+# Transient status messages shown while a request is processed, then deleted.
+WAIT_ANSWER = "⏳ Думаю над ответом…"
+WAIT_MEMORY = "🧠 Обновляю память…"
+
 
 def greeting(has_language: bool, current_lang: str) -> str:
     base = (

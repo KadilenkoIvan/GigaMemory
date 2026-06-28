@@ -480,6 +480,37 @@ def post_message(dialogue_id: str, req: MessageRequest) -> MessageResponse:
     return MessageResponse(dialogue_id=dialogue_id, answer=answer)
 
 
+@app.post("/dialogue/{dialogue_id}/answer", response_model=MessageResponse)
+def post_answer(dialogue_id: str, req: MessageRequest) -> MessageResponse:
+    """Generate the assistant answer only — no memory write.
+
+    Lets a client drive the answer and the memory write as two independent
+    phases (e.g. to show separate progress to the user). Mirrors the
+    parallel_write path, where the answer does not wait for the current message
+    to be written to memory.
+    """
+    pipeline = _require_pipeline()
+    answer = pipeline.answer(
+        dialogue_id, req.content, prompt_language=req.prompt_language
+    )
+    pipeline.add_recent_pair(dialogue_id, req.content, answer)
+    return MessageResponse(dialogue_id=dialogue_id, answer=answer)
+
+
+@app.post("/dialogue/{dialogue_id}/remember")
+def post_remember(dialogue_id: str, req: MessageRequest) -> dict:
+    """Write the user message to memory only — no answer generated."""
+    from dst_memory.core.models import Message
+
+    pipeline = _require_pipeline()
+    msg = Message(role="user", content=req.content)
+    result = pipeline.write_to_memory(
+        dialogue_id, msg, prompt_language=req.prompt_language
+    )
+    _save_session(dialogue_id)
+    return {"dialogue_id": dialogue_id, "saved": bool(result.get("saved", False))}
+
+
 @app.get("/dialogue/{dialogue_id}/graph")
 def get_graph(dialogue_id: str) -> JSONResponse:
     """Return the full memory graph as JSON (active facts with all metadata)."""

@@ -48,6 +48,33 @@ class GigaMemoryClient:
         data = await self._post(f"/dialogue/{dialogue_id}/message", payload)
         return str(data.get("answer", ""))
 
+    async def answer(
+        self,
+        dialogue_id: str,
+        content: str,
+        *,
+        prompt_language: str | None = None,
+    ) -> str:
+        """Generate the answer only (no memory write)."""
+        payload: dict[str, Any] = {"content": content}
+        if prompt_language:
+            payload["prompt_language"] = prompt_language
+        data = await self._post(f"/dialogue/{dialogue_id}/answer", payload)
+        return str(data.get("answer", ""))
+
+    async def remember(
+        self,
+        dialogue_id: str,
+        content: str,
+        *,
+        prompt_language: str | None = None,
+    ) -> None:
+        """Write the message to memory only (no answer)."""
+        payload: dict[str, Any] = {"content": content}
+        if prompt_language:
+            payload["prompt_language"] = prompt_language
+        await self._post(f"/dialogue/{dialogue_id}/remember", payload)
+
     async def graph_short(self, dialogue_id: str) -> dict[str, Any]:
         return await self._get_json(f"/dialogue/{dialogue_id}/graph_short")
 
