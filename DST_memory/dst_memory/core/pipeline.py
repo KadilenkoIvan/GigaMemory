@@ -573,7 +573,12 @@ class DSTMemoryPipeline:
         logger.info("Local models reloaded")
 
     def answer(
-        self, dialogue_id: str, question: str, *, _unload_models: bool = False
+        self,
+        dialogue_id: str,
+        question: str,
+        *,
+        _unload_models: bool = False,
+        prompt_language: str | None = None,
     ) -> str:
         """
         Generate answer using final LLM.
@@ -582,6 +587,9 @@ class DSTMemoryPipeline:
             dialogue_id: Dialogue ID
             question: User question
             _unload_models: Internal flag to trigger model unloading before final LLM
+            prompt_language: Optional per-call answer language ("ru"|"en"); when
+                None the pipeline's configured prompt_language is used. Only the
+                final-LLM answer is affected — memory extraction is unchanged.
 
         Returns:
             Answer text from final LLM
@@ -617,6 +625,7 @@ class DSTMemoryPipeline:
             memory_context=memory_context,
             recent_pairs=self.recent_pairs(dialogue_id),
             clock_display=clock_display,
+            prompt_language=prompt_language,
         )
         logger.info(
             "Final LLM answer dialogue_id=%s: %s", dialogue_id, answer_text[:500]

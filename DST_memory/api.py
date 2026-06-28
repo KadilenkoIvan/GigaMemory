@@ -209,6 +209,10 @@ app = FastAPI(
 class MessageRequest(BaseModel):
     content: str
     parallel_write: bool = False
+    # Optional per-request answer language ("ru" | "en"). When omitted the
+    # server's configured prompt_language is used. Affects only the final-LLM
+    # answer; memory extraction always runs in the pipeline's configured language.
+    prompt_language: str | None = None
 
 
 class MessageResponse(BaseModel):
@@ -453,13 +457,17 @@ def post_message(dialogue_id: str, req: MessageRequest) -> MessageResponse:
 
         t = threading.Thread(target=_bg_write, daemon=True)
         t.start()
-        answer = pipeline.answer(dialogue_id, req.content)
+        answer = pipeline.answer(
+            dialogue_id, req.content, prompt_language=req.prompt_language
+        )
         pipeline.add_recent_pair(dialogue_id, req.content, answer)
     else:
         lock = _state.lock_for(dialogue_id)
         with lock:
             pipeline.write_to_memory(dialogue_id, msg)
-            answer = pipeline.answer(dialogue_id, req.content)
+            answer = pipeline.answer(
+                dialogue_id, req.content, prompt_language=req.prompt_language
+            )
             pipeline.add_recent_pair(dialogue_id, req.content, answer)
             _save_session(dialogue_id)
 

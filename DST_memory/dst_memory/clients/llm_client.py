@@ -126,6 +126,12 @@ class FinalLLMClient:
         self._final_llm_prompts = importlib.import_module(
             f"dst_memory.prompts.{self._prompt_lang}.final_llm_messages"
         )
+        # Cache of final-LLM prompt modules per language so answers can be
+        # produced in a per-request language (e.g. Telegram users who pick "en")
+        # without rebuilding the pipeline. Seeded with the default language.
+        self._prompt_module_cache: dict[str, Any] = {
+            self._prompt_lang: self._final_llm_prompts
+        }
         # Last sent messages (system + user) — populated on every generate() call.
         # Used for logging to *_logs.json.
         self.parallel_write_mode = bool(parallel_write_mode)
@@ -197,12 +203,30 @@ class FinalLLMClient:
             self._tokenizer_limit = False
             return None
 
+    def _prompts_for_lang(self, prompt_language: str | None) -> Any:
+        """Return the final-LLM prompt module for *prompt_language*.
+
+        Falls back to the client's default language when None/empty. Loaded
+        modules are cached so a per-request language costs one import at most.
+        """
+        if not prompt_language:
+            return self._final_llm_prompts
+        lang = normalize_prompt_language(prompt_language)
+        cached = self._prompt_module_cache.get(lang)
+        if cached is None:
+            cached = importlib.import_module(
+                f"dst_memory.prompts.{lang}.final_llm_messages"
+            )
+            self._prompt_module_cache[lang] = cached
+        return cached
+
     def build_messages(
         self,
         question: str,
         memory_context: Any,
         recent_pairs: list[dict[str, str]] | None = None,
         clock_display: str | None = None,
+        prompt_language: str | None = None,
     ) -> list[dict[str, str]]:
         """Build the chat messages list without sending. Exposed for logging."""
         import datetime
@@ -212,7 +236,7 @@ class FinalLLMClient:
         else:
             now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        pm = self._final_llm_prompts
+        pm = self._prompts_for_lang(prompt_language)
         system = pm.chat_api_output_policy() + pm.final_llm_system_prompt(now_str)
         if self.realtime_mode and hasattr(pm, "realtime_mode_notice"):
             system += pm.realtime_mode_notice()
@@ -237,9 +261,14 @@ class FinalLLMClient:
         memory_context: Any,
         recent_pairs: list[dict[str, str]] | None = None,
         clock_display: str | None = None,
+        prompt_language: str | None = None,
     ) -> str:
         messages = self.build_messages(
-            question, memory_context, recent_pairs or [], clock_display=clock_display
+            question,
+            memory_context,
+            recent_pairs or [],
+            clock_display=clock_display,
+            prompt_language=prompt_language,
         )
         self._last_prompt_chars_before_clamp = _messages_char_count(messages)
         if self.mode != "stub" and self.max_context_tokens > 0:
