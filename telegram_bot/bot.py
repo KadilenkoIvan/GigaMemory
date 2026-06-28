@@ -1,8 +1,10 @@
 """GigaMemory Telegram bot — thin client over the REST API.
 
 Each Telegram user gets their own memory graph (dialogue_id = user id). The bot
-UI is Russian; the per-user ru/en choice only switches the assistant's answer
-language (forwarded to the API as prompt_language).
+UI is Russian; the per-user ru/en choice (forwarded to the API as
+prompt_language) sets the language the whole system works in — memory
+extraction, the read gate and the assistant's answer. The graph must stay
+single-language, so switching language clears the user's memory.
 """
 
 from __future__ import annotations
@@ -78,6 +80,30 @@ def _main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def _lang_confirm_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Confirm clearing memory when switching language."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🗑️ Сменить и очистить", callback_data=f"langclear:{lang}"
+                ),
+                InlineKeyboardButton("Отмена", callback_data="langcancel"),
+            ]
+        ]
+    )
+
+
+async def _has_memory(context: ContextTypes.DEFAULT_TYPE, uid: str) -> bool | None:
+    """True/False if the user has stored facts; None if the API is unreachable."""
+    try:
+        data = await _client(context).graph_short(uid)
+    except GigaMemoryAPIError:
+        return None
+    slots = data.get("slots", {})
+    return any(slots.values()) if isinstance(slots, dict) else bool(slots)
+
+
 # ── Command handlers ───────────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     store = _store(context)
@@ -114,11 +140,75 @@ async def on_language_choice(
     _, _, lang = (query.data or "").partition(":")
     if lang not in ("ru", "en"):
         return
-    _store(context).set_language(query.from_user.id, lang)
-    await query.edit_message_text(texts.language_set(lang), parse_mode=ParseMode.HTML)
-    # An inline callback can't carry a reply keyboard, so send the persistent
-    # menu keyboard as a follow-up message.
-    await query.message.reply_text(texts.MENU_HINT, reply_markup=_main_keyboard())
+    store = _store(context)
+    uid = str(query.from_user.id)
+
+    # Initial setup (no language chosen yet): just record it — no memory to clear.
+    if not store.has_language(uid):
+        store.set_language(uid, lang)
+        await query.edit_message_text(
+            texts.language_set(lang), parse_mode=ParseMode.HTML
+        )
+        # An inline callback can't carry a reply keyboard, so send the persistent
+        # menu keyboard as a follow-up message.
+        await query.message.reply_text(texts.MENU_HINT, reply_markup=_main_keyboard())
+        return
+
+    current = store.get_language(uid)
+    if lang == current:
+        await query.edit_message_text(
+            texts.language_unchanged(lang), parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Changing language. The memory graph must stay single-language, so switching
+    # requires clearing it — but only if there is anything stored.
+    has_mem = await _has_memory(context, uid)
+    if has_mem is None:
+        await query.edit_message_text(texts.api_unavailable())
+        return
+    if not has_mem:
+        store.set_language(uid, lang)
+        await query.edit_message_text(
+            texts.language_set(lang), parse_mode=ParseMode.HTML
+        )
+        return
+
+    await query.edit_message_text(
+        texts.language_change_warning(current, lang),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_lang_confirm_keyboard(lang),
+    )
+
+
+async def on_language_clear_confirm(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, _, lang = (query.data or "").partition(":")
+    if lang not in ("ru", "en"):
+        return
+    uid = str(query.from_user.id)
+    try:
+        await _client(context).forget(uid)
+    except GigaMemoryAPIError:
+        await query.edit_message_text(texts.api_unavailable())
+        return
+    _store(context).set_language(uid, lang)
+    await query.edit_message_text(
+        texts.language_changed_cleared(lang), parse_mode=ParseMode.HTML
+    )
+
+
+async def on_language_cancel(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        texts.language_change_cancelled(), parse_mode=ParseMode.HTML
+    )
 
 
 async def cmd_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -258,6 +348,10 @@ def build_application(cfg: BotConfig) -> Application:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("forget", cmd_forget))
     app.add_handler(CallbackQueryHandler(on_language_choice, pattern=r"^lang:"))
+    app.add_handler(
+        CallbackQueryHandler(on_language_clear_confirm, pattern=r"^langclear:")
+    )
+    app.add_handler(CallbackQueryHandler(on_language_cancel, pattern=r"^langcancel$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.add_error_handler(on_error)
     return app

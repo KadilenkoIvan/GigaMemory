@@ -17,7 +17,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..clients.serving import GenerationConfig, SlotServing
 from ..core.graph_backend import GraphEdge
-from ..prompts.loader import PromptModules, load_prompt_modules
+from ..prompts.loader import (
+    PromptModules,
+    load_prompt_modules,
+    normalize_prompt_language,
+)
 from ..prompts.parsers import parse_conflict_response
 from .triplet_client import ExtractedTriplet
 
@@ -74,18 +78,27 @@ class TripletConflictClient:
         self.allow_multi_relation_same_object = allow_multi_relation_same_object
         self.prompt_language = prompt_language
         self.max_new_tokens = int(max_new_tokens)
-        self._prompt_modules: PromptModules | None = None
+        self._prompt_modules_cache: dict[str, PromptModules] = {}
 
         if not use_stub and serving is None:
             raise ValueError(
                 "TripletConflictClient requires serving when use_stub is False"
             )
 
+    def _modules(self, prompt_language: str | None = None) -> PromptModules:
+        lang = normalize_prompt_language(prompt_language or self.prompt_language)
+        cached = self._prompt_modules_cache.get(lang)
+        if cached is None:
+            cached = load_prompt_modules(lang)
+            self._prompt_modules_cache[lang] = cached
+        return cached
+
     def resolve(
         self,
         slot_name: str,
         existing_edges: list[GraphEdge],
         new_triplets: list[ExtractedTriplet],
+        prompt_language: str | None = None,
     ) -> ConflictResolution:
         """
         Returns which existing record_ids to deactivate and which new triplet
@@ -219,7 +232,9 @@ class TripletConflictClient:
                 deactivate_ids=deactivate, skip_new_indices=skip_new
             )
 
-        llm_result = self._call_llm(slot_name, llm_existing, llm_new)
+        llm_result = self._call_llm(
+            slot_name, llm_existing, llm_new, prompt_language=prompt_language
+        )
         if llm_result:
             deactivate.extend(
                 rid for rid in llm_result["deactivate"] if rid not in handled_existing
@@ -233,11 +248,11 @@ class TripletConflictClient:
         slot_name: str,
         existing: list[dict[str, Any]],
         new_triplets: list[dict[str, Any]],
+        prompt_language: str | None = None,
     ) -> dict[str, Any] | None:
         assert self.serving is not None
-        if self._prompt_modules is None:
-            self._prompt_modules = load_prompt_modules(self.prompt_language)
-        messages = self._prompt_modules.conflict_messages.build_conflict_messages(
+        pm = self._modules(prompt_language)
+        messages = pm.conflict_messages.build_conflict_messages(
             slot_name, existing, new_triplets
         )
         cfg = GenerationConfig(

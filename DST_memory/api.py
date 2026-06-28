@@ -209,9 +209,11 @@ app = FastAPI(
 class MessageRequest(BaseModel):
     content: str
     parallel_write: bool = False
-    # Optional per-request answer language ("ru" | "en"). When omitted the
-    # server's configured prompt_language is used. Affects only the final-LLM
-    # answer; memory extraction always runs in the pipeline's configured language.
+    # Optional per-request language ("ru" | "en"). When omitted the server's
+    # configured prompt_language is used. Applies to the whole request: memory
+    # extraction (write), the read-path gate, and the final-LLM answer. A
+    # dialogue's graph must stay single-language — the caller (bot) enforces
+    # this by clearing memory when the user switches language.
     prompt_language: str | None = None
 
 
@@ -448,7 +450,9 @@ def post_message(dialogue_id: str, req: MessageRequest) -> MessageResponse:
 
         def _bg_write() -> None:
             try:
-                pipeline.write_to_memory(dialogue_id, msg)
+                pipeline.write_to_memory(
+                    dialogue_id, msg, prompt_language=req.prompt_language
+                )
                 _save_session(dialogue_id)
             except Exception as e:
                 logger.error(
@@ -464,7 +468,9 @@ def post_message(dialogue_id: str, req: MessageRequest) -> MessageResponse:
     else:
         lock = _state.lock_for(dialogue_id)
         with lock:
-            pipeline.write_to_memory(dialogue_id, msg)
+            pipeline.write_to_memory(
+                dialogue_id, msg, prompt_language=req.prompt_language
+            )
             answer = pipeline.answer(
                 dialogue_id, req.content, prompt_language=req.prompt_language
             )

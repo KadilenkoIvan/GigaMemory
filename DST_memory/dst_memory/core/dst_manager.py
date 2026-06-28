@@ -453,6 +453,7 @@ class DSTManager:
         dialogue_id: str,
         user_text: str,
         fact_created_at_iso: str | None = None,
+        prompt_language: str | None = None,
     ) -> tuple[list[MemoryFact], list[str]]:
         state = self.get_state(dialogue_id)
         state.step += 1
@@ -469,7 +470,9 @@ class DSTManager:
             self._sync_expirations_to_ragu(dialogue_id, expired)
 
         created: list[MemoryFact] = []
-        selected_slots = self.slot_selector.select_slots(user_text)
+        selected_slots = self.slot_selector.select_slots(
+            user_text, prompt_language=prompt_language
+        )
         no_slots_selected = len(selected_slots) == 0
         triplets: list[ExtractedTriplet] = []
         inline_deletions_by_slot: dict[str, list[DeletionSignal]] = defaultdict(list)
@@ -487,13 +490,19 @@ class DSTManager:
                 inline_mode = self.triplet_deletion_mode == "llm_inline"
                 slot_triplets, slot_deletions = (
                     self.triplet_extractor.extract_for_slot_with_context(
-                        user_text, slot, existing_lines, enable_deletion=inline_mode
+                        user_text,
+                        slot,
+                        existing_lines,
+                        enable_deletion=inline_mode,
+                        prompt_language=prompt_language,
                     )
                 )
                 if inline_mode:
                     inline_deletions_by_slot[slot].extend(slot_deletions)
             else:
-                slot_triplets = self.triplet_extractor.extract_for_slot(user_text, slot)
+                slot_triplets = self.triplet_extractor.extract_for_slot(
+                    user_text, slot, prompt_language=prompt_language
+                )
             triplets.extend(slot_triplets)
 
         if no_slots_selected:
@@ -504,7 +513,9 @@ class DSTManager:
                     dialogue_id,
                     state.step,
                 )
-                triplets = self.triplet_extractor.extract(user_text)
+                triplets = self.triplet_extractor.extract(
+                    user_text, prompt_language=prompt_language
+                )
             else:
                 logger.info(
                     "Slot selector returned no slots dialogue_id=%s step=%d → skipping (fallback disabled)",
@@ -519,7 +530,9 @@ class DSTManager:
                     dialogue_id,
                     state.step,
                 )
-                triplets = self.triplet_extractor.extract(user_text)
+                triplets = self.triplet_extractor.extract(
+                    user_text, prompt_language=prompt_language
+                )
             else:
                 logger.info(
                     "All per-slot extractions returned empty dialogue_id=%s step=%d → skipping (fallback disabled)",
@@ -737,7 +750,10 @@ class DSTManager:
 
                 if all_existing:
                     resolution = self.conflict_resolver.resolve(
-                        slot, all_existing, slot_triplets
+                        slot,
+                        all_existing,
+                        slot_triplets,
+                        prompt_language=prompt_language,
                     )
 
                     # Build record_id → triplet text map for logging

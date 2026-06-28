@@ -1,7 +1,9 @@
 """Russian UI texts and human-readable formatting for memory / stats.
 
 The bot interface is always Russian (per product decision). The ru/en choice
-only switches the *answer* language the API generates (prompt_language).
+sets the language the system works in (prompt_language) — memory extraction
+and the answer. The memory graph is single-language, so changing it clears the
+user's memory.
 """
 
 from __future__ import annotations
@@ -94,8 +96,9 @@ INFO = (
     "Финальная LLM — через OpenRouter.\n\n"
     "<b>О выборе языка (/language).</b> Он <b>не меняет интерфейс бота</b> — "
     "интерфейс всегда на русском. Выбор определяет, <b>с каким языком система "
-    "работает внутри</b>: на каком языке ассистент формирует ответ. Сама память "
-    "(факты в графе) хранится независимо от этого выбора.\n\n"
+    "работает внутри</b>: на этом языке извлекаются и хранятся факты в памяти и "
+    "формируется ответ ассистента. Граф памяти одноязычный, поэтому смена языка "
+    "при непустой памяти потребует её очистки (бот спросит подтверждение).\n\n"
     "Граф можно посмотреть: /graph (картинка), /graph_html (интерактивный файл), "
     "/memory (текст). Сбросить — /forget."
 )
@@ -104,8 +107,10 @@ INFO = (
 def choose_language_prompt() -> str:
     return (
         "Выберите язык. Он влияет не на интерфейс бота (он остаётся на русском), "
-        "а на то, с каким языком система работает внутри — на каком языке "
-        "ассистент формирует ответ."
+        "а на то, с каким языком система работает внутри: на этом языке "
+        "извлекаются и хранятся факты в памяти и формируется ответ ассистента.\n\n"
+        "⚠️ Граф памяти одноязычный. Если в памяти уже есть факты, смена языка "
+        "потребует её очистки — бот спросит подтверждение."
     )
 
 
@@ -113,8 +118,33 @@ def language_set(lang: str) -> str:
     return (
         f"✅ Язык: <b>{LANG_LABELS.get(lang, lang)}</b>.\n"
         "Интерфейс бота остаётся на русском — меняется язык, с которым система "
-        "работает внутри (язык ответа ассистента)."
+        "работает внутри (язык памяти и ответов)."
     )
+
+
+def language_unchanged(lang: str) -> str:
+    return f"Язык уже <b>{LANG_LABELS.get(lang, lang)}</b> — ничего не изменилось."
+
+
+def language_change_warning(current: str, new: str) -> str:
+    return (
+        f"⚠️ Смена языка с <b>{LANG_LABELS.get(current, current)}</b> на "
+        f"<b>{LANG_LABELS.get(new, new)}</b>.\n\n"
+        "Факты в памяти хранятся на текущем языке, и граф памяти должен быть "
+        "одноязычным. Поэтому смена языка <b>очистит вашу память</b> — придётся "
+        "рассказать о себе заново.\n\nПродолжить?"
+    )
+
+
+def language_changed_cleared(lang: str) -> str:
+    return (
+        f"✅ Язык изменён на <b>{LANG_LABELS.get(lang, lang)}</b>, память очищена.\n"
+        "Начнём с чистого листа — расскажите о себе."
+    )
+
+
+def language_change_cancelled() -> str:
+    return "Отменено. Язык и память не изменились."
 
 
 def forget_done() -> str:

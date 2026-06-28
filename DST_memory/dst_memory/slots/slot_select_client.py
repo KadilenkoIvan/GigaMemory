@@ -6,7 +6,11 @@ from typing import Any, List, Optional
 
 from ..clients.lm_json_schemas import SLOT_SELECT_JSON_SCHEMA
 from ..clients.serving import GenerationConfig, SlotServing
-from ..prompts.loader import PromptModules, load_prompt_modules
+from ..prompts.loader import (
+    PromptModules,
+    load_prompt_modules,
+    normalize_prompt_language,
+)
 from .ontology import DEFAULT_USER_SLOTS, SlotOntology, filter_resolve_slots
 
 logger = logging.getLogger(__name__)
@@ -37,14 +41,23 @@ class SlotSelectClient:
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
         )
-        self._prompt_modules: PromptModules | None = None
+        self._prompt_modules_cache: dict[str, PromptModules] = {}
 
-    def select_slots(self, user_message: str) -> list[str]:
+    def _modules(self, prompt_language: str | None = None) -> PromptModules:
+        lang = normalize_prompt_language(prompt_language or self.prompt_language)
+        cached = self._prompt_modules_cache.get(lang)
+        if cached is None:
+            cached = load_prompt_modules(lang)
+            self._prompt_modules_cache[lang] = cached
+        return cached
+
+    def select_slots(
+        self, user_message: str, prompt_language: str | None = None
+    ) -> list[str]:
         if self.use_stub:
             return []
-        if self._prompt_modules is None:
-            self._prompt_modules = load_prompt_modules(self.prompt_language)
-        messages = self._prompt_modules.slot_select_messages.build_slot_select_messages(
+        pm = self._modules(prompt_language)
+        messages = pm.slot_select_messages.build_slot_select_messages(
             user_message,
             ontology_slots=self.ontology.slot_names,
             max_slots=self.max_slots,

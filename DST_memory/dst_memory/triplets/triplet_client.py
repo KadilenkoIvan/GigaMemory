@@ -12,7 +12,11 @@ from ..clients.lm_json_schemas import (
 )
 from ..clients.serving import GenerationConfig, SlotServing
 from ..core.models import VALID_TTL_VALUES
-from ..prompts.loader import PromptModules, load_prompt_modules
+from ..prompts.loader import (
+    PromptModules,
+    load_prompt_modules,
+    normalize_prompt_language,
+)
 from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
 
 logger = logging.getLogger(__name__)
@@ -69,7 +73,7 @@ class TripletExtractionClient:
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
         )
-        self._prompt_modules: PromptModules | None = None
+        self._prompt_modules_cache: dict[str, PromptModules] = {}
 
         if self.use_stub:
             logger.info("Triplet extractor in STUB mode")
@@ -84,20 +88,36 @@ class TripletExtractionClient:
                 ttl_mode,
             )
 
-    def extract(self, user_message: str) -> list[ExtractedTriplet]:
+    def _modules(self, prompt_language: str | None = None) -> PromptModules:
+        lang = normalize_prompt_language(prompt_language or self.prompt_language)
+        cached = self._prompt_modules_cache.get(lang)
+        if cached is None:
+            cached = load_prompt_modules(lang)
+            self._prompt_modules_cache[lang] = cached
+        return cached
+
+    def extract(
+        self, user_message: str, prompt_language: str | None = None
+    ) -> list[ExtractedTriplet]:
         triplets, _ = self._extract_impl(
-            user_message, slot_name=None, existing_triplets=None
+            user_message,
+            slot_name=None,
+            existing_triplets=None,
+            prompt_language=prompt_language,
         )
         return triplets
 
     def extract_for_slot(
-        self, user_message: str, slot_name: str
+        self, user_message: str, slot_name: str, prompt_language: str | None = None
     ) -> list[ExtractedTriplet]:
         slot = self.ontology.resolve(slot_name)
         if not slot:
             return []
         triplets, _ = self._extract_impl(
-            user_message, slot_name=slot, existing_triplets=None
+            user_message,
+            slot_name=slot,
+            existing_triplets=None,
+            prompt_language=prompt_language,
         )
         return triplets
 
@@ -105,13 +125,17 @@ class TripletExtractionClient:
         self,
         user_message: str,
         existing_triplets: list[str],
+        prompt_language: str | None = None,
     ) -> tuple[list[ExtractedTriplet], list[DeletionSignal]]:
         """
         Извлечение триплетов с передачей контекста текущих фактов (без указания слота).
         Возвращает (новые триплеты, сигналы удаления).
         """
         return self._extract_impl(
-            user_message, slot_name=None, existing_triplets=existing_triplets
+            user_message,
+            slot_name=None,
+            existing_triplets=existing_triplets,
+            prompt_language=prompt_language,
         )
 
     def extract_for_slot_with_context(
@@ -120,6 +144,7 @@ class TripletExtractionClient:
         slot_name: str,
         existing_triplets: list[str],
         enable_deletion: bool = False,
+        prompt_language: str | None = None,
     ) -> tuple[list[ExtractedTriplet], list[DeletionSignal]]:
         """
         Извлечение триплетов для конкретного слота с передачей контекста.
@@ -135,6 +160,7 @@ class TripletExtractionClient:
             slot_name=slot,
             existing_triplets=existing_triplets,
             enable_deletion=enable_deletion,
+            prompt_language=prompt_language,
         )
 
     def _extract_impl(
@@ -143,6 +169,7 @@ class TripletExtractionClient:
         slot_name: str | None,
         existing_triplets: list[str] | None,
         enable_deletion: bool | None = None,
+        prompt_language: str | None = None,
     ) -> tuple[list[ExtractedTriplet], list[DeletionSignal]]:
         if self.use_stub:
             return [], []
@@ -152,9 +179,8 @@ class TripletExtractionClient:
         # Контекст (existing_triplets) и инструкции удаления — независимы.
         if enable_deletion is None:
             enable_deletion = False
-        if self._prompt_modules is None:
-            self._prompt_modules = load_prompt_modules(self.prompt_language)
-        messages = self._prompt_modules.triplet_messages.build_triplet_messages(
+        pm = self._modules(prompt_language)
+        messages = pm.triplet_messages.build_triplet_messages(
             user_message,
             slot_name=slot_name,
             include_slot=slot_name is None,
