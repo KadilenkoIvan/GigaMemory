@@ -59,7 +59,7 @@ def load_config() -> BotConfig:
             "/"
         ),
         default_language=lang,
-        parallel_write=os.environ.get("BOT_PARALLEL_WRITE", "false").strip().lower()
+        parallel_write=os.environ.get("BOT_PARALLEL_WRITE", "true").strip().lower()
         in _TRUE,
         request_timeout=float(os.environ.get("BOT_REQUEST_TIMEOUT", "180")),
         state_path=os.environ.get("BOT_STATE_PATH", "bot_state/users.json"),

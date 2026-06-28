@@ -121,7 +121,7 @@ services:
       # Inside the compose network the API is reachable by service name.
       - GIGAMEMORY_API_URL=${GIGAMEMORY_API_URL:-http://api:8000}
       - BOT_DEFAULT_LANGUAGE=${BOT_DEFAULT_LANGUAGE:-ru}
-      - BOT_PARALLEL_WRITE=${BOT_PARALLEL_WRITE:-false}
+      - BOT_PARALLEL_WRITE=${BOT_PARALLEL_WRITE:-true}
       - BOT_REQUEST_TIMEOUT=${BOT_REQUEST_TIMEOUT:-180}
       - BOT_STATE_PATH=/app/bot_state/users.json
     volumes:

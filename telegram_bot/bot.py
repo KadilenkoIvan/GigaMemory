@@ -11,8 +11,10 @@ import logging
 from io import BytesIO
 
 from telegram import (
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
     Update,
 )
 from telegram.constants import ChatAction, ParseMode
@@ -69,6 +71,13 @@ def _language_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _main_keyboard() -> ReplyKeyboardMarkup:
+    """Persistent reply keyboard with the main commands as tappable buttons."""
+    return ReplyKeyboardMarkup(
+        texts.MENU_KEYBOARD, resize_keyboard=True, is_persistent=True
+    )
+
+
 # ── Command handlers ───────────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     store = _store(context)
@@ -76,11 +85,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     has_lang = store.has_language(uid)
     text = texts.greeting(has_lang, store.get_language(uid))
     if not has_lang:
+        # First show the language choice (inline); the persistent menu keyboard
+        # is sent right after the user picks a language (on_language_choice).
         await update.message.reply_text(
             text, parse_mode=ParseMode.HTML, reply_markup=_language_keyboard()
         )
     else:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=_main_keyboard()
+        )
 
 
 async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -103,6 +116,9 @@ async def on_language_choice(
         return
     _store(context).set_language(query.from_user.id, lang)
     await query.edit_message_text(texts.language_set(lang), parse_mode=ParseMode.HTML)
+    # An inline callback can't carry a reply keyboard, so send the persistent
+    # menu keyboard as a follow-up message.
+    await query.message.reply_text(texts.MENU_HINT, reply_markup=_main_keyboard())
 
 
 async def cmd_graph(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -173,10 +189,30 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(texts.forget_done())
 
 
+# Reply-keyboard button label → the command handler it should trigger.
+_BUTTON_HANDLERS = {
+    "🧠 Память": cmd_memory,
+    "📊 Статистика": cmd_stats,
+    "🕸️ Граф": cmd_graph,
+    "🌐 Граф HTML": cmd_graph_html,
+    "🌍 Язык": cmd_language,
+    "🗑️ Забыть": cmd_forget,
+    "ℹ️ О боте": cmd_info,
+}
+
+
 # ── Plain text → conversation ──────────────────────────────────────────────
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
         return
+
+    # A tap on a menu button arrives as plain text — route it to its handler
+    # instead of treating it as a message for the assistant.
+    button_handler = _BUTTON_HANDLERS.get(update.message.text.strip())
+    if button_handler is not None:
+        await button_handler(update, context)
+        return
+
     uid = _dialogue_id(update)
     cfg = _cfg(context)
     lang = _store(context).get_language(uid)
@@ -200,8 +236,15 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error("Unhandled error", exc_info=context.error)
 
 
+async def _post_init(app: Application) -> None:
+    """Register the native command menu (the "☰ Menu" button)."""
+    await app.bot.set_my_commands(
+        [BotCommand(name, desc) for name, desc in texts.BOT_COMMANDS]
+    )
+
+
 def build_application(cfg: BotConfig) -> Application:
-    app = Application.builder().token(cfg.token).build()
+    app = Application.builder().token(cfg.token).post_init(_post_init).build()
     app.bot_data[_CFG] = cfg
     app.bot_data[_CLIENT] = GigaMemoryClient(cfg.api_url, timeout=cfg.request_timeout)
     app.bot_data[_STORE] = UserStore(cfg.state_path, cfg.default_language)
