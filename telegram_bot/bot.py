@@ -9,7 +9,6 @@ single-language, so switching language clears the user's memory.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from io import BytesIO
 from typing import Any
@@ -326,32 +325,27 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     status_answer = await update.message.reply_text(texts.WAIT_ANSWER)
     status_memory = await update.message.reply_text(texts.WAIT_MEMORY)
 
-    async def _answer_phase() -> str:
-        try:
-            return await client.answer(uid, text, prompt_language=lang)
-        finally:
-            await _safe_delete(status_answer)
-
+    # Memory runs independently in the background so it never delays the answer.
+    # Its status message is removed when the write finishes, on its own schedule.
     async def _memory_phase() -> None:
         try:
             await client.remember(uid, text, prompt_language=lang)
+        except GigaMemoryAPIError:
+            logger.error("Memory phase failed dialogue_id=%s", uid)
         finally:
             await _safe_delete(status_memory)
 
-    answer_res, memory_res = await asyncio.gather(
-        _answer_phase(), _memory_phase(), return_exceptions=True
-    )
+    context.application.create_task(_memory_phase(), update=update)
 
-    if isinstance(answer_res, BaseException):
-        # No answer to deliver — surface the failure (status messages already gone).
-        logger.error("Answer phase failed", exc_info=answer_res)
+    # Answer phase — deliver as soon as it is ready, without waiting for memory.
+    try:
+        answer = await client.answer(uid, text, prompt_language=lang)
+    except GigaMemoryAPIError:
+        await _safe_delete(status_answer)
         await update.message.reply_text(texts.api_unavailable())
         return
-    if isinstance(memory_res, BaseException):
-        # Memory failed but the answer is fine — log and still reply.
-        logger.error("Memory phase failed", exc_info=memory_res)
-
-    await update.message.reply_text(answer_res or "…")
+    await _safe_delete(status_answer)
+    await update.message.reply_text(answer or "…")
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
