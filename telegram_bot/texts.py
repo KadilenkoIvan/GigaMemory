@@ -8,9 +8,10 @@ user's memory.
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
-LANG_LABELS = {"ru": "Русский 🇷🇺", "en": "English 🇬🇧"}
+LANG_LABELS = {"ru": "Русский 🇷🇺", "en": "English 🇬🇧 (recommended)"}
 
 # TTL label → human-readable Russian text (mirrors api.py _TTL_DISPLAY).
 TTL_DISPLAY = {
@@ -34,6 +35,7 @@ BOT_COMMANDS = [
     ("start", "Начало и приветствие"),
     ("info", "Как это работает"),
     ("memory", "Факты из памяти (текстом)"),
+    ("context", "Что LLM помнит из переписки"),
     ("stats", "Статистика памяти"),
     ("graph", "Граф знаний картинкой"),
     ("graph_html", "Интерактивный граф (файл)"),
@@ -43,10 +45,10 @@ BOT_COMMANDS = [
 
 # Persistent reply keyboard — buttons shown under the input field.
 MENU_KEYBOARD = [
-    ["🧠 Память", "📊 Статистика"],
-    ["🕸️ Граф", "🌐 Граф HTML"],
-    ["🌍 Язык", "🗑️ Забыть"],
-    ["ℹ️ О боте"],
+    ["🧠 Память", "💬 Контекст"],
+    ["📊 Статистика", "🕸️ Граф"],
+    ["🌐 Граф HTML", "🌍 Язык"],
+    ["🗑️ Забыть", "ℹ️ О боте"],
 ]
 
 MENU_HINT = "Готово! Команды всегда под рукой — кнопки ниже 👇"
@@ -62,7 +64,8 @@ def greeting(has_language: bool, current_lang: str) -> str:
         "Просто общайтесь со мной обычными сообщениями. Я извлекаю из них факты "
         "о вас (имя, работа, увлечения, питомцы и т.д.), строю из них "
         "<b>граф знаний</b> и учитываю его в следующих ответах — даже когда "
-        "история диалога давно ушла за пределы окна контекста модели.\n\n"
+        "история диалога давно ушла за пределы окна контекста модели.\n"
+        "<b>Модель получает только 5 последних сообщений из контекста, остальную информацию она берёт из системы памяти.</b>\n\n"
         "Команды: /info — как это работает · /graph — граф картинкой · "
         "/memory — факты текстом · /stats — статистика · /forget — сброс памяти · "
         "/language — сменить язык."
@@ -197,6 +200,32 @@ def format_memory(slots: dict[str, list[dict[str, Any]]]) -> str:
     text = "\n".join(lines).rstrip()
     if len(text) > TELEGRAM_MAX_LEN:
         text = text[: TELEGRAM_MAX_LEN - 60].rstrip() + "\n\n… (список усечён)"
+    return text
+
+
+def format_context(pairs: list[dict[str, str]], limit: int) -> str:
+    """Render the recent dialogue turns the final LLM sees directly (raw context)."""
+    header = (
+        "💬 <b>Контекст диалога</b> — что модель видит напрямую\n\n"
+        "Это последние реплики переписки, которые передаются финальной LLM "
+        "«как есть». Всё остальное, что модель «помнит», она берёт из системы "
+        "памяти (граф фактов) — его показывает /memory.\n"
+    )
+    if not pairs:
+        return (
+            header + "\nПока в контексте ничего нет — напишите пару сообщений, и они "
+            "появятся здесь."
+        )
+
+    out = [header + f"\nВ контексте пар «вопрос-ответ»: {len(pairs)} (лимит: {limit})"]
+    for i, p in enumerate(pairs, 1):
+        u = html.escape((p.get("user") or "").strip())
+        a = html.escape((p.get("assistant") or "").strip())
+        out.append(f"<b>{i}.</b> 👤 {u}\n🤖 {a}")
+
+    text = "\n\n".join(out).rstrip()
+    if len(text) > TELEGRAM_MAX_LEN:
+        text = text[: TELEGRAM_MAX_LEN - 60].rstrip() + "\n\n… (история усечена)"
     return text
 
 

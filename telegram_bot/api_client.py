@@ -78,6 +78,10 @@ class GigaMemoryClient:
     async def graph_short(self, dialogue_id: str) -> dict[str, Any]:
         return await self._get_json(f"/dialogue/{dialogue_id}/graph_short")
 
+    async def context_pairs(self, dialogue_id: str) -> dict[str, Any]:
+        """Recent conversation turns the final LLM sees directly (+ configured limit)."""
+        return await self._get_json(f"/dialogue/{dialogue_id}/context")
+
     async def graph_image(self, dialogue_id: str) -> bytes:
         return await self._get_bytes(f"/dialogue/{dialogue_id}/graph/image")
 

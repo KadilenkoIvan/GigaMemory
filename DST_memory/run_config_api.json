@@ -4,7 +4,7 @@
     "importance_threshold": 0.25,
     "retrieval_top_k": 5,
     "graph_top_k_records": 20,
-    "recent_history_pairs": 10,
+    "recent_history_pairs": 5,
     "disable_memory_gate": false,
     "memory_gate_use_stub": false,
     "memory_strategy": "full_graph_json",

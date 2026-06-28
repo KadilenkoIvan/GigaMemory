@@ -519,6 +519,22 @@ def get_graph(dialogue_id: str) -> JSONResponse:
     return JSONResponse({"dialogue_id": dialogue_id, "slots": slots})
 
 
+@app.get("/dialogue/{dialogue_id}/context")
+def get_context(dialogue_id: str) -> JSONResponse:
+    """Return the recent conversation turns passed verbatim to the final LLM.
+
+    These are what the model "remembers" directly from the dialogue window, as
+    opposed to facts retrieved from the memory graph (see /graph_short). ``limit``
+    is the configured number of pairs kept in that window.
+    """
+    pipeline = _require_pipeline()
+    pairs = pipeline.recent_pairs(dialogue_id)
+    limit = int(getattr(pipeline.config, "recent_history_pairs", 0))
+    return JSONResponse(
+        {"dialogue_id": dialogue_id, "recent_pairs": pairs, "limit": limit}
+    )
+
+
 @app.get("/dialogue/{dialogue_id}/graph_short")
 def get_graph_short(dialogue_id: str) -> JSONResponse:
     """Return a compact memory graph: only active triplets per slot with TTL deadline.

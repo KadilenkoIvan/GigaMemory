@@ -266,6 +266,19 @@ async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = _dialogue_id(update)
+    try:
+        data = await _client(context).context_pairs(uid)
+    except GigaMemoryAPIError:
+        await update.message.reply_text(texts.api_unavailable())
+        return
+    await update.message.reply_text(
+        texts.format_context(data.get("recent_pairs", []), int(data.get("limit", 0))),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = _dialogue_id(update)
     try:
@@ -291,6 +304,7 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # Reply-keyboard button label → the command handler it should trigger.
 _BUTTON_HANDLERS = {
     "🧠 Память": cmd_memory,
+    "💬 Контекст": cmd_context,
     "📊 Статистика": cmd_stats,
     "🕸️ Граф": cmd_graph,
     "🌐 Граф HTML": cmd_graph_html,
@@ -371,6 +385,7 @@ def build_application(cfg: BotConfig) -> Application:
     app.add_handler(CommandHandler("graph", cmd_graph))
     app.add_handler(CommandHandler("graph_html", cmd_graph_html))
     app.add_handler(CommandHandler("memory", cmd_memory))
+    app.add_handler(CommandHandler("context", cmd_context))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("forget", cmd_forget))
     app.add_handler(CallbackQueryHandler(on_language_choice, pattern=r"^lang:"))
