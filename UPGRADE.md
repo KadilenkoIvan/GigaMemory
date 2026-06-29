@@ -265,7 +265,7 @@ GigaMemory как прослойка между пользователем и л
   ↓
 Этап 2 — FastAPI DONE
   ↓
-Этап 3 — Telegram-бот TODO
+Этап 3 — Telegram-бот DONE
   ↓
 Этап 4 — DS артефакты (notebook + tracking) TODO
   ↓

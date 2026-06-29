@@ -15,7 +15,9 @@ import io
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -42,6 +44,7 @@ logger = logging.getLogger(__name__)
 class _State:
     pipeline: Any = None
     session_dir: str = ""
+    ragu_tmpdir: str = ""  # ephemeral RAGU storage, removed on shutdown
     _dialogue_locks: dict[str, threading.Lock] = {}
     _locks_mutex: threading.Lock = threading.Lock()
 
@@ -86,9 +89,17 @@ def _load_pipeline(config_path: str) -> tuple[Any, str]:
     api = subsection(raw, "api")
 
     session_dir = str(api.get("session_dir", "") or "")
-    ragu_storage = str(
-        api.get("ragu_storage_path", "") or s.get("ragu_storage_path", "") or ""
-    )
+
+    # RAGU in the long-lived API server is embedder-only: the final-LLM read path
+    # builds memory context from the per-dialogue DST state (full_graph_json),
+    # never from RAGU's graph/vector search. So we deliberately do NOT persist the
+    # RAGU index into api_sessions/ (which is reserved for per-dialogue state.json)
+    # — a single shared store there would mix every dialogue's triplets, grow
+    # unbounded, and survive /forget. Instead we hand RAGU an ephemeral temp dir
+    # that is removed on shutdown. (RAGU's KV/vector backends are file-based, so a
+    # folder must exist; it just lives outside the project and is throwaway.)
+    ragu_storage = tempfile.mkdtemp(prefix="gigamemory_ragu_")
+    _state.ragu_tmpdir = ragu_storage
 
     cfg = PipelineConfig(
         importance_model_path=str(s.get("importance_model_path", "")),
@@ -189,6 +200,9 @@ async def lifespan(app: FastAPI):
     logger.info("Pipeline ready. session_dir=%r", _state.session_dir or "(none)")
     yield
     logger.info("GigaMemory API shutting down")
+    if _state.ragu_tmpdir:
+        shutil.rmtree(_state.ragu_tmpdir, ignore_errors=True)
+        logger.info("Removed ephemeral RAGU storage %s", _state.ragu_tmpdir)
 
 
 app = FastAPI(
@@ -828,7 +842,11 @@ def get_graph_html(dialogue_id: str) -> Response:
 
 @app.delete("/dialogue/{dialogue_id}")
 def delete_dialogue(dialogue_id: str) -> JSONResponse:
-    """Clear all memory (DST state + RAGU graph) for the given dialogue."""
+    """Clear the per-dialogue DST memory state (the API's source of truth).
+
+    RAGU here is ephemeral, embedder-only scratch storage that no read path
+    queries, so there is nothing dialogue-scoped to clear in it.
+    """
     pipeline = _require_pipeline()
     lock = _state.lock_for(dialogue_id)
     with lock:
