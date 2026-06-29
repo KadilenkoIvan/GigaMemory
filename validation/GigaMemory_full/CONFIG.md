@@ -93,4 +93,5 @@ python validate_longmemeval.py --validation-mode judge_only --input-answers-path
 - `average_score` — средний score judge по шкале 0..1.
 - `memory_hit_rate` (если включён) — доля случаев, где нужный факт присутствовал в memory context.
 - Разрыв `memory_hit_rate` vs `average_score` помогает разделять проблемы памяти и проблемы финальной LLM.
-- `final_llm_prompt_chars_before_clamp_total` / `final_llm_prompt_chars_after_clamp_total` — сколько символов prompt было до обрезки и сколько реально ушло в final LLM.
+- `statistics.final_llm_prompt_chars` (и плоские `final_llm_prompt_chars_*_total`) — символы полного chat-prompt до и после обрезки по токенам.
+- Baseline (`validation/baseline/validate_baseline.py`): те же идеи плюс `statistics.dialogue_context_chars` (полный haystack строки) и `statistics.conversation_context_chars` (реплики, попавшие в промпт после стратегии извлечения, до/после clamp); см. `validation/baseline/README.md`.

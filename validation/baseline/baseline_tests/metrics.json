@@ -1,0 +1,233 @@
+{
+  "full_context_LLama-3-8B-Instruct": {
+    "total": 200,
+    "errors_final_llm": 0,
+    "errors_judge": 0,
+    "average_score": 0.035,
+    "final_llm_calls": 200,
+    "final_llm_prompt_chars_before_clamp_total": 98957802,
+    "final_llm_prompt_chars_after_clamp_total": 4429714,
+    "final_llm_prompt_chars_before_clamp_avg": 494789.01,
+    "final_llm_prompt_chars_after_clamp_avg": 22148.57,
+    "dialogue_context_chars": {
+      "count": 200,
+      "total": 97773960,
+      "avg": 488869.8
+    },
+    "conversation_context_chars": {
+      "calls": 200,
+      "before_clamp_total": 97773930,
+      "after_clamp_total": 4243058,
+      "before_clamp_avg": 488869.65,
+      "after_clamp_avg": 21215.29
+    },
+    "final_llm_prompt_chars": {
+      "calls": 200,
+      "before_clamp_total": 98957802,
+      "after_clamp_total": 4429714,
+      "before_clamp_avg": 494789.01,
+      "after_clamp_avg": 22148.57
+    },
+    "by_type": {
+      "single-session-user": {
+        "count": 50,
+        "total_score": 2.0,
+        "errors": 0,
+        "average_score": 0.04
+      },
+      "single-session-preference": {
+        "count": 50,
+        "total_score": 2.0,
+        "errors": 0,
+        "average_score": 0.04
+      },
+      "multi-session": {
+        "count": 50,
+        "total_score": 1.0,
+        "errors": 0,
+        "average_score": 0.02
+      },
+      "knowledge-update": {
+        "count": 50,
+        "total_score": 2.0,
+        "errors": 0,
+        "average_score": 0.04
+      }
+    },
+    "timing": {
+      "total_time": 1303.8158783912659,
+      "total_items": 200,
+      "total_messages": 99600,
+      "time_per_item": {
+        "min": 2.876774787902832,
+        "max": 24.610482692718506,
+        "p50": 5.234936594963074,
+        "p95": 13.901813626289371,
+        "p99": 17.97493454933166,
+        "mean": 6.516219983100891
+      },
+      "time_per_message": {
+        "min": 0.0052304996143687854,
+        "max": 0.0447463321685791,
+        "p50": 0.0108414944861887,
+        "p95": 0.02826939918813545,
+        "p99": 0.03527619472356752,
+        "mean": 0.013125868396722029
+      }
+    }
+  },
+  "full_context_mistral-nemo": {
+    "total": 200,
+    "errors_final_llm": 0,
+    "errors_judge": 0,
+    "average_score": 0.311,
+    "final_llm_calls": 200,
+    "final_llm_prompt_chars_before_clamp_total": 98957802,
+    "final_llm_prompt_chars_after_clamp_total": 91542223,
+    "final_llm_prompt_chars_before_clamp_avg": 494789.01,
+    "final_llm_prompt_chars_after_clamp_avg": 457711.115,
+    "dialogue_context_chars": {
+      "count": 200,
+      "total": 97773960,
+      "avg": 488869.8
+    },
+    "conversation_context_chars": {
+      "calls": 200,
+      "before_clamp_total": 97773930,
+      "after_clamp_total": 90437985,
+      "before_clamp_avg": 488869.65,
+      "after_clamp_avg": 452189.925
+    },
+    "final_llm_prompt_chars": {
+      "calls": 200,
+      "before_clamp_total": 98957802,
+      "after_clamp_total": 91542223,
+      "before_clamp_avg": 494789.01,
+      "after_clamp_avg": 457711.115
+    },
+    "by_type": {
+      "single-session-user": {
+        "count": 50,
+        "total_score": 18.0,
+        "errors": 0,
+        "average_score": 0.36
+      },
+      "single-session-preference": {
+        "count": 50,
+        "total_score": 10.199999999999998,
+        "errors": 0,
+        "average_score": 0.20399999999999996
+      },
+      "multi-session": {
+        "count": 50,
+        "total_score": 13.8,
+        "errors": 0,
+        "average_score": 0.276
+      },
+      "knowledge-update": {
+        "count": 50,
+        "total_score": 20.200000000000003,
+        "errors": 0,
+        "average_score": 0.4040000000000001
+      }
+    },
+    "timing": {
+      "total_time": 5485.174550771713,
+      "total_items": 200,
+      "total_messages": 99600,
+      "time_per_item": {
+        "min": 9.131452083587646,
+        "max": 83.83830380439758,
+        "p50": 25.559553623199463,
+        "p95": 50.124786865711215,
+        "p99": 74.78382134914392,
+        "mean": 27.422773241996765
+      },
+      "time_per_message": {
+        "min": 0.017004566263664145,
+        "max": 0.17005741136794641,
+        "p50": 0.049645662767119944,
+        "p95": 0.10520660926060396,
+        "p99": 0.151636414579639,
+        "mean": 0.05541620151306114
+      }
+    }
+  },
+  "full_context_Qwen2.5-7B-Instruct": {
+    "total": 200,
+    "errors_final_llm": 0,
+    "errors_judge": 0,
+    "average_score": 0.16399999999999998,
+    "final_llm_calls": 200,
+    "final_llm_prompt_chars_before_clamp_total": 98957802,
+    "final_llm_prompt_chars_after_clamp_total": 23321117,
+    "final_llm_prompt_chars_before_clamp_avg": 494789.01,
+    "final_llm_prompt_chars_after_clamp_avg": 116605.585,
+    "dialogue_context_chars": {
+      "count": 200,
+      "total": 97773960,
+      "avg": 488869.8
+    },
+    "conversation_context_chars": {
+      "calls": 200,
+      "before_clamp_total": 97773930,
+      "after_clamp_total": 22933720,
+      "before_clamp_avg": 488869.65,
+      "after_clamp_avg": 114668.6
+    },
+    "final_llm_prompt_chars": {
+      "calls": 200,
+      "before_clamp_total": 98957802,
+      "after_clamp_total": 23321117,
+      "before_clamp_avg": 494789.01,
+      "after_clamp_avg": 116605.585
+    },
+    "by_type": {
+      "single-session-user": {
+        "count": 50,
+        "total_score": 9.2,
+        "errors": 0,
+        "average_score": 0.184
+      },
+      "single-session-preference": {
+        "count": 50,
+        "total_score": 14.399999999999999,
+        "errors": 0,
+        "average_score": 0.288
+      },
+      "multi-session": {
+        "count": 50,
+        "total_score": 3.0,
+        "errors": 0,
+        "average_score": 0.06
+      },
+      "knowledge-update": {
+        "count": 50,
+        "total_score": 6.2,
+        "errors": 0,
+        "average_score": 0.124
+      }
+    },
+    "timing": {
+      "total_time": 2815.106566429138,
+      "total_items": 200,
+      "total_messages": 99600,
+      "time_per_item": {
+        "min": 5.068652868270874,
+        "max": 53.26044297218323,
+        "p50": 11.331527829170227,
+        "p95": 26.384661030769355,
+        "p99": 39.51956651210783,
+        "mean": 14.072778960466385
+      },
+      "time_per_message": {
+        "min": 0.009581574420171785,
+        "max": 0.10484339167752604,
+        "p50": 0.022938375928740956,
+        "p95": 0.056842339295329496,
+        "p99": 0.0761348073825598,
+        "mean": 0.028449443496358563
+      }
+    }
+  }
+}

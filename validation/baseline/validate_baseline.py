@@ -11,6 +11,8 @@ Features:
 - Judge scoring 0-1 scale with detailed criteria
 - Per-question-type metrics
 - Balanced sampling across question types
+- Haystack dialogue_context_chars + strategy context chars before/after tokenizer clamp (aligned with GigaMemory_full non-MHR stats)
+- OpenRouter: ``reasoning`` только если явно задан в JSON; иначе поле **не** отправляется (иначе часть endpoint’ов отвечает 400 «Reasoning is mandatory … cannot be disabled» при попытке выключить)
 - Несколько вопросов на строку: непустой список ``questions`` (как в validate_longmemeval)
 
 Usage:
@@ -22,10 +24,11 @@ import copy
 import json
 import logging
 import os
+import re
 import sys
 import time
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.error
@@ -57,19 +60,60 @@ def _messages_char_count(messages: List[Dict[str, str]]) -> int:
     return sum(len(str(m.get("content", ""))) for m in messages)
 
 
+def _strip_provider_thinking_blocks(text: str) -> str:
+    """
+    Remove common interleaved thinking / scratchpad blocks some APIs embed in ``content``.
+
+    OpenRouter Qwen thinking-style responses may still leak fenced blocks even when
+    ``reasoning.max_tokens`` is 0; judge/final answers must not treat those as the reply.
+    """
+    if not text or not text.strip():
+        return text
+    t = text
+    patterns = [
+        # DeepSeek / Qwen-style fenced thinking blocks (OpenRouter may leak these into ``content``)
+        (
+            r"\x3cthink\x3e[\s\S]*?\x3c/think\x3e",
+            re.DOTALL | re.IGNORECASE,
+        ),
+        (
+            r"\x3cthinking\x3e[\s\S]*?\x3c/thinking\x3e",
+            re.DOTALL | re.IGNORECASE,
+        ),
+        (
+            r"\x3credacted_reasoning\x3e[\s\S]*?\x3c/redacted_reasoning\x3e",
+            re.DOTALL | re.IGNORECASE,
+        ),
+        (
+            r"\x3credacted_thinking\x3e[\s\S]*?\x3c/redacted_thinking\x3e",
+            re.DOTALL | re.IGNORECASE,
+        ),
+        (r"\[think\][\s\S]*?\[/think\]", re.DOTALL | re.IGNORECASE),
+    ]
+    for _ in range(8):
+        prev = t
+        for pat, flags in patterns:
+            t = re.sub(pat, "", t, flags=flags)
+        if t == prev:
+            break
+    return t.strip()
+
+
 def _normalize_openai_assistant_text(message: Any) -> str:
     """
     Build a single string from an OpenAI-style assistant message.
 
     Handles null content (some reasoning / tool models), list-shaped content,
-    and optional reasoning-only fields returned by some providers.
+    optional reasoning-only fields when ``content`` is empty, and strips
+    interleaved thinking fences occasionally returned inside ``content``.
     """
     if not isinstance(message, dict):
         return ""
     raw = message.get("content")
+    out = ""
     if isinstance(raw, str):
-        return raw.strip()
-    if isinstance(raw, list):
+        out = _strip_provider_thinking_blocks(raw.strip())
+    elif isinstance(raw, list):
         parts: List[str] = []
         for p in raw:
             if not isinstance(p, dict):
@@ -78,13 +122,17 @@ def _normalize_openai_assistant_text(message: Any) -> str:
                 parts.append(p["text"])
             elif isinstance(p.get("text"), str):
                 parts.append(p["text"])
-        return "".join(parts).strip()
-    if raw is not None:
-        return str(raw).strip()
+        out = _strip_provider_thinking_blocks("".join(parts).strip())
+    elif raw is not None:
+        out = _strip_provider_thinking_blocks(str(raw).strip())
+
+    if out:
+        return out
+
     for key in ("reasoning", "reasoning_content", "thinking"):
         v = message.get(key)
         if isinstance(v, str) and v.strip():
-            return v.strip()
+            return _strip_provider_thinking_blocks(v.strip())
     return ""
 
 
@@ -219,6 +267,32 @@ QUESTION_TYPES = {
 }
 
 RELEVANT_TYPES = list(QUESTION_TYPES.keys())
+
+
+def resolve_openrouter_reasoning(section: Dict[str, Any], mode: str) -> Optional[Dict[str, Any]]:
+    """
+    Optional OpenRouter ``reasoning`` block on chat completions.
+    https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+
+    Many routed endpoints **require** reasoning and respond with HTTP 400 if the client sends
+    ``effort: none``, ``max_tokens: 0``, etc. Therefore we **do not** inject defaults — only send
+    ``reasoning`` when the JSON explicitly includes it.
+
+    - ``reasoning`` key absent → omit field (same practical effect as omitting disable knobs).
+    - ``"reasoning": null`` → omit field.
+    - Non-empty object → passed through as-is (use only when the model docs say it is safe).
+    """
+    if str(mode or "").lower() != "openrouter":
+        return None
+    if "reasoning" not in section:
+        return None
+    raw = section.get("reasoning")
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return dict(raw) if raw else None
+    logger.warning("Ignoring invalid openrouter reasoning (expected object or null): %s", raw)
+    return None
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -362,6 +436,27 @@ def extract_context_full(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
     return context
 
 
+def haystack_dialogue_chars(sessions: List[List[Dict]]) -> int:
+    """
+    Total UTF-8 character length of all turns in haystack_sessions (user + assistant).
+    Matches validation/GigaMemory_full.validate_longmemeval dialogue_context_chars.
+    """
+    n = 0
+    for session in sessions:
+        if not isinstance(session, list):
+            continue
+        for turn in session:
+            if not isinstance(turn, dict):
+                continue
+            n += len(str(turn.get("content") or ""))
+    return n
+
+
+def context_turns_char_count(context: List[Dict[str, str]]) -> int:
+    """Character sum of ``content`` for baseline context turns passed to the final LLM."""
+    return sum(len(str(t.get("content") or "")) for t in context)
+
+
 def extract_context_recent_10_plus_user(sessions: List[List[Dict]]) -> List[Dict[str, str]]:
     """Extract: last 10 pairs + remaining user messages."""
     all_turns = []
@@ -427,6 +522,7 @@ class FinalLLMClient:
         load_dtype: str = "float16",
         load_quantization: str = "none",
         max_context_tokens: int = 131072,
+        openrouter_reasoning: Optional[Dict[str, Any]] = None,
     ):
         self.mode = mode
         self.api_url = api_url or "https://openrouter.ai/api/v1"
@@ -449,6 +545,9 @@ class FinalLLMClient:
         self._tok_limit: Any = None  # AutoTokenizer or False
         self._last_prompt_chars_before_clamp = 0
         self._last_prompt_chars_after_clamp = 0
+        self._last_conversation_chars_before_clamp = 0
+        self._last_conversation_chars_after_clamp = 0
+        self.openrouter_reasoning = openrouter_reasoning
 
         # local: from_pretrained(local_model_path or model) — HF repo id or disk path
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
@@ -473,7 +572,7 @@ class FinalLLMClient:
             CHAT_API_OUTPUT_POLICY
             + "You are a helpful assistant answering questions based on conversation history.\n"
             "Use ONLY the information from the conversation to answer.\n"
-            "Answer concisely and accurately."
+            "Answer concisely and accurately without reasoning."
         )
 
         user = (
@@ -496,6 +595,8 @@ class FinalLLMClient:
             "max_tokens": self.max_tokens,
             "messages": messages,
         }
+        if self.mode == "openrouter" and self.openrouter_reasoning:
+            body["reasoning"] = self.openrouter_reasoning
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -545,7 +646,9 @@ class FinalLLMClient:
 
     def generate(self, question: str, context: List[Dict[str, str]]) -> Tuple[str, Optional[str]]:
         """Generate answer. Returns (answer, error)."""
-        messages_before = self.build_messages(question, list(context))
+        ctx_full: List[Dict[str, str]] = list(context)
+        self._last_conversation_chars_before_clamp = context_turns_char_count(ctx_full)
+        messages_before = self.build_messages(question, ctx_full)
         self._last_prompt_chars_before_clamp = _messages_char_count(messages_before)
         ctx: List[Dict[str, str]] = list(context)
         if self.max_context_tokens > 0 and self.mode != "stub":
@@ -560,6 +663,7 @@ class FinalLLMClient:
                     tok,
                     self.max_context_tokens,
                 )
+        self._last_conversation_chars_after_clamp = context_turns_char_count(ctx)
         messages = self.build_messages(question, ctx)
         self._last_prompt_chars_after_clamp = _messages_char_count(messages)
 
@@ -582,6 +686,8 @@ class FinalLLMClient:
         return {
             "before_clamp_chars": int(self._last_prompt_chars_before_clamp),
             "after_clamp_chars": int(self._last_prompt_chars_after_clamp),
+            "conversation_chars_before_clamp": int(self._last_conversation_chars_before_clamp),
+            "conversation_chars_after_clamp": int(self._last_conversation_chars_after_clamp),
         }
 
     def _local_pretrained_id(self) -> str:
@@ -659,6 +765,7 @@ class JudgeClient:
         local_model_path: str = "",
         load_dtype: str = "float16",
         load_quantization: str = "none",
+        openrouter_reasoning: Optional[Dict[str, Any]] = None,
     ):
         self.mode = mode
         self.model = model
@@ -676,6 +783,7 @@ class JudgeClient:
         self.load_dtype = load_dtype or "float16"
         self.load_quantization = (load_quantization or "none").strip().lower()
         self._hf_serving = None
+        self.openrouter_reasoning = openrouter_reasoning
 
         _resolved = (self.local_model_path or "").strip() or (self.model or "").strip()
         logger.info(
@@ -728,6 +836,8 @@ class JudgeClient:
             "max_tokens": self.max_tokens,
             "messages": messages,
         }
+        if self.mode == "openrouter" and self.openrouter_reasoning:
+            body["reasoning"] = self.openrouter_reasoning
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -835,7 +945,7 @@ class JudgeClient:
         if self.mode == "none":
             return 0.0, "Judge disabled", None
 
-        system = self._get_system_prompt(question_type)
+        system = self._get_system_prompt_answer_correctness(question_type)
         user = (
             f"Question: {question}\n\n"
             f"Reference Answer: {reference}\n\n"
@@ -882,6 +992,7 @@ class AccumulatedItem:
     question_type: str
     context: List[Dict[str, str]]
     num_messages: int
+    dialogue_context_chars: int = 0
 
 
 class BatchProcessor:
@@ -904,7 +1015,9 @@ class BatchProcessor:
         self._validation_metadata = validation_metadata
 
         self.item_buffer: List[AccumulatedItem] = []
-        self.answer_buffer: List[Tuple[AccumulatedItem, str, Optional[str], int, int]] = []
+        self.answer_buffer: List[
+            Tuple[AccumulatedItem, str, Optional[str], int, int, int, int]
+        ] = []
         self.results: List[Dict[str, Any]] = []
 
         self.stats = {
@@ -914,6 +1027,10 @@ class BatchProcessor:
             "final_llm_calls": 0,
             "final_llm_prompt_chars_before_clamp_total": 0,
             "final_llm_prompt_chars_after_clamp_total": 0,
+            "dialogue_context_chars_total": 0,
+            "dialogue_context_chars_count": 0,
+            "conversation_context_chars_before_clamp_total": 0,
+            "conversation_context_chars_after_clamp_total": 0,
             "by_type": {qt: {"count": 0, "total_score": 0.0, "errors": 0}
                         for qt in QUESTION_TYPES.keys()},
         }
@@ -927,6 +1044,7 @@ class BatchProcessor:
         *,
         dialogue_row_index: int,
         question_sub_index: int,
+        dialogue_context_chars: int = 0,
     ) -> None:
         start_time = time.time()
 
@@ -940,6 +1058,7 @@ class BatchProcessor:
             question_type=str(item.get("question_type", "") or ""),
             context=context,
             num_messages=num_messages,
+            dialogue_context_chars=int(dialogue_context_chars),
         )
         self.item_buffer.append(acc)
 
@@ -960,16 +1079,22 @@ class BatchProcessor:
             char_stats = self.final_llm.get_last_prompt_char_stats()
             prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
             prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
+            conv_before = int(char_stats.get("conversation_chars_before_clamp", 0))
+            conv_after = int(char_stats.get("conversation_chars_after_clamp", 0))
             self.stats["final_llm_calls"] += 1
             self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
             self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
+            self.stats["conversation_context_chars_before_clamp_total"] += conv_before
+            self.stats["conversation_context_chars_after_clamp_total"] += conv_after
 
             if error:
                 logger.error("[Item %d] Final LLM error: %s", item.global_index, error)
                 self.stats["errors_final_llm"] += 1
 
             logger.info("[Item %d] Answer: %s", item.global_index, answer)
-            self.answer_buffer.append((item, answer, error, prompt_chars_before, prompt_chars_after))
+            self.answer_buffer.append(
+                (item, answer, error, prompt_chars_before, prompt_chars_after, conv_before, conv_after)
+            )
 
         self.item_buffer.clear()
 
@@ -991,7 +1116,15 @@ class BatchProcessor:
 
         logger.info("[Batch] Judging %d answers", len(self.answer_buffer))
 
-        for item, predicted, final_llm_error, prompt_chars_before, prompt_chars_after in self.answer_buffer:
+        for (
+            item,
+            predicted,
+            final_llm_error,
+            prompt_chars_before,
+            prompt_chars_after,
+            conv_chars_before,
+            conv_chars_after,
+        ) in self.answer_buffer:
             score, reasoning, judge_error = self.judge.evaluate(
                 item.question, predicted, item.reference_answer, item.question_type
             )
@@ -1021,11 +1154,16 @@ class BatchProcessor:
                 "reasoning": reasoning,
                 "final_llm_error": final_llm_error,
                 "judge_error": judge_error,
+                "dialogue_context_chars": int(item.dialogue_context_chars or 0),
+                "conversation_context_chars_before_clamp": conv_chars_before,
+                "conversation_context_chars_after_clamp": conv_chars_after,
                 "final_llm_prompt_chars_before_clamp": prompt_chars_before,
                 "final_llm_prompt_chars_after_clamp": prompt_chars_after,
             })
 
             self.stats["total"] += 1
+            self.stats["dialogue_context_chars_total"] += int(item.dialogue_context_chars or 0)
+            self.stats["dialogue_context_chars_count"] += 1
 
             self._write_results_json_snapshot()
 
@@ -1051,6 +1189,14 @@ class BatchProcessor:
             timing_stats = dict(timing_stats)
             timing_stats["total_time"] = time.time() - self.timing.total_start
 
+        calls = int(self.stats["final_llm_calls"] or 0)
+        d_count = int(self.stats["dialogue_context_chars_count"] or 0)
+        d_total = int(self.stats["dialogue_context_chars_total"] or 0)
+        conv_b_total = int(self.stats["conversation_context_chars_before_clamp_total"] or 0)
+        conv_a_total = int(self.stats["conversation_context_chars_after_clamp_total"] or 0)
+        prompt_b_total = int(self.stats["final_llm_prompt_chars_before_clamp_total"] or 0)
+        prompt_a_total = int(self.stats["final_llm_prompt_chars_after_clamp_total"] or 0)
+
         payload = {
             "metadata": self._validation_metadata,
             "statistics": {
@@ -1058,17 +1204,34 @@ class BatchProcessor:
                 "errors_final_llm": self.stats["errors_final_llm"],
                 "errors_judge": self.stats["errors_judge"],
                 "average_score": avg_score,
-                "final_llm_calls": self.stats["final_llm_calls"],
-                "final_llm_prompt_chars_before_clamp_total": self.stats["final_llm_prompt_chars_before_clamp_total"],
-                "final_llm_prompt_chars_after_clamp_total": self.stats["final_llm_prompt_chars_after_clamp_total"],
+                "final_llm_calls": calls,
+                "final_llm_prompt_chars_before_clamp_total": prompt_b_total,
+                "final_llm_prompt_chars_after_clamp_total": prompt_a_total,
                 "final_llm_prompt_chars_before_clamp_avg": (
-                    self.stats["final_llm_prompt_chars_before_clamp_total"] / self.stats["final_llm_calls"]
-                    if self.stats["final_llm_calls"] > 0 else 0.0
+                    prompt_b_total / calls if calls > 0 else 0.0
                 ),
                 "final_llm_prompt_chars_after_clamp_avg": (
-                    self.stats["final_llm_prompt_chars_after_clamp_total"] / self.stats["final_llm_calls"]
-                    if self.stats["final_llm_calls"] > 0 else 0.0
+                    prompt_a_total / calls if calls > 0 else 0.0
                 ),
+                "dialogue_context_chars": {
+                    "count": d_count,
+                    "total": d_total,
+                    "avg": (d_total / d_count) if d_count > 0 else 0.0,
+                },
+                "conversation_context_chars": {
+                    "calls": calls,
+                    "before_clamp_total": conv_b_total,
+                    "after_clamp_total": conv_a_total,
+                    "before_clamp_avg": (conv_b_total / calls) if calls > 0 else 0.0,
+                    "after_clamp_avg": (conv_a_total / calls) if calls > 0 else 0.0,
+                },
+                "final_llm_prompt_chars": {
+                    "calls": calls,
+                    "before_clamp_total": prompt_b_total,
+                    "after_clamp_total": prompt_a_total,
+                    "before_clamp_avg": (prompt_b_total / calls) if calls > 0 else 0.0,
+                    "after_clamp_avg": (prompt_a_total / calls) if calls > 0 else 0.0,
+                },
                 "by_type": by_type,
             },
             "timing": timing_stats,
@@ -1136,6 +1299,8 @@ def run_validation(config: Dict[str, Any]) -> None:
 
     run_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     results_path = output_path / "validation_results.json"
+    fin_reasoning = resolve_openrouter_reasoning(final_llm_cfg, final_llm_cfg.get("mode", ""))
+    judge_reasoning = resolve_openrouter_reasoning(judge_cfg, judge_cfg.get("mode", ""))
     validation_metadata = {
         "strategy": baseline["strategy"],
         "dataset_path": shared["dataset_path"],
@@ -1145,6 +1310,8 @@ def run_validation(config: Dict[str, Any]) -> None:
         "final_llm_model": final_llm_cfg.get("model", ""),
         "judge_mode": judge_cfg["mode"],
         "judge_model": judge_cfg.get("model", ""),
+        "openrouter_reasoning_final_llm": fin_reasoning,
+        "openrouter_reasoning_judge": judge_reasoning,
         "timestamp": run_timestamp,
     }
 
@@ -1161,6 +1328,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         load_dtype=final_llm_cfg.get("load_dtype", "float16"),
         load_quantization=final_llm_cfg.get("load_quantization", "none"),
         max_context_tokens=int(final_llm_cfg.get("max_context_tokens", 131072)),
+        openrouter_reasoning=fin_reasoning,
     )
 
     judge = JudgeClient(
@@ -1173,6 +1341,7 @@ def run_validation(config: Dict[str, Any]) -> None:
         local_model_path=judge_cfg.get("local_model_path", ""),
         load_dtype=judge_cfg.get("load_dtype", "float16"),
         load_quantization=judge_cfg.get("load_quantization", "none"),
+        openrouter_reasoning=judge_reasoning,
     )
 
     # Initialize processor
@@ -1210,6 +1379,7 @@ def run_validation(config: Dict[str, Any]) -> None:
                 logger.info("  [%d] id=%s q=%s", si, sp.get("question_id", ""), sp.get("question", "")[:120])
 
         context = extract_fn(sessions)
+        dialogue_dataset_chars = haystack_dialogue_chars(sessions)
         logger.info("Extracted %d context turns from %d messages",
                     len(context), num_messages)
 
@@ -1226,6 +1396,7 @@ def run_validation(config: Dict[str, Any]) -> None:
                 num_messages,
                 dialogue_row_index=idx,
                 question_sub_index=sub_i,
+                dialogue_context_chars=dialogue_dataset_chars,
             )
             eval_seq += 1
 
@@ -1245,6 +1416,23 @@ def run_validation(config: Dict[str, Any]) -> None:
         stats.get("final_llm_prompt_chars_before_clamp_total", 0),
         stats.get("final_llm_prompt_chars_after_clamp_total", 0),
         stats.get("final_llm_calls", 0),
+    )
+    dc_n = int(stats.get("dialogue_context_chars_count", 0) or 0)
+    dc_tot = int(stats.get("dialogue_context_chars_total", 0) or 0)
+    logger.info(
+        "Haystack dialogue chars (dataset row, all turns): total=%d count=%d avg=%.1f",
+        dc_tot,
+        dc_n,
+        (dc_tot / dc_n) if dc_n > 0 else 0.0,
+    )
+    fcalls = int(stats.get("final_llm_calls", 0) or 0)
+    cb = int(stats.get("conversation_context_chars_before_clamp_total", 0) or 0)
+    ca = int(stats.get("conversation_context_chars_after_clamp_total", 0) or 0)
+    logger.info(
+        "Extracted context chars (strategy turns; token clamp): before_total=%d after_total=%d calls=%d",
+        cb,
+        ca,
+        fcalls,
     )
 
     # Per-type summary

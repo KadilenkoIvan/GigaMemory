@@ -416,6 +416,27 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 
 ## Валидация
 
+> 📊 **Полная методика, все таблицы и графики — в [validation/README.md](validation/README.md).**
+
+### Результаты (кратко)
+
+Сравнение на **LongMemEval**: одна и та же финальная LLM отвечает либо по «сырому» диалогу (baseline full-context), либо по структурированной памяти GigaMemory. Метрика — средний балл LLM-судьи (0–1).
+
+| Финальная LLM | Baseline (full-context) | GigaMemory (`relevant_slots_full`) | Прирост |
+|---------------|:---:|:---:|:---:|
+| LLaMA-3-8B   | 0.035 | **0.203** | ×5.8 |
+| Qwen2.5-7B   | 0.164 | **0.548** | ×3.3 |
+| Mistral-Nemo | 0.311 | **0.620** | ×2.0 |
+
+![Сравнение метрик с baseline](<val_images/сравнение метрик с baseline.png>)
+
+**Главное:**
+- Структурированная память превосходит подачу полного диалога для всех трёх финальных LLM.
+- Выигрыш тем больше, чем хуже модель держит длинный контекст (baseline обрезает ~489 тыс. символов диалога под окно токенов).
+- Лучшая стратегия памяти — `relevant_slots_full` (подавать только релевантные вопросу слоты).
+
+Подробные таблицы по типам вопросов, стратегиям, вариантам графа и Memory Hit Rate — в [validation/README.md](validation/README.md).
+
 ### LongMemEval Benchmark
 
 Для тестирования качества системы памяти используется датасет **LongMemEval** (`xiaowu0162/longmemeval-cleaned`).
@@ -424,20 +445,20 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 
 ```
 validation/
+├── README.md               # 👉 Методика + результаты (точка входа)
 ├── GigaMemory_full/        # Полное тестирование GigaMemory (v3)
 │   ├── validate_longmemeval.py      # Основной скрипт с 4 режимами
-│   ├── run_config.json              # Базовый конфиг
-│   ├── config_full.json             # Полный пайплайн
-│   ├── config_memory_only.json      # Только память
-│   ├── config_final_llm.json        # Только финальная LLM
-│   ├── config_judge.json            # Только судья
-│   ├── README.md
-│   └── CONFIG.md
-└── baseline/               # Baseline тестирование
-    ├── validate_baseline.py
-    ├── run_config.json
-    └── README.md
+│   ├── config_*.json                # Конфиги стадий (memory_only / final_llm_only / judge_only)
+│   ├── results_judge_bundle_*/      # Итоговые validation_results.json по стратегиям
+│   └── README.md, CONFIG.md, README_CONFIG.md
+├── baseline/               # Baseline тестирование (full-context)
+│   ├── validate_baseline.py
+│   ├── run_config_full_context_*.json
+│   └── baseline_tests/              # validation_results.json по моделям
+└── metrics/                # Сводные выжимки: metrics-baseline.json, metrics-gigamemory.json
 ```
+
+> Сырые прогоны (векторные БД, DST-снапшоты, промежуточные ответы) весят гигабайты и в репозиторий не коммитятся — см. секцию «Что лежит в репозитории» в [validation/README.md](validation/README.md).
 
 ### Режимы валидации (v3)
 

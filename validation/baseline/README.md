@@ -25,7 +25,11 @@ Baseline testing with simple context-passing strategies. Includes timing metrics
 
 - **Per-question-type metrics:** aggregated scores by type
 
-- **Final LLM prompt size stats:** total/average symbols before and after context clamp
+- **Final LLM prompt size stats:** total/average symbols before and after **tokenizer** clamp (`max_context_tokens`; символы полного chat-пrompt).
+
+- **Размер диалога и контекста (сопоставимо с GigaMemory_full, без MHR):**
+  - `dialogue_context_chars` — сумма длин текстов **всех** реплик в `haystack_sessions` строки датасета (как в `validate_longmemeval`), одинакова для всех вопросов одной строки.
+  - `conversation_context_chars_*` — сумма длин полей `content` у **переданных в промпт** реплик (после стратегии `full_context` / `recent_10_plus_user`), до и после обрезки по токенам.
 
 - **Balanced sampling:** N items per question type
 
@@ -64,6 +68,18 @@ Baseline testing with simple context-passing strategies. Includes timing metrics
 `final_llm.tokenizer_model` — optional HF model id/path for tokenizer used in `max_context_tokens` truncation.
 Use it when API model id is provider-specific (e.g., `qwen/qwen-2.5-7b-instruct`) and not resolvable by `AutoTokenizer`.
 
+### OpenRouter: поле `reasoning`
+
+См. [Reasoning tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens).
+
+На части маршрутов OpenRouter ответ **400**: *«Reasoning is mandatory for this endpoint and cannot be disabled»*, если в теле запроса передано отключение reasoning (`effort: none`, `max_tokens: 0` и т.п.). Поэтому **`validate_baseline.py` по умолчанию не добавляет `reasoning`** — ключ нужно задавать в JSON только если вы точно знаете, что модель и провайдер это поддерживают.
+
+- Ключа **`reasoning` нет** или **`"reasoning": null`** → поле **`reasoning` не отправляется** в `/chat/completions`.
+- Непустой объект `"reasoning": { ... }` → передаётся как есть (на свой риск).
+- Интерleaved-блоки в `content` после ответа подчищает `_strip_provider_thinking_blocks`.
+
+Если нужен именно endpoint без обязательного reasoning — меняют модель/роут на OpenRouter или конфигурацию у провайдера; это не решается только промптом.
+
 ## Usage
 
 ```bash
@@ -89,6 +105,25 @@ python validate_baseline.py --strategy recent_10_plus_user --output-dir ./result
     "final_llm_prompt_chars_after_clamp_total": 980000,
     "final_llm_prompt_chars_before_clamp_avg": 30000.0,
     "final_llm_prompt_chars_after_clamp_avg": 24500.0,
+    "dialogue_context_chars": {
+      "count": 40,
+      "total": 4800000,
+      "avg": 120000.0
+    },
+    "conversation_context_chars": {
+      "calls": 40,
+      "before_clamp_total": 4500000,
+      "after_clamp_total": 3600000,
+      "before_clamp_avg": 112500.0,
+      "after_clamp_avg": 90000.0
+    },
+    "final_llm_prompt_chars": {
+      "calls": 40,
+      "before_clamp_total": 1200000,
+      "after_clamp_total": 980000,
+      "before_clamp_avg": 30000.0,
+      "after_clamp_avg": 24500.0
+    },
     "by_type": {
       "single-session-user": {"count": 10, "average_score": 0.82, "errors": 0},
       "single-session-preference": {"count": 10, "average_score": 0.78, "errors": 0},
@@ -96,33 +131,22 @@ python validate_baseline.py --strategy recent_10_plus_user --output-dir ./result
       "knowledge-update": {"count": 10, "average_score": 0.75, "errors": 0}
     }
   },
-  "timing": {
-    "total_time": 120.5,
-    "total_items": 40,
-    "total_messages": 2400,
-    "time_per_item": {"min": 1.2, "max": 5.8, "p50": 2.8, "p95": 4.5, "p99": 5.2},
-    "time_per_message": {"min": 0.02, "max": 0.15, "p50": 0.05, "p95": 0.08, "p99": 0.10}
-  },
+  "timing": {...},
   "results": [
     {
       "global_index": 0,
-      "question_id": "...",
-      "question": "...",
-      "reference_answer": "...",
-      "predicted_answer": "...",
-      "question_type": "single-session-user",
-      "score": 1.0,
-      "reasoning": "Perfect match",
-      "final_llm_error": null,
-      "judge_error": null,
+      "dialogue_context_chars": 118000,
+      "conversation_context_chars_before_clamp": 115000,
+      "conversation_context_chars_after_clamp": 92000,
       "final_llm_prompt_chars_before_clamp": 31240,
-      "final_llm_prompt_chars_after_clamp": 24577
+      "final_llm_prompt_chars_after_clamp": 24577,
+      "...": "..."
     }
   ]
 }
 ```
 
-Файл `validation_results.json` в каталоге результатов **атомарно перезаписывается** после каждого завершённого примера (ответ финальной LLM + оценка судьи); структура JSON не меняется. Пока накопленный батч судьи не сброшен, новые строки в `results` не появляются (логика батчей сохранена).
+Файл `validation_results.json` в каталоге результатов **атомарно перезаписывается** после каждого завершённого примера (ответ финальной LLM + оценка судьи). Пока накопленный батч судьи не сброшен, новые строки в `results` не появляются (логика батчей сохранена).
 
 ## Scoring Criteria
 
@@ -141,12 +165,14 @@ python validate_baseline.py --strategy recent_10_plus_user --output-dir ./result
 - **single-session-preference:** Correct fact used = 1.0 (regardless of phrasing)
 - **multi-session:** Partial aggregation scored proportionally
 
-## Comparison with GigaMemory
+## Comparison with GigaMemory_full
 
-| Feature | GigaMemory | Baseline |
+| Feature | GigaMemory_full | Baseline |
 |---------|-----------|----------|
-| Memory | Structured slots | Raw context |
+| Memory | Structured slots + RAGU | Raw context |
 | Scoring | 0-1 scale | 0-1 scale |
 | Retry | Yes (3 attempts) | Yes (3 attempts) |
 | Timing | Full metrics | Full metrics |
 | Per-type metrics | Yes | Yes |
+| Prompt/context chars in JSON | `statistics.final_llm_prompt_chars`, `statistics.dialogue_context_chars`; nested judge export | Same-style nested blocks + `conversation_context_chars` (strategy turns before/after clamp) |
+| Memory hit evaluation | Optional | No |

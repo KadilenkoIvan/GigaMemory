@@ -1,0 +1,51 @@
+{
+  "_description": "Baseline: full_context, OpenRouter для final LLM и judge. Подставьте model и при необходимости tokenizer_model / api_key.",
+
+  "shared": {
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
+    "output_dir": "./baseline_tests/full_context_Qwen2.5-7B-Instruct",
+
+    "num_items_per_type": 1000,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ],
+
+    "log_level": "INFO",
+    "log_file": true
+  },
+
+  "baseline": {
+    "strategy": "full_context",
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1
+  },
+
+  "final_llm": {
+    "mode": "openrouter",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "model": "qwen/qwen-2.5-7b-instruct",
+    "tokenizer_model": "Qwen/Qwen2.5-7B-Instruct",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "max_context_tokens": 25000,
+    "local_model_path": "",
+    "load_dtype": "float16",
+    "load_quantization": "none"
+  },
+
+  "judge": {
+    "mode": "openrouter",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "model": "openai/gpt-oss-20b",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "local_model_path": "",
+    "load_dtype": "float16",
+    "load_quantization": "none"
+  }
+}

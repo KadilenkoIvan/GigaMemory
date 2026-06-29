@@ -20,12 +20,20 @@ Usage:
     python validate_longmemeval.py --validation-mode final_llm_only \
         --input-state-dir ./results_memory_only
 
-    # Judge only: evaluate saved answers
-    python validate_longmemeval.py --validation-mode judge_only \
+    # Judge only: evaluate saved answers (one intermediate_answers.json)
+    python validate_longmemeval.py --validation-mode judge_only \\
         --input-answers-path ./results_final_llm/intermediate_answers.json
+
+    # Judge only: several intermediate_answers.json in one run (e.g. all strategies × inactive modes)
+    python validate_longmemeval.py --validation-mode judge_only \\
+        --input-answers-paths ./out/s1.json,./out/s2.json
 
     # Using custom config
     python validate_longmemeval.py --config ./my_config.json
+
+    # final_llm_only: resume from global_index N (merge into existing intermediate_answers.json)
+    python validate_longmemeval.py --config ./my_config.json \\
+        --final-llm-resume-from-global-index 123
 
     # Multiple questions per row (one memory pass, then each question scored separately):
     # use a non-empty ``questions`` list on the dataset object; see test_data/minimal_test.json.
@@ -66,6 +74,11 @@ if str(ragu_path) not in sys.path:
 from dst_memory.utils.dotenv_loader import load_dst_memory_dotenv
 from dst_memory.utils.run_config_loader import load_run_config, shared_section
 from dst_memory.clients.llm_client import CHAT_API_OUTPUT_POLICY, _normalize_assistant_message_text
+from dst_memory.clients.memory_context_payload import (
+    MEMORY_PAYLOAD_MODES,
+    finalize_memory_context_for_llm,
+    normalize_memory_payload_mode,
+)
 from dst_memory.clients.context_limit import (
     DEFAULT_MAX_CONTEXT_TOKENS,
     clamp_chat_messages_to_max_tokens,
@@ -223,8 +236,111 @@ QUESTION_TYPES = {
 
 RELEVANT_TYPES = list(QUESTION_TYPES.keys())
 MEMORY_STRATEGIES = ("full_graph_json", "relevant_slots_full", "topk_graph_records")
-MEMORY_PAYLOAD_MODES = ("with_metadata", "triplets_only")
+MEMORY_STRATEGY_IDS = frozenset(MEMORY_STRATEGIES)
+_JUDGE_SHARD_INACTIVE_TAGS = frozenset({"active_only", "with_inactive"})
 MEMORY_ONLY_WRITE_MODES = ("standard", "single_path_only")
+INACTIVE_FACTS_MEMORY_MODES = ("active_only", "with_inactive")
+
+
+def _validation_results_path_for_judge_shard(intermediate_answers_json: Path, output_root: Path) -> Path:
+    """
+    Map ``.../<strategy>/<inactive_tag>/intermediate_answers.json`` →
+    ``output_root/<strategy>/<inactive_tag>/validation_results.json``.
+    If the path does not match that layout, fall back to ``output_root/validation_results.json``.
+    """
+    parts = Path(intermediate_answers_json).resolve().parts
+    if parts and parts[-1] == "intermediate_answers.json" and len(parts) >= 3:
+        inactive_tag = parts[-2]
+        strategy = parts[-3]
+        if strategy in MEMORY_STRATEGY_IDS and inactive_tag in _JUDGE_SHARD_INACTIVE_TAGS:
+            return Path(output_root) / strategy / inactive_tag / "validation_results.json"
+    return Path(output_root) / "validation_results.json"
+
+
+def coerce_openrouter_reasoning_body(raw: Any, backend_mode: str) -> Optional[Dict[str, Any]]:
+    """
+    Optional OpenRouter chat-completions ``reasoning`` body field.
+
+    Only OpenAI-compatible API backends use this. Omit unless JSON explicitly sets it —
+    disable-style defaults trigger HTTP 400 on some routes (mandatory reasoning).
+    """
+    bm = str(backend_mode or "").lower().strip()
+    if bm not in ("openrouter", "puter", "api"):
+        return None
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return dict(raw) if raw else None
+    logging.getLogger(__name__).warning("Ignoring invalid openrouter_reasoning (expected object or null): %s", raw)
+    return None
+
+
+def _normalize_inactive_facts_memory_modes(raw: Any) -> List[str]:
+    """Modes for inactive DST facts in ``final_llm_only`` memory payloads (can combine → more LLM calls)."""
+    if raw is None:
+        return ["active_only"]
+    items: List[str] = []
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.split(",") if p.strip()]
+    elif isinstance(raw, (list, tuple)):
+        for v in raw:
+            s = str(v).strip()
+            if s:
+                items.append(s)
+    seen = set()
+    out: List[str] = []
+    for s in items:
+        if s in INACTIVE_FACTS_MEMORY_MODES and s not in seen:
+            out.append(s)
+            seen.add(s)
+    return out or ["active_only"]
+
+
+def _inactive_facts_use_strategy_subdir(modes: List[str]) -> bool:
+    """When True, nest outputs under ``<strategy>/<inactive_mode>/``."""
+    return len(modes) > 1 or (len(modes) == 1 and modes[0] == "with_inactive")
+
+
+def _narrow_memory_context_active_facts(memory_context: Any) -> Any:
+    """Remove records/messages with ``is_active`` false (default True keeps row)."""
+    if not isinstance(memory_context, dict):
+        return memory_context
+    out = dict(memory_context)
+    slots = out.get("slots")
+    if isinstance(slots, list):
+        new_slots: List[Dict[str, Any]] = []
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            msgs = slot.get("messages") or []
+            if not isinstance(msgs, list):
+                new_slots.append(slot)
+                continue
+            kept = [m for m in msgs if isinstance(m, dict) and m.get("is_active", True)]
+            if kept:
+                sc = dict(slot)
+                sc["messages"] = kept
+                new_slots.append(sc)
+        out["slots"] = new_slots
+    records = out.get("records")
+    if isinstance(records, list):
+        out["records"] = [
+            r for r in records if not isinstance(r, dict) or r.get("is_active", True)
+        ]
+    return out
+
+
+def _filter_topk_records_for_inactive_mode(records: List[Any], include_inactive: bool) -> List[Any]:
+    if include_inactive:
+        return list(records)
+    filtered: List[Any] = []
+    for r in records:
+        if not isinstance(r, dict):
+            filtered.append(r)
+            continue
+        if r.get("is_active", True):
+            filtered.append(r)
+    return filtered
 
 
 def _normalize_memory_strategies(raw: Any) -> List[str]:
@@ -254,50 +370,28 @@ def _normalize_memory_strategies(raw: Any) -> List[str]:
 
 
 def _normalize_memory_payload_mode(raw: Any) -> str:
-    mode = str(raw or "").strip().lower()
-    if mode in MEMORY_PAYLOAD_MODES:
-        return mode
-    return "with_metadata"
+    return normalize_memory_payload_mode(raw)
 
 
 def _memory_context_for_payload_mode(memory_context: Any, payload_mode: str) -> Any:
-    """Optionally strip metadata and pass only triplets to final LLM."""
-    mode = _normalize_memory_payload_mode(payload_mode)
-    if mode != "triplets_only":
-        return memory_context
+    """Reduce memory JSON to the fields the final LLM is allowed to see (see memory_context_payload)."""
+    return finalize_memory_context_for_llm(memory_context, payload_mode)
 
-    if not isinstance(memory_context, dict):
-        return memory_context
 
-    slots = memory_context.get("slots")
-    if isinstance(slots, list):
-        out_slots: List[Dict[str, Any]] = []
-        for slot in slots:
-            if not isinstance(slot, dict):
-                continue
-            slot_name = str(slot.get("slot", "") or "").strip()
-            triplets: List[Dict[str, str]] = []
-            for msg in slot.get("messages") or []:
-                if not isinstance(msg, dict):
-                    continue
-                subj = str(msg.get("subject", "") or "").strip()
-                rel = str(msg.get("relation", "") or "").strip()
-                obj = str(msg.get("object", "") or "").strip()
-                if subj or rel or obj:
-                    triplets.append({
-                        "subject": subj,
-                        "relation": rel,
-                        "object": obj,
-                    })
-            out_slots.append({"slot": slot_name, "triplets": triplets})
-        return {"slots": out_slots}
-
-    records = memory_context.get("records")
-    if isinstance(records, list):
-        # topk_graph_records is already a compact list of graph records
-        return {"records": list(records)}
-
-    return memory_context
+def _normalize_input_answers_paths(raw: Any) -> List[str]:
+    """Normalize ``input_answers_paths`` from JSON (list) or CLI (comma-separated string)."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [p.strip() for p in raw.replace("\n", ",").split(",") if p.strip()]
+    if isinstance(raw, (list, tuple)):
+        out: List[str] = []
+        for x in raw:
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    return []
 
 
 def _normalize_memory_only_write_mode(raw: Any) -> str:
@@ -414,7 +508,12 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
         "validation_mode": {
             "mode": "full",  # full, memory_only, final_llm_only, judge_only
             "input_state_dir": "",  # For final_llm_only: directory with saved memory states
-            "input_answers_path": "",  # For judge_only: path to intermediate_answers.json
+            "input_answers_path": "",  # For judge_only: single intermediate_answers.json (legacy)
+            # For judge_only: several intermediate_answers.json in one run. Typical layout after
+            # final_llm_only with ``inactive_facts_memory_modes: [active_only, with_inactive]``:
+            # full_graph × 2, relevant_slots_full × 2, topk_graph_records × 1 (top-k has no separate with_inactive output).
+            # When non-empty, overrides ``input_answers_path``.
+            "input_answers_paths": [],
             "memory_only_output_suffix": "_memory_only",  # Suffix for memory_only output dirs
             "memory_only_write_mode": "standard",  # standard | single_path_only
             "final_llm_memory_strategies": [],  # Optional strategies list for final_llm_only
@@ -423,6 +522,11 @@ def load_validation_config(config_path: str) -> Dict[str, Any]:
             # Empty lists = process all rows. Merges into existing memory_only_states.json / giga_memory_validation_logs.json.
             "memory_only_dialogue_row_indices": [],
             "memory_only_dialogue_ids": [],
+            # final_llm_only: DST inactive facts (is_active=false) — combine modes → multiply LLM calls & separate JSON dirs.
+            "inactive_facts_memory_modes": ["active_only"],
+            # final_llm_only: if set (int >= 0), reload each intermediate_answers.json, keep rows with global_index < value,
+            # re-run LLM only for states with global_index >= value, merge back into the same files (all strategies × inactive modes).
+            "final_llm_resume_from_global_index": None,
         },
     }
 
@@ -492,11 +596,19 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.judge_load_quantization = judge.get("load_quantization", "none")
     args.unload_judge_between_items = judge.get("unload_between_items", False)
     args.judge_enable_thinking = bool(judge.get("judge_enable_thinking", True))
+    _jreason_raw = judge.get("openrouter_reasoning")
+    if _jreason_raw is None and "reasoning" in judge:
+        _jreason_raw = judge.get("reasoning")
+    args.judge_openrouter_reasoning = coerce_openrouter_reasoning_body(
+        _jreason_raw,
+        judge.get("mode", "openrouter"),
+    )
 
     # Validation mode params
     args.validation_mode = val_mode.get("mode", "full")
     args.input_state_dir = val_mode.get("input_state_dir", "")
     args.input_answers_path = val_mode.get("input_answers_path", "")
+    args.input_answers_paths = _normalize_input_answers_paths(val_mode.get("input_answers_paths"))
     args.memory_only_output_suffix = val_mode.get("memory_only_output_suffix", "_memory_only")
     args.memory_only_write_mode = _normalize_memory_only_write_mode(
         val_mode.get("memory_only_write_mode", "standard")
@@ -511,6 +623,14 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
         val_mode.get("memory_only_dialogue_row_indices")
     )
     args.memory_only_dialogue_ids = _coerce_str_list(val_mode.get("memory_only_dialogue_ids"))
+    args.inactive_facts_memory_modes = _normalize_inactive_facts_memory_modes(
+        val_mode.get("inactive_facts_memory_modes")
+    )
+    _rf_idx = val_mode.get("final_llm_resume_from_global_index")
+    if _rf_idx is None or (isinstance(_rf_idx, str) and not str(_rf_idx).strip()):
+        args.final_llm_resume_from_global_index = None
+    else:
+        args.final_llm_resume_from_global_index = int(_rf_idx)
 
     # GigaMemory config (for building CLI overrides)
     args.config = "DST_memory/run_config.json"  # Base GigaMemory config
@@ -673,6 +793,7 @@ class JudgeClient:
         load_quantization: str = "none",
         max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
         tokenizer_model: str = "",
+        openrouter_reasoning: Optional[Dict[str, Any]] = None,
     ):
         self.mode = mode
         self.model = model
@@ -694,6 +815,9 @@ class JudgeClient:
         self.tokenizer_model = (tokenizer_model or "").strip()
         self._local_serving = None
         self._tokenizer_limit: Any = None
+        self.openrouter_reasoning: Optional[Dict[str, Any]] = (
+            dict(openrouter_reasoning) if isinstance(openrouter_reasoning, dict) and openrouter_reasoning else None
+        )
 
         logger.info(
             "JudgeClient initialized mode=%s model=%s tokenizer_model=%s enable_thinking=%s load_dtype=%s "
@@ -892,6 +1016,8 @@ class JudgeClient:
             "messages": messages,
             "tool_choice": "none",
         }
+        if self.openrouter_reasoning:
+            body["reasoning"] = dict(self.openrouter_reasoning)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -1284,6 +1410,13 @@ def build_pipeline_config(config_path: str, cli_overrides: Optional[Dict[str, An
         unload_models_before_final_llm=shared.get("unload_models_before_final_llm", True),
         use_dataset_datetime=bool(shared.get("use_dataset_datetime", False)),
         force_infinite_ttl=bool(shared.get("force_infinite_ttl", True)),
+        openrouter_reasoning=coerce_openrouter_reasoning_body(
+            shared.get("openrouter_reasoning"),
+            shared.get("llm_mode", "stub"),
+        ),
+        final_llm_memory_payload_mode=normalize_memory_payload_mode(
+            shared.get("final_llm_memory_payload_mode", "with_metadata")
+        ),
     )
 
 
@@ -1347,6 +1480,7 @@ def build_final_llm_only_facade(config_path: str, cli_overrides: Optional[Dict[s
         enable_thinking=getattr(cfg, "llm_enable_thinking", True),
         load_quantization=getattr(cfg, "llm_load_quantization", "none"),
         max_context_tokens=getattr(cfg, "llm_max_context_tokens", 128 * 1024),
+        openrouter_reasoning=getattr(cfg, "openrouter_reasoning", None),
     )
     logger.info(
         "final_llm_only: using FinalLLMOnlyPipelineFacade — no DST/RAGU/slot/triplet "
@@ -1503,6 +1637,8 @@ class AccumulatedAnswer:
     predicted_answer: str
     memory_context: Dict[str, Any]
     memory_strategy: str = ""
+    inactive_facts_mode: str = ""
+    judge_intermediate_source: str = ""
     dialogue_context_chars: int = 0
     final_llm_prompt_chars_before_clamp: int = 0
     final_llm_prompt_chars_after_clamp: int = 0
@@ -1540,12 +1676,89 @@ class IntermediateAnswer:
     memory_context: Dict[str, Any]
     memory_state_path: str  # Path for Memory Hit Rate calculation
     memory_strategy: str = ""
+    inactive_facts_mode: str = "active_only"
     dialogue_context_chars: int = 0
     final_llm_prompt_chars_before_clamp: int = 0
     final_llm_prompt_chars_after_clamp: int = 0
     dataset_ordinal: Optional[int] = None
     dialogue_row_index: Optional[int] = None
     question_date: Optional[Any] = None  # LongMemEval row; final_llm_only uses with use_dataset_datetime
+
+
+def _stats_from_intermediate_answer_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Recompute intermediate_answers.json ``statistics`` from the ``answers`` list."""
+    n = len(rows)
+    dcc_total = sum(int(r.get("dialogue_context_chars", 0) or 0) for r in rows)
+    pb = sum(int(r.get("final_llm_prompt_chars_before_clamp", 0) or 0) for r in rows)
+    pa = sum(int(r.get("final_llm_prompt_chars_after_clamp", 0) or 0) for r in rows)
+    return {
+        "answers_count": n,
+        "dialogue_context_chars_total": dcc_total,
+        "dialogue_context_chars_avg": float(dcc_total / n) if n else 0.0,
+        "final_llm_calls_total": n,
+        "final_llm_prompt_chars_before_clamp_total": pb,
+        "final_llm_prompt_chars_after_clamp_total": pa,
+    }
+
+
+def _merge_intermediate_answer_rows_for_resume(
+    prev_rows: List[Dict[str, Any]],
+    new_rows: List[Dict[str, Any]],
+    resume_from: int,
+) -> List[Dict[str, Any]]:
+    """
+    Rows with ``global_index`` < ``resume_from`` are kept from ``prev_rows``.
+    Rows with ``global_index`` >= ``resume_from`` come from ``new_rows`` (replacing any stale tail in prev).
+    """
+    by_gix: Dict[int, Dict[str, Any]] = {}
+    for r in prev_rows:
+        try:
+            gix = int(r.get("global_index", -1))
+        except (TypeError, ValueError):
+            continue
+        if gix < resume_from:
+            by_gix[gix] = r
+    for r in new_rows:
+        try:
+            gix = int(r.get("global_index", -1))
+        except (TypeError, ValueError):
+            continue
+        if gix >= resume_from:
+            by_gix[gix] = r
+    return sorted(
+        by_gix.values(),
+        key=lambda x: (int(x.get("global_index", 0)), str(x.get("question_id", ""))),
+    )
+
+
+def _intermediate_answer_to_json_row(
+    ans: IntermediateAnswer,
+    strategy: str,
+    inactive_tag: str,
+) -> Dict[str, Any]:
+    """Serialize one ``IntermediateAnswer`` like ``_write_intermediate_answers``."""
+    row_a: Dict[str, Any] = {
+        "global_index": ans.global_index,
+        "question_id": ans.question_id,
+        "question": ans.question,
+        "reference_answer": ans.reference_answer,
+        "question_type": ans.question_type,
+        "predicted_answer": ans.predicted_answer,
+        "memory_context": ans.memory_context,
+        "memory_strategy": strategy,
+        "inactive_facts_mode": inactive_tag,
+        "dialogue_context_chars": int(ans.dialogue_context_chars or 0),
+        "memory_state_path": ans.memory_state_path,
+        "final_llm_prompt_chars_before_clamp": ans.final_llm_prompt_chars_before_clamp,
+        "final_llm_prompt_chars_after_clamp": ans.final_llm_prompt_chars_after_clamp,
+    }
+    if ans.dataset_ordinal is not None:
+        row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
+    if ans.dialogue_row_index is not None:
+        row_a["_validation_dialogue_row_index"] = ans.dialogue_row_index
+    if ans.question_date is not None:
+        row_a["question_date"] = ans.question_date
+    return row_a
 
 
 def build_judge_statistics_export(
@@ -1697,8 +1910,11 @@ class BatchProcessor:
         validation_mode: str = "full",
         input_state_dir: Optional[Path] = None,
         input_answers_path: Optional[Path] = None,
+        input_answers_paths: Optional[List[str]] = None,
         final_llm_memory_strategies: Optional[List[str]] = None,
         final_llm_memory_payload_mode: str = "with_metadata",
+        inactive_facts_memory_modes: Optional[List[str]] = None,
+        final_llm_resume_from_global_index: Optional[int] = None,
         save_giga_memory_logs: bool = True,
     ):
         self.pipeline = pipeline
@@ -1712,12 +1928,26 @@ class BatchProcessor:
         self._timing = timing
         self.validation_mode = validation_mode
         self.input_state_dir = input_state_dir
-        self.input_answers_path = input_answers_path
+        paths_norm = _normalize_input_answers_paths(input_answers_paths)
+        if paths_norm:
+            self.input_answers_paths: List[Path] = [Path(p) for p in paths_norm]
+            self.input_answers_path: Optional[Path] = self.input_answers_paths[0]
+        elif input_answers_path is not None:
+            self.input_answers_path = Path(input_answers_path)
+            self.input_answers_paths = [self.input_answers_path]
+        else:
+            self.input_answers_path = None
+            self.input_answers_paths = []
         self.save_giga_memory_logs = save_giga_memory_logs
         cfg_strategy = getattr(self.pipeline.config, "memory_strategy", "full_graph_json") if self.pipeline else "full_graph_json"
         selected = _normalize_memory_strategies(final_llm_memory_strategies or [])
         self.final_llm_memory_strategies = selected or [cfg_strategy]
         self.final_llm_memory_payload_mode = _normalize_memory_payload_mode(final_llm_memory_payload_mode)
+        self.inactive_facts_memory_modes = _normalize_inactive_facts_memory_modes(inactive_facts_memory_modes)
+        if final_llm_resume_from_global_index is None:
+            self.final_llm_resume_from_global_index: Optional[int] = None
+        else:
+            self.final_llm_resume_from_global_index = int(final_llm_resume_from_global_index)
         # When local judge follows local final LLM on full DST pipeline, defer slot reload until judge finishes.
         self._pending_slot_reload_after_judge = False
 
@@ -1760,6 +1990,50 @@ class BatchProcessor:
                 for qt in QUESTION_TYPES.keys()
             },
         }
+        self._judge_only_total_rows: int = 0
+        self._judge_incremental_results_json_path: Optional[Path] = None
+        self._judge_shard_metadata_extra: Optional[Dict[str, Any]] = None
+
+    def _fresh_judge_stats(self) -> Dict[str, Any]:
+        """Reset counters for a fresh judge_only shard (one intermediate_answers.json file)."""
+        return {
+            "total": 0,
+            "total_score": 0.0,
+            "errors_final_llm": 0,
+            "errors_judge": 0,
+            "final_llm_calls": 0,
+            "final_llm_prompt_chars_before_clamp_total": 0,
+            "final_llm_prompt_chars_after_clamp_total": 0,
+            "dialogue_context_chars_total": 0,
+            "dialogue_context_chars_count": 0,
+            "memory_hit": 0,
+            "memory_miss": 0,
+            "by_type": {
+                qt: {
+                    "count": 0,
+                    "total_score": 0.0,
+                    "errors": 0,
+                    "mhe_count": 0,
+                    "mhe_hits": 0,
+                    "mhe_misses": 0,
+                }
+                for qt in QUESTION_TYPES.keys()
+            },
+        }
+
+    def _finalize_judge_by_type_averages(self) -> None:
+        """Fill average_score / hit_rate on ``self.stats[\"by_type\"]`` before exporting JSON."""
+        for qt in self.stats["by_type"]:
+            count = self.stats["by_type"][qt]["count"]
+            if count > 0:
+                self.stats["by_type"][qt]["average_score"] = (
+                    self.stats["by_type"][qt]["total_score"] / count
+                )
+            mc = self.stats["by_type"][qt].get("mhe_count", 0)
+            if mc > 0:
+                self.stats["by_type"][qt]["mhe_hit_rate"] = (
+                    self.stats["by_type"][qt]["mhe_hits"] / mc
+                )
 
     def _capture_memory_state_for_all_strategies(
         self,
@@ -2281,6 +2555,20 @@ class BatchProcessor:
         states.sort(key=_validation_sort_key)
         logger.info("[FinalLLMOnly] Loaded %d memory states (sorted by dataset ordinal)", len(states))
 
+        resume_from = getattr(self, "final_llm_resume_from_global_index", None)
+        if resume_from is not None:
+            rf = int(resume_from)
+            before = len(states)
+            states = [s for s in states if int(s.get("global_index", -1)) >= rf]
+            logger.info(
+                "[FinalLLMOnly] Resume from global_index=%d: running LLM for %d/%d states "
+                "(indices <%d left unchanged on disk)",
+                rf,
+                len(states),
+                before,
+                rf,
+            )
+
         # Group states into batches
         state_batches = [
             states[i:i + self.final_llm_batch_size]
@@ -2299,12 +2587,18 @@ class BatchProcessor:
                 self.pipeline.unload_local_models()
 
             for state_data in batch:
-                global_index = state_data["global_index"]
-                question = state_data["question"]
-                reference_answer = state_data["reference_answer"]
-                question_type = state_data["question_type"]
-                question_id = state_data["question_id"]
-                pipeline_state = state_data["pipeline_state"]
+                global_index = state_data.get("global_index")
+                if global_index is None:
+                    logger.warning(
+                        "[FinalLLMOnly] Skipping state entry without global_index (question_id=%s)",
+                        state_data.get("question_id"),
+                    )
+                    continue
+                question = state_data.get("question", "")
+                reference_answer = state_data.get("reference_answer", "")
+                question_type = state_data.get("question_type", "")
+                question_id = state_data.get("question_id", "")
+                pipeline_state = state_data.get("pipeline_state") or {}
                 memory_state_path = state_data.get("memory_state_path", "")
                 qd = state_data.get("question_date")
 
@@ -2318,108 +2612,157 @@ class BatchProcessor:
                     or {}
                 )
                 legacy_context = pipeline_state.get("memory_context", {}) or {}
-                full_context = self._load_memory_context_from_state(memory_state_path) or legacy_context
                 dialogue_context_chars = int(pipeline_state.get("dialogue_context_chars", 0) or 0)
 
-                for strategy in self.final_llm_memory_strategies:
-                    if strategy == "full_graph_json":
-                        memory_context = full_context
-                    elif strategy == "relevant_slots_full":
-                        slot_state = (strategy_state_map.get("relevant_slots_full") or {})
-                        slots_raw = slot_state.get("selected_slot_names", [])
-                        selected_slots = set()
-                        for s in slots_raw:
-                            if isinstance(s, dict):
-                                sn = str(s.get("slot") or "").strip()
-                            else:
-                                sn = str(s or "").strip()
-                            if sn:
-                                selected_slots.add(sn)
-                        if selected_slots and isinstance(full_context, dict):
-                            memory_context = {
-                                "slots": [
-                                    x for x in (full_context.get("slots") or [])
-                                    if str((x or {}).get("slot", "")).strip() in selected_slots
-                                ]
-                            }
-                        else:
-                            memory_context = full_context
-                    elif strategy == "topk_graph_records":
-                        topk_state = (strategy_state_map.get("topk_graph_records") or {})
-                        retrieved = list(topk_state.get("topk_records", []) or [])
-                        k = int(getattr(self.pipeline.config, "graph_top_k_records", 20) or 20)
-                        memory_context = {"records": retrieved[: max(0, k)]}
+                # Top-k payload is identical across inactive_facts_memory_modes — cache one LLM call per question.
+                topk_llm_once: Optional[Tuple[str, int, int]] = None
+
+                for inactive_mode in self.inactive_facts_memory_modes:
+                    include_inactive = inactive_mode == "with_inactive"
+                    loaded_ctx = self._load_memory_context_from_state(
+                        memory_state_path,
+                        include_inactive=include_inactive,
+                    )
+                    if loaded_ctx:
+                        full_context = loaded_ctx
                     else:
-                        memory_context = legacy_context
-                    memory_context = _memory_context_for_payload_mode(
-                        memory_context,
-                        self.final_llm_memory_payload_mode,
-                    )
-                    predicted_answer = "[no_final_llm]"
-                    prompt_chars_before = 0
-                    prompt_chars_after = 0
-
-                    if self.pipeline.config.llm_mode != "stub":
-                        try:
-                            predicted_answer = self.pipeline.final_llm.generate(
-                                question=question,
-                                memory_context=memory_context,
-                                recent_pairs=recent_pairs,
-                                clock_display=clock,
+                        full_context = copy.deepcopy(legacy_context) if legacy_context else {}
+                        if include_inactive:
+                            logger.warning(
+                                "[FinalLLMOnly] No dst_state.json for global_index=%s — legacy snapshot "
+                                "may omit inactive facts",
+                                global_index,
                             )
-                            char_stats = self.pipeline.final_llm.get_last_prompt_char_stats()
-                            prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
-                            prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
-                            self.stats["final_llm_calls"] += 1
-                            self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
-                            self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
-                            logger.info(
-                                "[FinalLLMOnly] Final LLM answer for item %d strategy=%s: %s...",
-                                global_index, strategy, predicted_answer[:100]
-                            )
-                        except Exception as e:
-                            logger.error(
-                                "[FinalLLMOnly] Final LLM failed for item %d strategy=%s: %s",
-                                global_index, strategy, e
-                            )
-                            predicted_answer = f"[error: {e}]"
-                            self.stats["errors_final_llm"] += 1
+                        else:
+                            full_context = _narrow_memory_context_active_facts(full_context)
 
-                    intermediate = IntermediateAnswer(
-                        global_index=global_index,
-                        question_id=question_id,
-                        question=question,
-                        reference_answer=reference_answer,
-                        question_type=question_type,
-                        predicted_answer=predicted_answer,
-                        memory_context=memory_context,
-                        memory_strategy=strategy,
-                        memory_state_path=memory_state_path,
-                        dialogue_context_chars=dialogue_context_chars,
-                        final_llm_prompt_chars_before_clamp=prompt_chars_before,
-                        final_llm_prompt_chars_after_clamp=prompt_chars_after,
-                        dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
-                        dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
-                        question_date=qd,
-                    )
-                    self.intermediate_answers.append(intermediate)
+                    for strategy in self.final_llm_memory_strategies:
+                        if strategy == "full_graph_json":
+                            memory_context = full_context
+                        elif strategy == "relevant_slots_full":
+                            slot_state = (strategy_state_map.get("relevant_slots_full") or {})
+                            slots_raw = slot_state.get("selected_slot_names", [])
+                            selected_slots = set()
+                            for s in slots_raw:
+                                if isinstance(s, dict):
+                                    sn = str(s.get("slot") or "").strip()
+                                else:
+                                    sn = str(s or "").strip()
+                                if sn:
+                                    selected_slots.add(sn)
+                            if selected_slots and isinstance(full_context, dict):
+                                memory_context = {
+                                    "slots": [
+                                        x for x in (full_context.get("slots") or [])
+                                        if str((x or {}).get("slot", "")).strip() in selected_slots
+                                    ]
+                                }
+                            else:
+                                memory_context = full_context
+                        elif strategy == "topk_graph_records":
+                            # RAGU top-k from memory_only contains graph retrieval only; DST-deactivated
+                            # triplets are not re-injected here — filter inactive defensively.
+                            topk_state = (strategy_state_map.get("topk_graph_records") or {})
+                            retrieved_raw = list(topk_state.get("topk_records", []) or [])
+                            retrieved = _filter_topk_records_for_inactive_mode(retrieved_raw, False)
+                            k = int(getattr(self.pipeline.config, "graph_top_k_records", 20) or 20)
+                            memory_context = {"records": retrieved[: max(0, k)]}
+                        else:
+                            memory_context = full_context if isinstance(full_context, dict) else legacy_context
+                        memory_context = _memory_context_for_payload_mode(
+                            memory_context,
+                            self.final_llm_memory_payload_mode,
+                        )
+                        predicted_answer = "[no_final_llm]"
+                        prompt_chars_before = 0
+                        prompt_chars_after = 0
 
-                    acc_answer = AccumulatedAnswer(
-                        global_index=global_index,
-                        question_id=question_id,
-                        question=question,
-                        reference_answer=reference_answer,
-                        question_type=question_type,
-                        predicted_answer=predicted_answer,
-                        memory_context=memory_context,
-                        memory_strategy=strategy,
-                        dialogue_context_chars=dialogue_context_chars,
-                        final_llm_prompt_chars_before_clamp=prompt_chars_before,
-                        final_llm_prompt_chars_after_clamp=prompt_chars_after,
-                        dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
-                        dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
-                    )
-                    self.answer_buffer.append(acc_answer)
+                        if self.pipeline.config.llm_mode != "stub":
+                            try:
+                                reuse_topk = (
+                                    strategy == "topk_graph_records" and topk_llm_once is not None
+                                )
+                                if reuse_topk:
+                                    predicted_answer, prompt_chars_before, prompt_chars_after = topk_llm_once
+                                    logger.info(
+                                        "[FinalLLMOnly] Reusing top-k LLM output item=%d inactive=%s strategy=%s",
+                                        global_index,
+                                        inactive_mode,
+                                        strategy,
+                                    )
+                                else:
+                                    predicted_answer = self.pipeline.final_llm.generate(
+                                        question=question,
+                                        memory_context=memory_context,
+                                        recent_pairs=recent_pairs,
+                                        clock_display=clock,
+                                    )
+                                    char_stats = self.pipeline.final_llm.get_last_prompt_char_stats()
+                                    prompt_chars_before = int(char_stats.get("before_clamp_chars", 0))
+                                    prompt_chars_after = int(char_stats.get("after_clamp_chars", 0))
+                                    self.stats["final_llm_calls"] += 1
+                                    self.stats["final_llm_prompt_chars_before_clamp_total"] += prompt_chars_before
+                                    self.stats["final_llm_prompt_chars_after_clamp_total"] += prompt_chars_after
+                                    if strategy == "topk_graph_records":
+                                        topk_llm_once = (
+                                            predicted_answer,
+                                            prompt_chars_before,
+                                            prompt_chars_after,
+                                        )
+                                logger.info(
+                                    "[FinalLLMOnly] Final LLM answer for item %d inactive=%s strategy=%s: %s...",
+                                    global_index,
+                                    inactive_mode,
+                                    strategy,
+                                    predicted_answer[:100],
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    "[FinalLLMOnly] Final LLM failed for item %d inactive=%s strategy=%s: %s",
+                                    global_index,
+                                    inactive_mode,
+                                    strategy,
+                                    e,
+                                )
+                                predicted_answer = f"[error: {e}]"
+                                self.stats["errors_final_llm"] += 1
+
+                        intermediate = IntermediateAnswer(
+                            global_index=global_index,
+                            question_id=question_id,
+                            question=question,
+                            reference_answer=reference_answer,
+                            question_type=question_type,
+                            predicted_answer=predicted_answer,
+                            memory_context=memory_context,
+                            memory_strategy=strategy,
+                            inactive_facts_mode=inactive_mode,
+                            memory_state_path=memory_state_path,
+                            dialogue_context_chars=dialogue_context_chars,
+                            final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                            final_llm_prompt_chars_after_clamp=prompt_chars_after,
+                            dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
+                            dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
+                            question_date=qd,
+                        )
+                        self.intermediate_answers.append(intermediate)
+
+                        acc_answer = AccumulatedAnswer(
+                            global_index=global_index,
+                            question_id=question_id,
+                            question=question,
+                            reference_answer=reference_answer,
+                            question_type=question_type,
+                            predicted_answer=predicted_answer,
+                            memory_context=memory_context,
+                            memory_strategy=strategy,
+                            dialogue_context_chars=dialogue_context_chars,
+                            final_llm_prompt_chars_before_clamp=prompt_chars_before,
+                            final_llm_prompt_chars_after_clamp=prompt_chars_after,
+                            dataset_ordinal=state_data.get("_validation_dataset_ordinal"),
+                            dialogue_row_index=state_data.get("_validation_dialogue_row_index"),
+                        )
+                        self.answer_buffer.append(acc_answer)
 
             # Write intermediate answers after each batch
             self._write_intermediate_answers()
@@ -2446,60 +2789,110 @@ class BatchProcessor:
                 self._flush_judge_batch()
 
     def _write_intermediate_answers(self) -> None:
-        """Write intermediate answers to disk for later judge processing."""
-        grouped: Dict[str, List[IntermediateAnswer]] = {}
+        """Write intermediate answers to disk for later judge processing.
+
+        With ``final_llm_resume_from_global_index`` set (final_llm_only), merges each existing
+        ``intermediate_answers.json`` (same strategy × inactive subdirectory) with this run:
+        rows with ``global_index`` below the threshold are kept from disk; rows ``>=`` threshold
+        are replaced/appended from ``self.intermediate_answers``. Per-file ``statistics`` are
+        recomputed from the merged ``answers`` list.
+        """
+        grouped: Dict[Tuple[str, str], List[IntermediateAnswer]] = {}
         for ans in self.intermediate_answers:
             strategy = ans.memory_strategy or "full_graph_json"
-            grouped.setdefault(strategy, []).append(ans)
+            inactive_tag = getattr(ans, "inactive_facts_mode", "") or "active_only"
+            grouped.setdefault((strategy, inactive_tag), []).append(ans)
 
-        for strategy, answers in grouped.items():
-            output_path = self.persistence.output_dir / strategy / "intermediate_answers.json"
-            answers_data = []
-            for ans in answers:
-                row_a: Dict[str, Any] = {
-                    "global_index": ans.global_index,
-                    "question_id": ans.question_id,
-                    "question": ans.question,
-                    "reference_answer": ans.reference_answer,
-                    "question_type": ans.question_type,
-                    "predicted_answer": ans.predicted_answer,
-                    "memory_context": ans.memory_context,
-                    "memory_strategy": strategy,
-                    "dialogue_context_chars": int(ans.dialogue_context_chars or 0),
-                    "memory_state_path": ans.memory_state_path,
-                    "final_llm_prompt_chars_before_clamp": ans.final_llm_prompt_chars_before_clamp,
-                    "final_llm_prompt_chars_after_clamp": ans.final_llm_prompt_chars_after_clamp,
-                }
-                if ans.dataset_ordinal is not None:
-                    row_a["_validation_dataset_ordinal"] = ans.dataset_ordinal
-                if ans.dialogue_row_index is not None:
-                    row_a["_validation_dialogue_row_index"] = ans.dialogue_row_index
-                if ans.question_date is not None:
-                    row_a["question_date"] = ans.question_date
-                answers_data.append(row_a)
-            _atomic_write_validation_json(output_path, {
-                "metadata": {
+        layout_subdirs = _inactive_facts_use_strategy_subdir(self.inactive_facts_memory_modes)
+        resume_raw = getattr(self, "final_llm_resume_from_global_index", None)
+        resume_from_int: Optional[int] = int(resume_raw) if resume_raw is not None else None
+
+        expected_groups: List[Tuple[str, str]] = [
+            (strategy, inactive_tag)
+            for strategy in self.final_llm_memory_strategies
+            for inactive_tag in self.inactive_facts_memory_modes
+        ]
+        keys_to_write: List[Tuple[str, str]] = (
+            expected_groups if resume_from_int is not None else list(grouped.keys())
+        )
+
+        agg_calls = 0
+        agg_pb = 0
+        agg_pa = 0
+        agg_dcc = 0
+
+        for strategy, inactive_tag in keys_to_write:
+            answers = grouped.get((strategy, inactive_tag), [])
+            strat_root = self.persistence.output_dir / strategy
+            out_dir = strat_root / inactive_tag if layout_subdirs else strat_root
+            output_path = out_dir / "intermediate_answers.json"
+
+            new_rows = [
+                _intermediate_answer_to_json_row(ans, strategy, inactive_tag)
+                for ans in answers
+            ]
+            prev_blob: Optional[Dict[str, Any]] = None
+            if resume_from_int is not None:
+                prev_blob = _load_json_optional(output_path)
+                prev_rows = list((prev_blob or {}).get("answers") or []) if prev_blob else []
+                merged_rows = _merge_intermediate_answer_rows_for_resume(
+                    prev_rows, new_rows, resume_from_int
+                )
+            else:
+                merged_rows = sorted(
+                    new_rows,
+                    key=lambda x: (int(x.get("global_index", 0)), str(x.get("question_id", ""))),
+                )
+
+            if resume_from_int is None:
+                meta_out: Dict[str, Any] = {
                     **(self._validation_metadata or {}),
                     "memory_strategy": strategy,
-                },
-                "statistics": {
-                    "answers_count": len(answers_data),
-                    "dialogue_context_chars_total": int(sum(int(a.dialogue_context_chars or 0) for a in answers)),
-                    "dialogue_context_chars_avg": (
-                        float(sum(int(a.dialogue_context_chars or 0) for a in answers) / len(answers))
-                        if answers
-                        else 0.0
-                    ),
-                    "final_llm_calls_total": int(self.stats.get("final_llm_calls", 0)),
-                    "final_llm_prompt_chars_before_clamp_total": int(
-                        self.stats.get("final_llm_prompt_chars_before_clamp_total", 0)
-                    ),
-                    "final_llm_prompt_chars_after_clamp_total": int(
-                        self.stats.get("final_llm_prompt_chars_after_clamp_total", 0)
-                    ),
-                },
-                "answers": answers_data,
-            })
+                    "inactive_facts_mode": inactive_tag,
+                }
+            else:
+                prev_meta: Dict[str, Any] = {}
+                if isinstance(prev_blob, dict):
+                    pm = prev_blob.get("metadata")
+                    if isinstance(pm, dict):
+                        prev_meta = dict(pm)
+                meta_out = {
+                    **prev_meta,
+                    **(self._validation_metadata or {}),
+                    "memory_strategy": strategy,
+                    "inactive_facts_mode": inactive_tag,
+                    "final_llm_resume_from_global_index": resume_from_int,
+                }
+
+            prev_timing: Dict[str, Any] = {}
+            if resume_from_int is not None and isinstance(prev_blob, dict):
+                pt = prev_blob.get("timing")
+                if isinstance(pt, dict):
+                    prev_timing = dict(pt)
+
+            stats_out = _stats_from_intermediate_answer_rows(merged_rows)
+            agg_calls += int(stats_out.get("final_llm_calls_total", 0) or 0)
+            agg_pb += int(stats_out.get("final_llm_prompt_chars_before_clamp_total", 0) or 0)
+            agg_pa += int(stats_out.get("final_llm_prompt_chars_after_clamp_total", 0) or 0)
+            agg_dcc += int(stats_out.get("dialogue_context_chars_total", 0) or 0)
+
+            payload: Dict[str, Any] = {
+                "metadata": meta_out,
+                "statistics": stats_out,
+                "answers": merged_rows,
+            }
+            if resume_from_int is not None and prev_timing:
+                payload["timing"] = prev_timing
+
+            _atomic_write_validation_json(output_path, payload)
+
+        # Align aggregate counters with merged files (sum across strategy × inactive outputs).
+        if self.validation_mode == "final_llm_only" and keys_to_write:
+            self.stats["final_llm_calls"] = agg_calls
+            self.stats["final_llm_prompt_chars_before_clamp_total"] = agg_pb
+            self.stats["final_llm_prompt_chars_after_clamp_total"] = agg_pa
+            self.stats["dialogue_context_chars_total"] = agg_dcc
+            self.stats["dialogue_context_chars_count"] = agg_calls
 
     def _flush_judge_batch(self):
         """Process accumulated answers through judge."""
@@ -2599,6 +2992,10 @@ class BatchProcessor:
             "memory_hit_evaluation": memory_hit_result,
             "memory_hit": memory_hit_result.get("fact_present", False) if memory_hit_result else None,
         }
+        if acc.inactive_facts_mode:
+            result["inactive_facts_mode"] = acc.inactive_facts_mode
+        if acc.judge_intermediate_source:
+            result["judge_intermediate_source"] = acc.judge_intermediate_source
         if acc.dataset_ordinal is not None:
             result["_validation_dataset_ordinal"] = acc.dataset_ordinal
         if acc.dialogue_row_index is not None:
@@ -2634,10 +3031,22 @@ class BatchProcessor:
                 else:
                     self.stats["by_type"][qt]["mhe_misses"] += 1
 
-        self._write_results_json_snapshot()
+        shard_out = getattr(self, "_judge_incremental_results_json_path", None)
+        shard_meta = getattr(self, "_judge_shard_metadata_extra", None)
+        self._write_results_json_snapshot(
+            results_json_path=shard_out if shard_out is not None else None,
+            metadata_extra=dict(shard_meta) if shard_meta else None,
+        )
 
-    def _load_memory_context_from_state(self, memory_state_path: str) -> Dict[str, Any]:
-        """Load memory context from saved DST state file."""
+    def _load_memory_context_from_state(
+        self,
+        memory_state_path: str,
+        *,
+        include_inactive: bool = False,
+    ) -> Dict[str, Any]:
+        """Load memory context from saved DST state file (``dst_state.json`` slots)."""
+        if not str(memory_state_path or "").strip():
+            return {}
         try:
             state_file = Path(memory_state_path)
             if not state_file.exists():
@@ -2653,21 +3062,23 @@ class BatchProcessor:
             slots = state.get("slots", {})
             memory_context = {"slots": []}
             for slot_name, records in slots.items():
-                slot_data = {
-                    "slot": slot_name,
-                    "messages": [
-                        {
-                            "record_id": r.get("record_id"),
-                            "value": r.get("value"),
-                            "source_text": r.get("source_text"),
-                            "subject": r.get("subject"),
-                            "relation": r.get("relation"),
-                            "object": r.get("object"),
-                            "is_active": r.get("is_active", True),
-                        }
-                        for r in records if r.get("is_active", True)
-                    ]
-                }
+                messages = []
+                for r in records:
+                    if not include_inactive and not r.get("is_active", True):
+                        continue
+                    val = r.get("value")
+                    messages.append({
+                        "record_id": r.get("record_id"),
+                        "message_text": val,
+                        "value": val,
+                        "source_text": r.get("source_text"),
+                        "subject": r.get("subject"),
+                        "relation": r.get("relation"),
+                        "object": r.get("object"),
+                        "created_at_datetime": str(r.get("created_at_datetime") or "").strip(),
+                        "is_active": r.get("is_active", True),
+                    })
+                slot_data = {"slot": slot_name, "slot_label": slot_name, "messages": messages}
                 if slot_data["messages"]:
                     memory_context["slots"].append(slot_data)
 
@@ -2721,93 +3132,168 @@ class BatchProcessor:
         return states_map
 
     def _process_judge_only(self):
-        """Process judge evaluation using saved answers (judge_only mode)."""
-        if not self.input_answers_path:
-            raise ValueError("input_answers_path required for judge_only mode")
+        """Process judge evaluation using saved answers (judge_only mode).
 
-        input_path = Path(self.input_answers_path)
-        if not input_path.exists():
-            raise FileNotFoundError(f"Intermediate answers file not found: {input_path}")
+        When ``len(input_answers_paths) > 1``, writes one ``validation_results.json`` per input file under
+        ``persistence.output_dir/<strategy>/<inactive_tag>/`` (mirroring intermediate paths). Otherwise one file at
+        ``output_dir/validation_results.json`` (legacy).
 
-        logger.info("[JudgeOnly] Loading intermediate answers from %s", input_path)
+        After each judged answer, the corresponding ``validation_results.json`` is rewritten (resume-safe), same idea as
+        ``final_llm_only`` rewriting ``intermediate_answers.json`` per question.
+        """
+        paths = list(self.input_answers_paths)
+        if not paths:
+            raise ValueError("input_answers_path / input_answers_paths required for judge_only mode")
 
-        with open(input_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        multi_shard = len(paths) > 1
+        self._judge_only_total_rows = 0
+        self._judge_incremental_results_json_path = None
+        self._judge_shard_metadata_extra = None
 
-        answers = list(data.get("answers", []))
-        answers.sort(key=_validation_sort_key)
-        logger.info("[JudgeOnly] Loaded %d answers to evaluate (sorted by dataset ordinal)", len(answers))
-
-        # Load memory states from input_state_dir if provided (for Memory Hit Rate)
-        memory_states_map = {}
+        memory_states_map: Dict[int, Dict[str, Any]] = {}
         if self.input_state_dir and self.calculate_memory_hit_rate:
             logger.info("[JudgeOnly] Loading memory states from %s", self.input_state_dir)
             memory_states_map = self._load_memory_states_map(self.input_state_dir)
             logger.info("[JudgeOnly] Loaded %d memory states", len(memory_states_map))
 
-        # Group answers into batches
-        answer_batches = [
-            answers[i:i + self.judge_batch_size]
-            for i in range(0, len(answers), self.judge_batch_size)
-        ]
+        try:
+            for pi, raw_path in enumerate(paths):
+                input_path = Path(raw_path)
+                if not input_path.exists():
+                    raise FileNotFoundError(f"Intermediate answers file not found: {input_path}")
 
-        for batch_idx, batch in enumerate(answer_batches):
-            logger.info("[JudgeOnly] Evaluating batch %d/%d", batch_idx + 1, len(answer_batches))
+                if multi_shard:
+                    self.results.clear()
+                    self.stats = self._fresh_judge_stats()
 
-            for ans_data in batch:
-                global_index = ans_data["global_index"]
-
-                # Prefer snapshot from intermediate_answers (exactly what final LLM saw).
-                # input_state_dir only fills gaps — avoids mismatched runs overwriting context.
-                memory_context = ans_data.get("memory_context") or {}
-                memory_state_path = ans_data.get("memory_state_path", "")
-                dialogue_context_chars = int(ans_data.get("dialogue_context_chars", 0) or 0)
-
-                if self.input_state_dir and self.calculate_memory_hit_rate:
-                    map_data = memory_states_map.get(global_index)
-                    if map_data:
-                        if not memory_context:
-                            memory_context = map_data.get("memory_context", {})
-                            logger.info(
-                                "[JudgeOnly] memory_context empty in answers; filled from "
-                                "input_state_dir for flat index %d",
-                                global_index,
-                            )
-                        if not memory_state_path:
-                            memory_state_path = map_data.get("memory_state_path", "") or memory_state_path
-                        if not dialogue_context_chars:
-                            dialogue_context_chars = int(map_data.get("dialogue_context_chars", 0) or 0)
-                
-                acc = AccumulatedAnswer(
-                    global_index=global_index,
-                    question_id=ans_data["question_id"],
-                    question=ans_data["question"],
-                    reference_answer=ans_data["reference_answer"],
-                    question_type=ans_data.get("question_type", ""),
-                    predicted_answer=ans_data["predicted_answer"],
-                    memory_context=memory_context,
-                    memory_strategy=str(ans_data.get("memory_strategy", "") or ""),
-                    dialogue_context_chars=dialogue_context_chars,
-                    final_llm_prompt_chars_before_clamp=int(
-                        ans_data.get("final_llm_prompt_chars_before_clamp", 0) or 0
-                    ),
-                    final_llm_prompt_chars_after_clamp=int(
-                        ans_data.get("final_llm_prompt_chars_after_clamp", 0) or 0
-                    ),
-                    dataset_ordinal=ans_data.get("_validation_dataset_ordinal"),
-                    dialogue_row_index=ans_data.get("_validation_dialogue_row_index"),
+                src_label = str(input_path).replace("\\", "/")
+                shard_results_path = _validation_results_path_for_judge_shard(
+                    input_path, self.persistence.output_dir
                 )
-                self._evaluate_single_answer(acc, memory_state_path)
+                if multi_shard:
+                    self._judge_incremental_results_json_path = shard_results_path
+                    self._judge_shard_metadata_extra = {
+                        "judge_shard_intermediate_answers": src_label,
+                        "judge_shard_validation_results": str(shard_results_path).replace("\\", "/"),
+                        "judge_multi_shard": True,
+                    }
+                else:
+                    self._judge_incremental_results_json_path = None
+                    self._judge_shard_metadata_extra = None
 
-        # Clear any remaining buffer
+                logger.info(
+                    "[JudgeOnly] (%d/%d) Loading intermediate answers from %s",
+                    pi + 1,
+                    len(paths),
+                    input_path,
+                )
+
+                with open(input_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                answers = list(data.get("answers", []))
+                answers.sort(key=_validation_sort_key)
+                self._judge_only_total_rows += len(answers)
+                logger.info(
+                    "[JudgeOnly] Loaded %d answers from this file (sorted by dataset ordinal)",
+                    len(answers),
+                )
+
+                if not answers:
+                    if multi_shard:
+                        self._finalize_judge_by_type_averages()
+                        self._write_results_json_snapshot(
+                            results_json_path=shard_results_path,
+                            metadata_extra=dict(self._judge_shard_metadata_extra or {}),
+                        )
+                        logger.info("[JudgeOnly] Wrote empty shard results: %s", shard_results_path)
+                    continue
+
+                answer_batches = [
+                    answers[i:i + self.judge_batch_size]
+                    for i in range(0, len(answers), self.judge_batch_size)
+                ]
+
+                for batch_idx, batch in enumerate(answer_batches):
+                    logger.info(
+                        "[JudgeOnly] File %d/%d batch %d/%d",
+                        pi + 1,
+                        len(paths),
+                        batch_idx + 1,
+                        len(answer_batches),
+                    )
+
+                    for ans_data in batch:
+                        global_index = ans_data["global_index"]
+
+                        memory_context = ans_data.get("memory_context") or {}
+                        memory_state_path = ans_data.get("memory_state_path", "")
+                        dialogue_context_chars = int(ans_data.get("dialogue_context_chars", 0) or 0)
+
+                        if self.input_state_dir and self.calculate_memory_hit_rate:
+                            map_data = memory_states_map.get(global_index)
+                            if map_data:
+                                if not memory_context:
+                                    memory_context = map_data.get("memory_context", {})
+                                    logger.info(
+                                        "[JudgeOnly] memory_context empty in answers; filled from "
+                                        "input_state_dir for flat index %d",
+                                        global_index,
+                                    )
+                                if not memory_state_path:
+                                    memory_state_path = (
+                                        map_data.get("memory_state_path", "") or memory_state_path
+                                    )
+                                if not dialogue_context_chars:
+                                    dialogue_context_chars = int(
+                                        map_data.get("dialogue_context_chars", 0) or 0
+                                    )
+
+                        acc = AccumulatedAnswer(
+                            global_index=global_index,
+                            question_id=ans_data["question_id"],
+                            question=ans_data["question"],
+                            reference_answer=ans_data["reference_answer"],
+                            question_type=ans_data.get("question_type", ""),
+                            predicted_answer=ans_data["predicted_answer"],
+                            memory_context=memory_context,
+                            memory_strategy=str(ans_data.get("memory_strategy", "") or ""),
+                            inactive_facts_mode=str(ans_data.get("inactive_facts_mode", "") or ""),
+                            judge_intermediate_source=src_label,
+                            dialogue_context_chars=dialogue_context_chars,
+                            final_llm_prompt_chars_before_clamp=int(
+                                ans_data.get("final_llm_prompt_chars_before_clamp", 0) or 0
+                            ),
+                            final_llm_prompt_chars_after_clamp=int(
+                                ans_data.get("final_llm_prompt_chars_after_clamp", 0) or 0
+                            ),
+                            dataset_ordinal=ans_data.get("_validation_dataset_ordinal"),
+                            dialogue_row_index=ans_data.get("_validation_dialogue_row_index"),
+                        )
+                        self._evaluate_single_answer(acc, memory_state_path)
+
+                if multi_shard:
+                    logger.info(
+                        "[JudgeOnly] Shard complete (incremental snapshots): %s",
+                        shard_results_path,
+                    )
+        finally:
+            self._judge_incremental_results_json_path = None
+            self._judge_shard_metadata_extra = None
+
         self.answer_buffer.clear()
 
         if self.judge_client is not None and getattr(self.judge_client, "mode", "") == "local":
             self.judge_client.unload()
 
-    def _write_results_json_snapshot(self) -> None:
+    def _write_results_json_snapshot(
+        self,
+        results_json_path: Optional[Path] = None,
+        metadata_extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        target = results_json_path if results_json_path is not None else self._results_json_path
         if (
-            self._results_json_path is None
+            target is None
             or self._validation_metadata is None
             or self._timing is None
         ):
@@ -2820,13 +3306,16 @@ class BatchProcessor:
         if timing_stats.get("total_time", 0) == 0 and self._timing.total_start is not None:
             timing_stats = dict(timing_stats)
             timing_stats["total_time"] = time.time() - self._timing.total_start
+        meta = dict(self._validation_metadata)
+        if metadata_extra:
+            meta.update(metadata_extra)
         payload = {
-            "metadata": self._validation_metadata,
+            "metadata": meta,
             "statistics": stats_export,
             "timing": timing_stats,
             "results": list(self.results),
         }
-        _atomic_write_validation_json(self._results_json_path, payload)
+        _atomic_write_validation_json(target, payload)
 
     def _write_giga_memory_dialogue_logs(self) -> None:
         """Write verbose per-dialogue logs (DST_memory pipeline test *_logs.json style)."""
@@ -2879,20 +3368,29 @@ class BatchProcessor:
             return self.results, self.stats
 
         if self.validation_mode == "final_llm_only":
-            # Process any remaining states if not already processed
-            if not self.intermediate_answers:
-                self._process_final_llm_only()
+            self._process_final_llm_only()
             self._write_intermediate_answers()
-            logger.info("[FinalLLMOnly] Generated %d answers", len(self.intermediate_answers))
+            logger.info("[FinalLLMOnly] Generated %d new answer row(s) this run", len(self.intermediate_answers))
             # If judge is configured, flush remaining answers
             if self.answer_buffer:
                 self._flush_judge_batch()
             return self.results, self.stats
 
         if self.validation_mode == "judge_only":
-            # Process all answers if not already processed
             if not self.results:
                 self._process_judge_only()
+            multi_shard = len(self.input_answers_paths) > 1
+            if multi_shard:
+                logger.info(
+                    "[JudgeOnly] Sharded outputs: %d file(s), %d judge rows total → "
+                    "validation_results.json under each %s/<strategy>/<inactive_tag>/",
+                    len(self.input_answers_paths),
+                    self._judge_only_total_rows,
+                    self.persistence.output_dir,
+                )
+                self.results.clear()
+                self.stats = self._fresh_judge_stats()
+                return self.results, self.stats
             for qt in self.stats["by_type"]:
                 count = self.stats["by_type"][qt]["count"]
                 if count > 0:
@@ -2985,6 +3483,20 @@ def run_validation(args: argparse.Namespace) -> None:
         getattr(args, "final_llm_memory_payload_mode", "with_metadata"),
     )
     logger.info(
+        "  inactive_facts_memory_modes: %s",
+        getattr(args, "inactive_facts_memory_modes", ["active_only"]),
+    )
+    _iap_show = _normalize_input_answers_paths(getattr(args, "input_answers_paths", None))
+    logger.info(
+        "  input_answers_paths (%d): %s",
+        len(_iap_show),
+        _iap_show if len(_iap_show) <= 6 else _iap_show[:6] + ["..."],
+    )
+    logger.info(
+        "  final_llm_resume_from_global_index: %s",
+        getattr(args, "final_llm_resume_from_global_index", None),
+    )
+    logger.info(
         "  use_dataset_datetime: %s",
         getattr(args, "gm_use_dataset_datetime", None),
     )
@@ -3000,9 +3512,30 @@ def run_validation(args: argparse.Namespace) -> None:
     if args.validation_mode == "final_llm_only" and not args.input_state_dir:
         logger.error("--input-state-dir is required for final_llm_only mode")
         sys.exit(1)
-    if args.validation_mode == "judge_only" and not args.input_answers_path:
-        logger.error("--input-answers-path is required for judge_only mode")
-        sys.exit(1)
+    if args.validation_mode == "judge_only":
+        _jpaths = _normalize_input_answers_paths(getattr(args, "input_answers_paths", None))
+        _single = (getattr(args, "input_answers_path", None) or "").strip()
+        if not _jpaths and not _single:
+            logger.error(
+                "judge_only requires input_answers_path or non-empty input_answers_paths in config / CLI"
+            )
+            sys.exit(1)
+
+    _rf_resume = getattr(args, "final_llm_resume_from_global_index", None)
+    if _rf_resume is not None:
+        if int(_rf_resume) < 0:
+            logger.error(
+                "final_llm_resume_from_global_index must be >= 0, got %s",
+                _rf_resume,
+            )
+            sys.exit(1)
+        if args.validation_mode != "final_llm_only":
+            logger.warning(
+                "final_llm_resume_from_global_index=%s applies only to validation_mode "
+                "final_llm_only — ignoring for mode %s",
+                _rf_resume,
+                args.validation_mode,
+            )
 
     # Load dataset with balanced sampling (for modes that need it)
     dataset = []
@@ -3039,6 +3572,11 @@ def run_validation(args: argparse.Namespace) -> None:
             getattr(args, "memory_only_dialogue_row_indices", []) or []
         ),
         "memory_only_dialogue_ids": list(getattr(args, "memory_only_dialogue_ids", []) or []),
+        "inactive_facts_memory_modes": list(getattr(args, "inactive_facts_memory_modes", []) or []),
+        "final_llm_resume_from_global_index": getattr(
+            args, "final_llm_resume_from_global_index", None
+        ),
+        "input_answers_paths": _normalize_input_answers_paths(getattr(args, "input_answers_paths", None)),
     }
 
     # Initialize persistence
@@ -3060,6 +3598,7 @@ def run_validation(args: argparse.Namespace) -> None:
             enable_thinking=getattr(args, "judge_enable_thinking", True),
             load_dtype=getattr(args, "judge_load_dtype", "float16"),
             load_quantization=getattr(args, "judge_load_quantization", "none"),
+            openrouter_reasoning=getattr(args, "judge_openrouter_reasoning", None),
         )
 
     # Build pipeline (full DST for memory phases; lightweight for final_llm_only)
@@ -3067,6 +3606,9 @@ def run_validation(args: argparse.Namespace) -> None:
     if args.validation_mode in ("full", "memory_only", "final_llm_only"):
         cli_overrides = dict(getattr(args, "_validation_shared_pipeline_overrides", {}) or {})
         cli_overrides.update(build_cli_overrides(args))
+        cli_overrides["final_llm_memory_payload_mode"] = _normalize_memory_payload_mode(
+            getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+        )
         if cli_overrides:
             logger.info(
                 "  DST pipeline overrides (validation shared + giga_memory/--gm-*): %s",
@@ -3120,10 +3662,21 @@ def run_validation(args: argparse.Namespace) -> None:
         timing=timing,
         validation_mode=args.validation_mode,
         input_state_dir=Path(args.input_state_dir) if args.input_state_dir else None,
-        input_answers_path=Path(args.input_answers_path) if args.input_answers_path else None,
+        input_answers_path=(
+            Path((getattr(args, "input_answers_path", None) or "").strip())
+            if (getattr(args, "input_answers_path", None) or "").strip()
+            else None
+        ),
+        input_answers_paths=_normalize_input_answers_paths(getattr(args, "input_answers_paths", None)),
         final_llm_memory_strategies=list(getattr(args, "final_llm_memory_strategies", []) or []),
         final_llm_memory_payload_mode=str(
             getattr(args, "final_llm_memory_payload_mode", "with_metadata")
+        ),
+        inactive_facts_memory_modes=list(getattr(args, "inactive_facts_memory_modes", []) or []),
+        final_llm_resume_from_global_index=(
+            getattr(args, "final_llm_resume_from_global_index", None)
+            if args.validation_mode == "final_llm_only"
+            else None
         ),
         save_giga_memory_logs=bool(getattr(args, "save_intermediate", True)),
     )
@@ -3354,6 +3907,9 @@ def build_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
             args.gm_conflict_rule_same_relation_updates
         )
 
+    if hasattr(args, "gm_openrouter_reasoning"):
+        overrides["openrouter_reasoning"] = getattr(args, "gm_openrouter_reasoning")
+
     return overrides
 
 
@@ -3412,6 +3968,15 @@ Examples:
     mode_group.add_argument("--input-answers-path", type=str,
                            default=None,
                            help="Path to intermediate answers JSON (for judge_only mode); omit = from config")
+    mode_group.add_argument(
+        "--input-answers-paths",
+        type=str,
+        default=None,
+        help=(
+            "judge_only: comma-separated intermediate_answers.json paths — usually one file per "
+            "final_llm memory strategy you evaluated (see intermediate tree under results_*)."
+        ),
+    )
     mode_group.add_argument("--memory-only-output-suffix", type=str,
                            default=None,
                            help="Suffix for memory_only output dirs; omit = from config")
@@ -3456,6 +4021,25 @@ Examples:
         default=None,
         choices=list(MEMORY_PAYLOAD_MODES),
         help="Payload mode for memory in final LLM: with_metadata | triplets_only",
+    )
+    mode_group.add_argument(
+        "--inactive-facts-memory-modes",
+        type=str,
+        default=None,
+        help=(
+            "final_llm_only: comma-separated DST inactive-fact modes — active_only (default), "
+            "with_inactive. Listing both doubles LLM calls and writes separate intermediate_answers.json paths."
+        ),
+    )
+    mode_group.add_argument(
+        "--final-llm-resume-from-global-index",
+        type=int,
+        default=None,
+        help=(
+            "final_llm_only only: merge into existing intermediate_answers.json under output_dir. "
+            "Keep rows with global_index below N; re-run LLM for states with global_index >= N and overwrite "
+            "the tail (same strategy × inactive_facts files). Omit for a full rewrite."
+        ),
     )
 
     # Validation parameters (override config file)
@@ -3725,6 +4309,10 @@ Examples:
         config["validation_mode"]["input_state_dir"] = args.input_state_dir
     if args.input_answers_path is not None:
         config["validation_mode"]["input_answers_path"] = args.input_answers_path
+    if getattr(args, "input_answers_paths", None):
+        _iap_cli = str(args.input_answers_paths).strip()
+        if _iap_cli:
+            config["validation_mode"]["input_answers_paths"] = _normalize_input_answers_paths(_iap_cli)
     if args.memory_only_output_suffix is not None:
         config["validation_mode"]["memory_only_output_suffix"] = args.memory_only_output_suffix
     if args.memory_only_write_mode is not None:
@@ -3748,6 +4336,16 @@ Examples:
         s = str(args.memory_only_dialogue_ids).strip()
         config["validation_mode"]["memory_only_dialogue_ids"] = (
             [x.strip() for x in s.split(",") if x.strip()] if s else []
+        )
+    if getattr(args, "inactive_facts_memory_modes", None) is not None:
+        s = str(args.inactive_facts_memory_modes).strip()
+        modes_in = [x.strip() for x in s.split(",") if x.strip()] if s else []
+        config["validation_mode"]["inactive_facts_memory_modes"] = (
+            _normalize_inactive_facts_memory_modes(modes_in)
+        )
+    if getattr(args, "final_llm_resume_from_global_index", None) is not None:
+        config["validation_mode"]["final_llm_resume_from_global_index"] = int(
+            args.final_llm_resume_from_global_index
         )
 
     # Handle legacy args
@@ -3777,6 +4375,14 @@ Examples:
     args.final_llm_memory_payload_mode = _normalize_memory_payload_mode(
         getattr(args, "final_llm_memory_payload_mode", "with_metadata")
     )
+    _ifm = getattr(args, "inactive_facts_memory_modes", [])
+    if isinstance(_ifm, str):
+        _ifs = _ifm.strip()
+        args.inactive_facts_memory_modes = _normalize_inactive_facts_memory_modes(
+            [x.strip() for x in _ifs.split(",") if x.strip()] if _ifs else []
+        )
+    else:
+        args.inactive_facts_memory_modes = _normalize_inactive_facts_memory_modes(_ifm)
 
     _mori = getattr(args, "memory_only_dialogue_row_indices", [])
     if isinstance(_mori, str):
@@ -3792,6 +4398,15 @@ Examples:
         )
     else:
         args.memory_only_dialogue_ids = _coerce_str_list(_moids)
+
+    _rfgi = getattr(args, "final_llm_resume_from_global_index", None)
+    if _rfgi is not None and str(_rfgi).strip() != "":
+        args.final_llm_resume_from_global_index = int(_rfgi)
+    else:
+        args.final_llm_resume_from_global_index = None
+
+    _iaps_raw = getattr(args, "input_answers_paths", None)
+    args.input_answers_paths = _normalize_input_answers_paths(_iaps_raw)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 

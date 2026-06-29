@@ -125,7 +125,10 @@ torchaudio = [
 line-length = 88
 target-version = "py310"
 src = ["DST_memory"]
-# Exclude third-party and generated directories
+# Exclude third-party and generated directories.
+# force-exclude=true honors these even when paths are passed explicitly
+# (e.g. by pre-commit), so validation/ scripts are never linted/auto-fixed.
+force-exclude = true
 exclude = [
     "RAGU",
     "validation",
@@ -159,6 +162,20 @@ known-first-party = ["dst_memory"]
 [tool.black]
 line-length = 88
 target-version = ["py310", "py311"]
+# force-exclude is honored even when paths are passed explicitly (e.g. by
+# pre-commit); plain `exclude` is not, so we mirror the list here to keep
+# validation/ and other generated dirs out of formatting.
+force-exclude = '''
+/(
+    \.git
+  | \.venv
+  | RAGU
+  | validation
+  | dataset_generation
+  | slot_eval
+  | __pycache__
+)/
+'''
 exclude = '''
 /(
     \.git
