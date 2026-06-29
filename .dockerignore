@@ -24,8 +24,6 @@ bot_state
 
 # Development / docs
 validation
-dataset_generation
-slot_eval
 *.md
 !README.md
 

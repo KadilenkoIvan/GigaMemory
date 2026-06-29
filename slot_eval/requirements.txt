@@ -1,4 +1,0 @@
-# Align with DST_memory (slot model + transformers stack)
-torch>=2.0
-transformers>=4.38
-safetensors>=0.4

@@ -400,7 +400,7 @@ RAGU — **активный семантический слой**, а не вс�
 Команда:
 
 ```bash
-python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
+python DST_memory/run.py pipeline test --dataset-path tests/fixtures/format_example.jsonl --output-path DST_memory/output.json
 ```
 
 ## 7.2 `pipeline inference interactive`
@@ -585,19 +585,19 @@ TTL хранится в поле `description` ребра в виде аннот
 ### full_graph_json
 
 ```bash
-python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy full_graph_json pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/smoke_full_graph.json
+python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy full_graph_json pipeline test --dataset-path tests/fixtures/format_example.jsonl --output-path DST_memory/smoke_full_graph.json
 ```
 
 ### relevant_slots_full
 
 ```bash
-python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy relevant_slots_full pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/smoke_relevant_slots.json
+python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy relevant_slots_full pipeline test --dataset-path tests/fixtures/format_example.jsonl --output-path DST_memory/smoke_relevant_slots.json
 ```
 
 ### topk_graph_records
 
 ```bash
-python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy topk_graph_records --graph-top-k-records 20 pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/smoke_topk.json
+python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy topk_graph_records --graph-top-k-records 20 pipeline test --dataset-path tests/fixtures/format_example.jsonl --output-path DST_memory/smoke_topk.json
 ```
 
 ---

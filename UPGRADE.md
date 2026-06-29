@@ -184,7 +184,7 @@ make start
 
 #### 4.1 Анализ результатов валидации — DONE
 - Загрузка и агрегация результатов валидации → выжимки `validation/metrics/metrics-baseline.json` и `metrics-gigamemory.json` (ноутбук обработки `metrics_processing.ipynb` лежит локально, в репозиторий не коммитится)
-- Графики: accuracy по стратегиям, по моделям, memory hit rate, объём контекста (`val_images/`)
+- Графики: accuracy по стратегиям, по моделям, memory hit rate, объём контекста (`images/`)
 - Сравнение с baseline (`full_context`) по трём финальным LLM
 - Методика и итоговые таблицы сведены в [`validation/README.md`](validation/README.md)
 
@@ -258,7 +258,7 @@ GigaMemory как прослойка между пользователем и л
 ```
 [Сейчас]
   ↓
-Этап 0 — графики экспериментов (val_images/) DONE
+Этап 0 — графики экспериментов (images/) DONE
   ↓
 Этап 1 — real-time режим + параллельный путь DONE
   ↓

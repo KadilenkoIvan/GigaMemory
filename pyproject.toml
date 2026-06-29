@@ -132,8 +132,6 @@ force-exclude = true
 exclude = [
     "RAGU",
     "validation",
-    "dataset_generation",
-    "slot_eval",
     ".git",
     ".venv",
     "__pycache__",
@@ -171,8 +169,6 @@ force-exclude = '''
   | \.venv
   | RAGU
   | validation
-  | dataset_generation
-  | slot_eval
   | __pycache__
 )/
 '''
@@ -182,8 +178,6 @@ exclude = '''
   | \.venv
   | RAGU
   | validation
-  | dataset_generation
-  | slot_eval
   | __pycache__
 )/
 '''
@@ -199,8 +193,6 @@ no_implicit_optional = true
 exclude = [
     "RAGU/",
     "validation/",
-    "dataset_generation/",
-    "slot_eval/",
 ]
 
 # ─── Pytest ───────────────────────────────────────────────────────────────────

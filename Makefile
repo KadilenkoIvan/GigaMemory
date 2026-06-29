@@ -150,7 +150,7 @@ smoke: ## Quick pipeline smoke-test in stub mode (no GPU/LLM)
 		--no-final-llm \
 		--memory-strategy full_graph_json \
 		pipeline test \
-		--dataset-path data/format_example.jsonl \
+		--dataset-path tests/fixtures/format_example.jsonl \
 		--output-path DST_memory/smoke_output.json
 
 # ─── Docker ───────────────────────────────────────────────────────────────────

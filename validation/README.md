@@ -44,6 +44,8 @@
   - `Mistral-Nemo`
 - **Судья (оценка ответа):** LLM-judge по непрерывной шкале 0–1 (см. ниже).
 
+> Конкретные модели здесь — лишь те, на которых проводился этот прогон. GigaMemory не привязан к модели: и экстрактор, и финальная LLM — любые (локально через vLLM/HuggingFace или удалённо через OpenRouter), задаются в конфиге. `Qwen3.5-4B` — частный случай слот-модели.
+
 ## 4. Методика тестирования
 
 ### Стратегии памяти GigaMemory
@@ -102,7 +104,7 @@ memory_only  →  final_llm_only  →  judge_only
 | Qwen2.5-7B    | 0.164 | 0.184 | 0.288 | 0.060 | 0.124 |
 | Mistral-Nemo  | 0.311 | 0.360 | 0.204 | 0.276 | 0.404 |
 
-![Метрики baseline](<../val_images/baseline метрики.png>)
+![Метрики baseline](../images/baseline-metrics.png)
 
 ### 5.2. GigaMemory по стратегиям
 
@@ -116,7 +118,7 @@ memory_only  →  final_llm_only  →  judge_only
 
 > Для каждой ячейки взят лучший из вариантов `active_only` / `with_inactive`. Победитель по строке выделен — во всех случаях это `relevant_slots_full`.
 
-![GigaMemory по стратегиям](<../val_images/GigaMemory по стратегиям.png>)
+![GigaMemory по стратегиям](../images/gigamemory-by-strategy.png)
 
 ### 5.3. Главное: GigaMemory vs Baseline
 
@@ -128,12 +130,12 @@ memory_only  →  final_llm_only  →  judge_only
 | Qwen2.5-7B   | 0.164 | **0.548** | ×3.3 |
 | Mistral-Nemo | 0.311 | **0.620** | ×2.0 |
 
-![Сравнение метрик с baseline](<../val_images/сравнение метрик с baseline.png>)
+![Сравнение метрик с baseline](../images/gigamemory-vs-baseline.png)
 
 ### 5.4. Объём контекста
 
 
-![Сравнение объёма контекста](<../val_images/сравнение конеткста.png>)
+![Сравнение объёма контекста](../images/context-comparison.png)
 
 ### 5.5. Выводы
 

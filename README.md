@@ -45,10 +45,11 @@ make start
 
 Конфиги: `DST_memory/run_config_local.json` — для интерактивного режима, `DST_memory/run_config_api.json` — для API сервера.
 
-> Слот-модель (Qwen3.5, 4-bit AWQ / compressed-tensors) работает через **vLLM** — отдельный inference-сервер с PagedAttention и Flash Attention 2; 4B-модель умещается в ~4 GB VRAM.  
+> **Модели произвольные.** И слот-модель (извлечение фактов), и финальная LLM не привязаны к конкретной модели: можно взять любую — локально (vLLM / HuggingFace) или удалённо через OpenRouter. Указанные ниже `Qwen3.5-4B-AWQ` (слот) и `gpt-4o-mini` (финальная) — лишь дефолтные примеры; меняются в конфиге без изменений в коде.  
+> Слот-модель в примере (`Qwen3.5`, 4-bit AWQ / compressed-tensors) работает через **vLLM** — отдельный inference-сервер с PagedAttention и Flash Attention 2; 4B-модель умещается в ~4 GB VRAM.  
 > vLLM не поддерживает Windows нативно — на Windows слот-сервер запускается в **WSL2** (модель видна по `/mnt/...`), а FastAPI на Windows ходит к нему по `localhost:8001`.  
 > Финальная LLM — OpenRouter (`gpt-4o-mini` или любая другая модель через API).  
-> Слот-модель и финальная LLM настраиваются независимо через `run_config_api.json` (`slot_llm_mode: "local"|"vllm"`).  
+> Слот-модель и финальная LLM настраиваются независимо через `run_config_api.json` (`slot_model_path`, `slot_llm_mode: "local"|"vllm"`, `llm_model`, `llm_mode`).  
 > Для быстрой проверки без GPU и LLM: `make smoke`.
 
 
@@ -320,7 +321,7 @@ make docker-up-all
 Batch-прогон jsonl: сообщения проходят запись в память, затем вызывается ответ на финальный вопрос.
 
 ```bash
-uv run python DST_memory/run.py pipeline test --dataset-path data/format_example.jsonl --output-path DST_memory/output.json
+uv run python DST_memory/run.py pipeline test --dataset-path tests/fixtures/format_example.jsonl --output-path DST_memory/output.json
 ```
 
 ### Inference Interactive
@@ -429,7 +430,7 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 | Qwen2.5-7B   | 0.164 | **0.548** | ×3.3 |
 | Mistral-Nemo | 0.311 | **0.620** | ×2.0 |
 
-![Сравнение метрик с baseline](<val_images/сравнение метрик с baseline.png>)
+![Сравнение метрик с baseline](images/gigamemory-vs-baseline.png)
 
 **Главное:**
 - Структурированная память превосходит подачу полного диалога для всех трёх финальных LLM.
