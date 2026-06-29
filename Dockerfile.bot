@@ -1,0 +1,20 @@
+# ─── GigaMemory Telegram bot ────────────────────────────────────────────────
+# The bot is a thin HTTP client over the REST API — no torch/CUDA/transformers
+# needed, so this image stays tiny and builds in seconds.
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir "python-telegram-bot>=21" "httpx>=0.24"
+
+RUN useradd --create-home --shell /bin/bash appuser
+
+# Bot source only.
+COPY --chown=appuser:appuser telegram_bot/ ./telegram_bot/
+
+# Persisted per-user state (chosen answer language) lives here; mount a volume.
+RUN mkdir -p /app/bot_state && chown appuser:appuser /app/bot_state
+
+USER appuser
+
+ENTRYPOINT ["python", "-m", "telegram_bot"]

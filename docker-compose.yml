@@ -106,6 +106,31 @@ services:
               capabilities: [gpu]
     ipc: host   # recommended by vLLM for shared memory performance
 
+  # ── Telegram bot ─────────────────────────────────────────────────────────
+  # Activated with:  docker compose --profile bot up
+  # Thin HTTP client over the api service; reaches it at http://api:8000.
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    image: gigamemory-bot:latest
+    profiles: [bot]
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # Inside the compose network the API is reachable by service name.
+      - GIGAMEMORY_API_URL=${GIGAMEMORY_API_URL:-http://api:8000}
+      - BOT_DEFAULT_LANGUAGE=${BOT_DEFAULT_LANGUAGE:-ru}
+      - BOT_PARALLEL_WRITE=${BOT_PARALLEL_WRITE:-true}
+      - BOT_REQUEST_TIMEOUT=${BOT_REQUEST_TIMEOUT:-180}
+      - BOT_STATE_PATH=/app/bot_state/users.json
+    volumes:
+      - bot_state:/app/bot_state
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   api_sessions:
   vllm_cache:
+  bot_state:

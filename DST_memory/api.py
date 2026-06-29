@@ -209,6 +209,12 @@ app = FastAPI(
 class MessageRequest(BaseModel):
     content: str
     parallel_write: bool = False
+    # Optional per-request language ("ru" | "en"). When omitted the server's
+    # configured prompt_language is used. Applies to the whole request: memory
+    # extraction (write), the read-path gate, and the final-LLM answer. A
+    # dialogue's graph must stay single-language — the caller (bot) enforces
+    # this by clearing memory when the user switches language.
+    prompt_language: str | None = None
 
 
 class MessageResponse(BaseModel):
@@ -444,7 +450,9 @@ def post_message(dialogue_id: str, req: MessageRequest) -> MessageResponse:
 
         def _bg_write() -> None:
             try:
-                pipeline.write_to_memory(dialogue_id, msg)
+                pipeline.write_to_memory(
+                    dialogue_id, msg, prompt_language=req.prompt_language
+                )
                 _save_session(dialogue_id)
             except Exception as e:
                 logger.error(
@@ -453,17 +461,54 @@ def post_message(dialogue_id: str, req: MessageRequest) -> MessageResponse:
 
         t = threading.Thread(target=_bg_write, daemon=True)
         t.start()
-        answer = pipeline.answer(dialogue_id, req.content)
+        answer = pipeline.answer(
+            dialogue_id, req.content, prompt_language=req.prompt_language
+        )
         pipeline.add_recent_pair(dialogue_id, req.content, answer)
     else:
         lock = _state.lock_for(dialogue_id)
         with lock:
-            pipeline.write_to_memory(dialogue_id, msg)
-            answer = pipeline.answer(dialogue_id, req.content)
+            pipeline.write_to_memory(
+                dialogue_id, msg, prompt_language=req.prompt_language
+            )
+            answer = pipeline.answer(
+                dialogue_id, req.content, prompt_language=req.prompt_language
+            )
             pipeline.add_recent_pair(dialogue_id, req.content, answer)
             _save_session(dialogue_id)
 
     return MessageResponse(dialogue_id=dialogue_id, answer=answer)
+
+
+@app.post("/dialogue/{dialogue_id}/answer", response_model=MessageResponse)
+def post_answer(dialogue_id: str, req: MessageRequest) -> MessageResponse:
+    """Generate the assistant answer only — no memory write.
+
+    Lets a client drive the answer and the memory write as two independent
+    phases (e.g. to show separate progress to the user). Mirrors the
+    parallel_write path, where the answer does not wait for the current message
+    to be written to memory.
+    """
+    pipeline = _require_pipeline()
+    answer = pipeline.answer(
+        dialogue_id, req.content, prompt_language=req.prompt_language
+    )
+    pipeline.add_recent_pair(dialogue_id, req.content, answer)
+    return MessageResponse(dialogue_id=dialogue_id, answer=answer)
+
+
+@app.post("/dialogue/{dialogue_id}/remember")
+def post_remember(dialogue_id: str, req: MessageRequest) -> dict:
+    """Write the user message to memory only — no answer generated."""
+    from dst_memory.core.models import Message
+
+    pipeline = _require_pipeline()
+    msg = Message(role="user", content=req.content)
+    result = pipeline.write_to_memory(
+        dialogue_id, msg, prompt_language=req.prompt_language
+    )
+    _save_session(dialogue_id)
+    return {"dialogue_id": dialogue_id, "saved": bool(result.get("saved", False))}
 
 
 @app.get("/dialogue/{dialogue_id}/graph")
@@ -472,6 +517,22 @@ def get_graph(dialogue_id: str) -> JSONResponse:
     pipeline = _require_pipeline()
     slots = pipeline.dst.slots_with_messages(dialogue_id)
     return JSONResponse({"dialogue_id": dialogue_id, "slots": slots})
+
+
+@app.get("/dialogue/{dialogue_id}/context")
+def get_context(dialogue_id: str) -> JSONResponse:
+    """Return the recent conversation turns passed verbatim to the final LLM.
+
+    These are what the model "remembers" directly from the dialogue window, as
+    opposed to facts retrieved from the memory graph (see /graph_short). ``limit``
+    is the configured number of pairs kept in that window.
+    """
+    pipeline = _require_pipeline()
+    pairs = pipeline.recent_pairs(dialogue_id)
+    limit = int(getattr(pipeline.config, "recent_history_pairs", 0))
+    return JSONResponse(
+        {"dialogue_id": dialogue_id, "recent_pairs": pairs, "limit": limit}
+    )
 
 
 @app.get("/dialogue/{dialogue_id}/graph_short")

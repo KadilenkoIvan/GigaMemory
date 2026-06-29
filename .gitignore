@@ -243,3 +243,6 @@ uv.lock
 validation/
 
 api_sessions/
+
+# Telegram bot per-user state (chosen language)
+bot_state/

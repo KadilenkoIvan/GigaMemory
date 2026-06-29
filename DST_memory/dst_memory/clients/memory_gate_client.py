@@ -7,7 +7,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from ..prompts.loader import PromptModules, load_prompt_modules
+from ..prompts.loader import (
+    PromptModules,
+    load_prompt_modules,
+    normalize_prompt_language,
+)
 from ..slots.ontology import DEFAULT_USER_SLOTS
 from ..slots.slot_name_normalize import (
     normalize_slot_label,
@@ -62,7 +66,7 @@ class MemoryGateClient:
         self.parse_retry_temperature_increment = float(
             parse_retry_temperature_increment
         )
-        self._prompt_modules: PromptModules | None = None
+        self._prompt_modules_cache: dict[str, PromptModules] = {}
         if self.use_stub:
             logger.info("Memory gate client in STUB mode (эвристика по маркерам)")
         elif self.serving is None:
@@ -73,12 +77,21 @@ class MemoryGateClient:
                 self.serving.device,
             )
 
+    def _modules(self, prompt_language: str | None = None) -> PromptModules:
+        lang = normalize_prompt_language(prompt_language or self.prompt_language)
+        cached = self._prompt_modules_cache.get(lang)
+        if cached is None:
+            cached = load_prompt_modules(lang)
+            self._prompt_modules_cache[lang] = cached
+        return cached
+
     def select_slots(
         self,
         user_message: str,
         existing_slot_names: list[str],
         *,
         for_vector_context: bool = False,
+        prompt_language: str | None = None,
     ) -> MemoryGateSelection:
         if not existing_slot_names:
             return MemoryGateSelection(use_memory=False, slot_names=[])
@@ -88,9 +101,8 @@ class MemoryGateClient:
                 user_message, existing_slot_names, for_vector_context=for_vector_context
             )
 
-        if self._prompt_modules is None:
-            self._prompt_modules = load_prompt_modules(self.prompt_language)
-        messages = self._prompt_modules.memory_gate_messages.build_memory_gate_messages(
+        pm = self._modules(prompt_language)
+        messages = pm.memory_gate_messages.build_memory_gate_messages(
             user_message,
             existing_slot_names,
             for_vector_context=for_vector_context,

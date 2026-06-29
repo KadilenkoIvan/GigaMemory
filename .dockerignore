@@ -20,6 +20,7 @@ api_sessions
 DST_memory/api_sessions
 DST_memory/smoke_output.json
 DST_memory/smoke_*.json
+bot_state
 
 # Development / docs
 validation

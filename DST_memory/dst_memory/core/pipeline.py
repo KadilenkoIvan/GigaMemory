@@ -243,6 +243,7 @@ class DSTMemoryPipeline:
         dialogue_id: str,
         message: Message,
         fact_created_at_iso: str | None = None,
+        prompt_language: str | None = None,
     ) -> dict:
         logger.info(
             "write_to_memory dialogue_id=%s role=%s content_len=%d fact_created_at_iso=%s",
@@ -273,6 +274,7 @@ class DSTMemoryPipeline:
             dialogue_id,
             message.content,
             fact_created_at_iso=fact_created_at_iso,
+            prompt_language=prompt_language,
         )
         if not new_facts:
             return {
@@ -312,7 +314,7 @@ class DSTMemoryPipeline:
         )
 
     def _memory_context_for_question(
-        self, dialogue_id: str, question: str
+        self, dialogue_id: str, question: str, prompt_language: str | None = None
     ) -> tuple[Any, dict]:
         strategy = (
             (self.config.memory_strategy or "relevant_slots_full").strip().lower()
@@ -361,7 +363,10 @@ class DSTMemoryPipeline:
                     "mode": "relevant_slots_full_gate_disabled",
                 }
             sel = self.memory_gate.select_slots(
-                question, slot_names, for_vector_context=False
+                question,
+                slot_names,
+                for_vector_context=False,
+                prompt_language=prompt_language,
             )
             selected = list(sel.slot_names) if sel.slot_names else []
 
@@ -573,7 +578,12 @@ class DSTMemoryPipeline:
         logger.info("Local models reloaded")
 
     def answer(
-        self, dialogue_id: str, question: str, *, _unload_models: bool = False
+        self,
+        dialogue_id: str,
+        question: str,
+        *,
+        _unload_models: bool = False,
+        prompt_language: str | None = None,
     ) -> str:
         """
         Generate answer using final LLM.
@@ -582,6 +592,11 @@ class DSTMemoryPipeline:
             dialogue_id: Dialogue ID
             question: User question
             _unload_models: Internal flag to trigger model unloading before final LLM
+            prompt_language: Optional per-call language ("ru"|"en"); when None the
+                pipeline's configured prompt_language is used. Affects the final-LLM
+                answer and the read-path memory gate. The write path (memory
+                extraction) takes its own prompt_language in write_to_memory — a
+                dialogue's graph must stay single-language (callers enforce this).
 
         Returns:
             Answer text from final LLM
@@ -600,7 +615,7 @@ class DSTMemoryPipeline:
             self.unload_local_models()
 
         memory_context, gate_meta = self._memory_context_for_question(
-            dialogue_id, question
+            dialogue_id, question, prompt_language=prompt_language
         )
         logger.info(
             "answer memory context ready mode=%s active_slots=%s",
@@ -617,6 +632,7 @@ class DSTMemoryPipeline:
             memory_context=memory_context,
             recent_pairs=self.recent_pairs(dialogue_id),
             clock_display=clock_display,
+            prompt_language=prompt_language,
         )
         logger.info(
             "Final LLM answer dialogue_id=%s: %s", dialogue_id, answer_text[:500]

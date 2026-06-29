@@ -56,6 +56,11 @@ api = [
     "matplotlib>=3.7",
     "networkx>=3.0",
 ]
+# Telegram bot — thin HTTP client over the REST API (no torch/GPU needed)
+bot = [
+    "python-telegram-bot>=21",
+    "httpx>=0.24",
+]
 # vLLM inference server (Linux/GPU only; install separately in its own environment)
 # Used only as a server process — the Python client is the openai package (core dep).
 # Install on the inference server: pip install vllm

@@ -13,8 +13,11 @@
 #   make vllm          — start vLLM inference server (slot model, Linux/WSL)
 #   make serve         — start FastAPI REST server (port 8000)
 #   make start         — start vLLM + FastAPI together (Linux/WSL)
+#   make bot           — start the Telegram bot (needs API + TELEGRAM_BOT_TOKEN)
 #   make docker-up      — start API only (bring your own vLLM)
 #   make docker-up-vllm — start vLLM + API together via Docker
+#   make docker-up-bot  — start API + Telegram bot together
+#   make docker-up-all  — start vLLM + API + bot together (full demo)
 #   make docker-up-cpu  — CPU-only API (no GPU, no vLLM)
 #   make docker-down    — stop and remove containers
 
@@ -29,21 +32,21 @@ VLLM_MAX_LEN    ?= 8192
 VLLM_MAX_SEQS   ?= 4
 API_PORT        ?= 8000
 
-.PHONY: all install install-local install-cpu install-dev install-api \
+.PHONY: all install install-local install-cpu install-dev install-api install-bot \
         lint lint-fix format format-check type-check \
         test test-cov smoke \
-        serve vllm start \
-        docker-build docker-build-cpu docker-up docker-up-cpu docker-api docker-down \
+        serve vllm start bot \
+        docker-build docker-build-cpu docker-up docker-up-cpu docker-up-bot docker-up-all docker-up-vllm docker-down \
         clean help
 
 all: help
 
 # ─── Environment setup ────────────────────────────────────────────────────────
 
-install: ## Install everything: CUDA + API server + dev tools (recommended for development)
-	$(UV) sync --extra cuda --extra api --extra dev
+install: ## Install everything: CUDA + API + Telegram bot + dev tools (recommended for development)
+	$(UV) sync --extra cuda --extra api --extra bot --extra dev
 	@echo ""
-	@echo "Full environment ready (CUDA + API + dev)."
+	@echo "Full environment ready (CUDA + API + bot + dev)."
 	@echo "Activate: source .venv/bin/activate  (Linux/Mac)"
 	@echo "          .venv\\Scripts\\activate     (Windows)"
 
@@ -59,6 +62,12 @@ install-api: ## Install for API server (CUDA + fastapi/uvicorn)
 	@echo ""
 	@echo "API environment ready."
 	@echo "Set OPENROUTER_API_KEY, then: make serve"
+
+install-bot: ## Install Telegram bot deps only (no torch/GPU — thin API client)
+	$(UV) sync --extra bot
+	@echo ""
+	@echo "Bot environment ready."
+	@echo "Set TELEGRAM_BOT_TOKEN (and start the API), then: make bot"
 
 install-cpu: ## Set up CPU-only environment with uv (Linux/macOS)
 	$(UV) sync --extra dev
@@ -130,6 +139,9 @@ start: ## Start BOTH vLLM server and FastAPI in parallel (Linux/WSL only)
 	@$(MAKE) vllm & \
 	 sleep 30 && $(MAKE) serve
 
+bot: ## Start the Telegram bot (requires API running + TELEGRAM_BOT_TOKEN)
+	$(UV) run python -m telegram_bot
+
 smoke: ## Quick pipeline smoke-test in stub mode (no GPU/LLM)
 	$(UV) run python DST_memory/run.py \
 		--llm-mode stub \
@@ -157,6 +169,12 @@ docker-up-vllm: ## Start vLLM inference server + API together (requires NVIDIA G
 
 docker-up-cpu: ## Start API in CPU-only mode (no GPU, no vLLM; stub slot model)
 	TORCH_EXTRA=cpu docker compose up --build
+
+docker-up-bot: ## Start API + Telegram bot together (set TELEGRAM_BOT_TOKEN in .env)
+	docker compose --profile bot up --build
+
+docker-up-all: ## Start vLLM + API + Telegram bot together (full demo, needs GPU)
+	docker compose --profile vllm --profile bot up --build
 
 docker-down: ## Stop and remove all containers
 	docker compose down
