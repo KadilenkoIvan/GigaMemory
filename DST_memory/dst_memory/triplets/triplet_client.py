@@ -21,6 +21,48 @@ from ..slots.ontology import DEFAULT_USER_SLOTS, SlotOntology
 
 logger = logging.getLogger(__name__)
 
+# Placeholder objects that carry no information ("the cat's age is unknown").
+# The model sometimes fabricates these from questions/hypotheticals
+# ("what should I consider with his age?") and they must never overwrite a real
+# fact. Compared after _normalize_field (lowercased, whitespace-collapsed), so
+# keep entries normalized. Covers both prompt languages (ru/en).
+_PLACEHOLDER_OBJECTS: frozenset[str] = frozenset(
+    {
+        # English
+        "unknown",
+        "n/a",
+        "na",
+        "none",
+        "null",
+        "nil",
+        "unspecified",
+        "not specified",
+        "not known",
+        "not provided",
+        "no information",
+        "no info",
+        "undefined",
+        "tbd",
+        "?",
+        # Russian
+        "неизвестно",
+        "не известно",
+        "неизвестен",
+        "неизвестна",
+        "не указано",
+        "не указан",
+        "не указана",
+        "не определено",
+        "не определён",
+        "не определен",
+        "нет данных",
+        "нет информации",
+        "не знаю",
+        "неясно",
+        "отсутствует",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ExtractedTriplet:
@@ -280,6 +322,14 @@ class TripletExtractionClient:
             rel = self._normalize_field(str(it.get("relation", "")))
             objv = self._normalize_field(str(it.get("object", "")))
             if not slot or not subj or not rel or not objv:
+                continue
+            if objv in _PLACEHOLDER_OBJECTS:
+                logger.info(
+                    "Triplet dropped (placeholder object): [%s | %s | %s]",
+                    subj,
+                    rel,
+                    objv,
+                )
                 continue
             ttl = str(it.get("ttl", "inf")).strip().lower()
             if ttl not in VALID_TTL_VALUES:
