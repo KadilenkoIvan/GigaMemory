@@ -8,6 +8,31 @@
 
 ## Quick Start
 
+Два способа запуска: **Docker** (всё из коробки одной командой) или **из исходников** (uv).
+
+### 🐳 Docker — всё из коробки
+
+**Требования:** Docker + Docker Compose; ключ [OpenRouter](https://openrouter.ai/); NVIDIA GPU + [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) — только для встроенного vLLM.
+
+```bash
+# 1. Клонировать и задать переменные окружения
+git clone https://github.com/KadilenkoIvan/GigaMemory.git
+cd GigaMemory
+cp .env.example .env
+# в .env минимум: OPENROUTER_API_KEY=sk-or-...  (и MODEL_DIR/MODEL_NAME, если нужен встроенный vLLM)
+
+# 2. Поднять всё одной командой
+make docker-up-vllm     # vLLM (слот-модель) + REST API на :8000 — всё в Docker, нужен GPU
+# make docker-up-all    # то же + Telegram-бот (полная демка)
+# make docker-up-cpu    # без GPU: API в CPU-режиме (слот-модель — через внешний OpenRouter)
+# make docker-up        # только API; свой vLLM снаружи (через SLOT_LLM_API_URL)
+```
+
+Swagger UI: `http://localhost:8000/docs` · здоровье: `http://localhost:8000/health` · остановить всё: `make docker-down`.
+Подробности (профили, тома, переменные) — в разделе [Docker](#docker) ниже.
+
+### ⚙️ Из исходников (uv)
+
 **Требования:** GPU с CUDA, [uv](https://docs.astral.sh/uv/getting-started/installation/) и ключ [OpenRouter](https://openrouter.ai/).
 
 ```bash
