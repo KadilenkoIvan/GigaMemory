@@ -1,25 +1,47 @@
+# Convenience full install (GPU pipeline + REST API + Telegram bot).
+# The canonical dependency spec is pyproject.toml (managed with uv):
+#   uv pip install ".[cuda,api,bot]"          # or .[cpu,api,bot] without GPU
+# This file mirrors that set for plain pip users:
+#   pip install -r requirements.txt
+# Keep it in sync with pyproject.toml when dependencies change.
+
+# ── PyTorch (CUDA 12.6) + GPU-only extras ──────────────────────────────────
 --extra-index-url https://download.pytorch.org/whl/cu126
-torch
+torch>=2.0
 torchvision
 torchaudio
-transformers
 bitsandbytes
-gguf
-datasets
-evaluate
-seaborn
-numpy
-iterative-stratification
+flash-attn          # needs CUDA + compilation; omit for CPU-only installs
+
+# ── Core memory pipeline ───────────────────────────────────────────────────
+transformers>=4.40
+sentence-transformers>=2.0
 huggingface-hub
 accelerate
+optimum
+gguf
+numpy>=2.0
+datasets
+evaluate
+iterative-stratification
+seaborn
+openai>=1.0
+loguru
+razdel
 pymorphy2
 pymorphy2-dicts-ru
 pyspellchecker
-sentence_transformers
-openai
-loguru
-razdel
 pyvis
-optimum
-flash-attn
+
+# ── REST API server ────────────────────────────────────────────────────────
+fastapi>=0.100
+uvicorn[standard]>=0.23
+matplotlib>=3.7
+networkx>=3.0
+
+# ── Telegram bot (thin HTTP client over the REST API) ──────────────────────
+python-telegram-bot>=21
+httpx>=0.24
+
+# ── Local RAGU retrieval package (editable) ────────────────────────────────
 -e ./RAGU
