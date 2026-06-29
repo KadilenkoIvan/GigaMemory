@@ -182,15 +182,14 @@ make start
 
 ### Этап 4 — Data Science артефакты
 
-#### 4.1 Jupyter notebook с анализом
-- Загрузка результатов валидации
-- Графики: accuracy по стратегиям, по моделям, memory hit rate
-- Ablation: вклад каждого компонента (TTL, semantic dedup, conflict resolution)
-- Сравнение с baseline (`full_context`, `recent_10_plus_user`)
+#### 4.1 Анализ результатов валидации — DONE
+- Загрузка и агрегация результатов валидации → выжимки `validation/metrics/metrics-baseline.json` и `metrics-gigamemory.json` (ноутбук обработки `metrics_processing.ipynb` лежит локально, в репозиторий не коммитится)
+- Графики: accuracy по стратегиям, по моделям, memory hit rate, объём контекста (`val_images/`)
+- Сравнение с baseline (`full_context`) по трём финальным LLM
+- Методика и итоговые таблицы сведены в [`validation/README.md`](validation/README.md)
 
-#### 4.2 Experiment tracking
-- Добавить логирование метрик в W&B или MLflow в `validation/` скриптах
-- Артефакты: конфиги, метрики, примеры правильных/неправильных ответов
+#### 4.2 Experiment tracking — не делаем
+- Логирование в W&B / MLflow признано избыточным для задачи: метрики и конфиги фиксируются в `validation/` (выжимки `metrics-*.json` + `validation_results.json` judge-бандлов).
 
 ---
 
@@ -259,7 +258,7 @@ GigaMemory как прослойка между пользователем и л
 ```
 [Сейчас]
   ↓
-Этап 0 — добавить графики экспериментов (ожидаем файлы) IN PROGRESS 
+Этап 0 — графики экспериментов (val_images/) DONE
   ↓
 Этап 1 — real-time режим + параллельный путь DONE
   ↓
@@ -267,7 +266,7 @@ GigaMemory как прослойка между пользователем и л
   ↓
 Этап 3 — Telegram-бот DONE
   ↓
-Этап 4 — DS артефакты (notebook + tracking) TODO
+Этап 4 — DS артефакты: анализ результатов DONE, experiment tracking — не делаем
   ↓
-Этап 5 — документация для конкурса (README + PDF) TODO
+Этап 5 — документация для конкурса (README с результатами DONE, PDF TODO)
 ```

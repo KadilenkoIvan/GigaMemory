@@ -1,0 +1,54 @@
+{
+  "_description": "judge_only: 5 intermediate_answers.json за прогон — 3 стратегии: для full_graph_json и relevant_slots_full по 2 варианта передачи неактивных слотов (active_only и with_inactive), для topk_graph_records только один файл (отдельного with_inactive нет в пайплайне). Итог: один validation_results.json. Запуск из validation/GigaMemory_full; judge.api_key.",
+  "_usage": "python validate_longmemeval.py --config ./config_judge_only_bundle_Qwen_final-LLM-LLama.json",
+
+  "shared": {
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned.json",
+    "output_dir": "./results_judge_bundle_Qwen_final-LLM-LLama",
+    "num_items_per_type": 1000,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ],
+    "log_level": "INFO",
+    "log_file": true,
+    "save_memory_state": false,
+    "save_intermediate": true
+  },
+
+  "batch_processing": {
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1,
+    "calculate_memory_hit_rate": true
+  },
+
+  "judge": {
+    "mode": "openrouter",
+    "model": "openai/gpt-oss-20b",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "max_context_tokens": 120000,
+    "tokenizer_model": "",
+    "local_model_path": "",
+    "unload_between_items": false
+  },
+
+  "giga_memory": {},
+
+  "validation_mode": {
+    "mode": "judge_only",
+    "input_state_dir": "",
+    "input_answers_path": "",
+    "input_answers_paths": [
+      "./results_final_llm_only_extractor-model-Qwen_final-LLM-LLama/full_graph_json/active_only/intermediate_answers.json",
+      "./results_final_llm_only_extractor-model-Qwen_final-LLM-LLama/full_graph_json/with_inactive/intermediate_answers.json",
+      "./results_final_llm_only_extractor-model-Qwen_final-LLM-LLama/relevant_slots_full/active_only/intermediate_answers.json",
+      "./results_final_llm_only_extractor-model-Qwen_final-LLM-LLama/relevant_slots_full/with_inactive/intermediate_answers.json",
+      "./results_final_llm_only_extractor-model-Qwen_final-LLM-LLama/topk_graph_records/active_only/intermediate_answers.json"
+    ]
+  }
+}

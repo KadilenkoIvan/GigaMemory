@@ -1,0 +1,51 @@
+{
+  "_description": "Baseline: full_context + qwen/qwen3.5-9b (OpenRouter). Не добавляйте reasoning с max_tokens:0 — часть endpoint'ов вернёт 400 mandatory reasoning. Ключ: OPENROUTER_API_KEY или api_key (не коммитьте).",
+
+  "shared": {
+    "dataset_path": "../../LongMemEval/longmemeval_s_cleaned_10-per-cat.json",
+    "output_dir": "./baseline_tests/full_context_mistral-nemo",
+
+    "num_items_per_type": 1000,
+    "question_types": [
+      "single-session-user",
+      "single-session-preference",
+      "multi-session",
+      "knowledge-update"
+    ],
+
+    "log_level": "INFO",
+    "log_file": true
+  },
+
+  "baseline": {
+    "strategy": "full_context",
+    "final_llm_batch_size": 1,
+    "judge_batch_size": 1
+  },
+
+  "final_llm": {
+    "mode": "openrouter",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "model": "mistralai/mistral-nemo",
+    "tokenizer_model": "Qwen/Qwen3.5-9B",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "max_context_tokens": 100000,
+    "local_model_path": "",
+    "load_dtype": "float16",
+    "load_quantization": "none"
+  },
+
+  "judge": {
+    "mode": "openrouter",
+    "api_url": "https://openrouter.ai/api/v1",
+    "api_key": "",
+    "model": "openai/gpt-oss-20b",
+    "temperature": 0.0,
+    "max_tokens": 1024,
+    "local_model_path": "",
+    "load_dtype": "float16",
+    "load_quantization": "none"
+  }
+}

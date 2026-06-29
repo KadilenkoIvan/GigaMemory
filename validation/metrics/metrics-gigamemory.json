@@ -1,0 +1,1292 @@
+{
+  "Qwen_final-LLM-LLama": {
+    "full_graph_json": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 22.6,
+          "average_score": 0.11589743589743591,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 8.2,
+              "errors": 0,
+              "average_score": 0.16399999999999998
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 4.6000000000000005,
+              "errors": 0,
+              "average_score": 0.10222222222222223
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 5.199999999999999,
+              "errors": 0,
+              "average_score": 0.10399999999999998
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 4.6,
+              "errors": 0,
+              "average_score": 0.092
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 109,
+          "misses": 86,
+          "hit_rate": 0.618974358974359,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 34,
+              "misses": 16,
+              "hit_rate": 0.68
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 13,
+              "misses": 32,
+              "hit_rate": 0.28888888888888886
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 29,
+              "misses": 21,
+              "hit_rate": 0.58
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.009592056274414062,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 26.199999999999996,
+          "average_score": 0.13435897435897434,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 6.0,
+              "errors": 0,
+              "average_score": 0.12
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 8.0,
+              "errors": 0,
+              "average_score": 0.17777777777777778
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 4.2,
+              "errors": 0,
+              "average_score": 0.084
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 8.0,
+              "errors": 0,
+              "average_score": 0.16
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 109,
+          "misses": 86,
+          "hit_rate": 0.618974358974359,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 34,
+              "misses": 16,
+              "hit_rate": 0.68
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 11,
+              "misses": 34,
+              "hit_rate": 0.24444444444444444
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 32,
+              "misses": 18,
+              "hit_rate": 0.64
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 32,
+              "misses": 18,
+              "hit_rate": 0.64
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.009592056274414062,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      }
+    },
+    "relevant_slots_full": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 39.6,
+          "average_score": 0.20307692307692307,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 12.2,
+              "errors": 0,
+              "average_score": 0.244
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 7.6000000000000005,
+              "errors": 0,
+              "average_score": 0.1688888888888889
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 5.2,
+              "errors": 0,
+              "average_score": 0.10400000000000001
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 14.6,
+              "errors": 0,
+              "average_score": 0.292
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 96,
+          "misses": 99,
+          "hit_rate": 0.59230769230769234,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 13,
+              "misses": 32,
+              "hit_rate": 0.28888888888888886
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 18,
+              "misses": 32,
+              "hit_rate": 0.36
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 32,
+              "misses": 18,
+              "hit_rate": 0.64
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.009592056274414062,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 39.400000000000006,
+          "average_score": 0.2020512820512821,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 10.6,
+              "errors": 0,
+              "average_score": 0.212
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 9.4,
+              "errors": 0,
+              "average_score": 0.2088888888888889
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 5.800000000000001,
+              "errors": 0,
+              "average_score": 0.11600000000000002
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 13.6,
+              "errors": 0,
+              "average_score": 0.272
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 103,
+          "misses": 92,
+          "hit_rate": 0.5282051282051282,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 13,
+              "misses": 32,
+              "hit_rate": 0.28888888888888886
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 23,
+              "misses": 27,
+              "hit_rate": 0.46
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 34,
+              "misses": 16,
+              "hit_rate": 0.68
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.009592056274414062,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      }
+    },
+    "topk_graph_records": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 40.599999999999994,
+          "average_score": 0.10820512820512818,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 10.799999999999999,
+              "errors": 0,
+              "average_score": 0.21599999999999997
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 9.2,
+              "errors": 0,
+              "average_score": 0.20444444444444443
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 8.8,
+              "errors": 0,
+              "average_score": 0.17600000000000002
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 11.8,
+              "errors": 0,
+              "average_score": 0.23600000000000002
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 36,
+          "misses": 159,
+          "hit_rate": 0.18461538461538463,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 9,
+              "misses": 41,
+              "hit_rate": 0.18
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 2,
+              "misses": 43,
+              "hit_rate": 0.044444444444444446
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 13,
+              "misses": 37,
+              "hit_rate": 0.26
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 12,
+              "misses": 38,
+              "hit_rate": 0.24
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.009592056274414062,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": null
+    }
+  },
+  "Qwen_final-LLM-Mistral-Nemo": {
+    "full_graph_json": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 102.5,
+          "average_score": 0.5256410256410257,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 32.8,
+              "errors": 0,
+              "average_score": 0.6559999999999999
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 14.899999999999997,
+              "errors": 0,
+              "average_score": 0.331111111111111
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 23.0,
+              "errors": 0,
+              "average_score": 0.46
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 31.8,
+              "errors": 0,
+              "average_score": 0.636
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 106,
+          "misses": 89,
+          "hit_rate": 0.5435897435897435,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 13,
+              "misses": 32,
+              "hit_rate": 0.28888888888888886
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 28,
+              "misses": 22,
+              "hit_rate": 0.56
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 32,
+              "misses": 18,
+              "hit_rate": 0.64
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.0076503753662109375,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 96.80000000000003,
+          "average_score": 0.49641025641025655,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 27.4,
+              "errors": 0,
+              "average_score": 0.5479999999999999
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 12.2,
+              "errors": 0,
+              "average_score": 0.2711111111111111
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 26.400000000000002,
+              "errors": 0,
+              "average_score": 0.528
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 30.8,
+              "errors": 0,
+              "average_score": 0.616
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 111,
+          "misses": 84,
+          "hit_rate": 0.5692307692307692,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 34,
+              "misses": 16,
+              "hit_rate": 0.68
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 15,
+              "misses": 30,
+              "hit_rate": 0.3333333333333333
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 29,
+              "misses": 21,
+              "hit_rate": 0.58
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.013803958892822266,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      }
+    },
+    "relevant_slots_full": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 109.19999999999997,
+          "average_score": 0.6199999999999998,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 34.800000000000004,
+              "errors": 0,
+              "average_score": 0.6960000000000001
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 18.599999999999998,
+              "errors": 0,
+              "average_score": 0.4133333333333333
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 22.800000000000004,
+              "errors": 0,
+              "average_score": 0.45600000000000007
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 33.0,
+              "errors": 0,
+              "average_score": 0.66
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 96,
+          "misses": 99,
+          "hit_rate": 0.59230769230769234,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 13,
+              "misses": 32,
+              "hit_rate": 0.28888888888888886
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 18,
+              "misses": 32,
+              "hit_rate": 0.36
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 32,
+              "misses": 18,
+              "hit_rate": 0.64
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.013803958892822266,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 115.29999999999995,
+          "average_score": 0.591282051282051,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 33.6,
+              "errors": 0,
+              "average_score": 0.672
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 19.4,
+              "errors": 0,
+              "average_score": 0.43111111111111106
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 27.900000000000006,
+              "errors": 0,
+              "average_score": 0.6180000000000002
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 34.400000000000006,
+              "errors": 0,
+              "average_score": 0.6880000000000002
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 106,
+          "misses": 89,
+          "hit_rate": 0.5435897435897435,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 17,
+              "misses": 28,
+              "hit_rate": 0.37777777777777777
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 23,
+              "misses": 27,
+              "hit_rate": 0.46
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.013803958892822266,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      }
+    },
+    "topk_graph_records": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 58.3,
+          "average_score": 0.298974358974359,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 15.4,
+              "errors": 0,
+              "average_score": 0.308
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 12.099999999999996,
+              "errors": 0,
+              "average_score": 0.2688888888888888
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 16.999999999999996,
+              "errors": 0,
+              "average_score": 0.3399999999999999
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 13.8,
+              "errors": 0,
+              "average_score": 0.276
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 36,
+          "misses": 159,
+          "hit_rate": 0.18461538461538463,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 9,
+              "misses": 41,
+              "hit_rate": 0.18
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 2,
+              "misses": 43,
+              "hit_rate": 0.044444444444444446
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 13,
+              "misses": 37,
+              "hit_rate": 0.26
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 12,
+              "misses": 38,
+              "hit_rate": 0.24
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.013803958892822266,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": null
+    }
+  },
+  "Qwen_final-LLM-Qwen25": {
+    "full_graph_json": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 49.699999999999996,
+          "average_score": 0.25487179487179484,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 17.0,
+              "errors": 0,
+              "average_score": 0.34
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 11.100000000000001,
+              "errors": 0,
+              "average_score": 0.2466666666666667
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 7.6,
+              "errors": 0,
+              "average_score": 0.152
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 14.0,
+              "errors": 0,
+              "average_score": 0.28
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 108,
+          "misses": 87,
+          "hit_rate": 0.5538461538461539,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 35,
+              "misses": 15,
+              "hit_rate": 0.7
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 12,
+              "misses": 33,
+              "hit_rate": 0.26666666666666666
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 28,
+              "misses": 22,
+              "hit_rate": 0.56
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.011924505233764648,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 49.199999999999996,
+          "average_score": 0.2523076923076923,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 16.4,
+              "errors": 0,
+              "average_score": 0.32799999999999996
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 11.999999999999996,
+              "errors": 0,
+              "average_score": 0.2666666666666666
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 5.2,
+              "errors": 0,
+              "average_score": 0.10400000000000001
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 15.6,
+              "errors": 0,
+              "average_score": 0.312
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": true,
+          "total": 195,
+          "hits": 112,
+          "misses": 83,
+          "hit_rate": 0.5743589743589743,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "hits": 35,
+              "misses": 15,
+              "hit_rate": 0.7
+            },
+            "single-session-preference": {
+              "count": 45,
+              "hits": 13,
+              "misses": 32,
+              "hit_rate": 0.28888888888888886
+            },
+            "multi-session": {
+              "count": 50,
+              "hits": 31,
+              "misses": 19,
+              "hit_rate": 0.62
+            },
+            "knowledge-update": {
+              "count": 50,
+              "hits": 33,
+              "misses": 17,
+              "hit_rate": 0.66
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.011924505233764648,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      }
+    },
+    "relevant_slots_full": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 100.90000000000002,
+          "average_score": 0.5174358974358976,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 32.2,
+              "errors": 0,
+              "average_score": 0.644
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 16.9,
+              "errors": 0,
+              "average_score": 0.37555555555555553
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 17.599999999999998,
+              "errors": 0,
+              "average_score": 0.352
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 34.2,
+              "errors": 0,
+              "average_score": 0.684
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": false,
+          "total": 0,
+          "hits": 0,
+          "misses": 0,
+          "hit_rate": null,
+          "by_type": {
+            "single-session-user": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "single-session-preference": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "multi-session": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "knowledge-update": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.011097192764282227,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 106.8,
+          "average_score": 0.5476923076923077,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 33.400000000000006,
+              "errors": 0,
+              "average_score": 0.6680000000000001
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 19.2,
+              "errors": 0,
+              "average_score": 0.42666666666666664
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 19.999999999999996,
+              "errors": 0,
+              "average_score": 0.3999999999999999
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 34.2,
+              "errors": 0,
+              "average_score": 0.684
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": false,
+          "total": 0,
+          "hits": 0,
+          "misses": 0,
+          "hit_rate": null,
+          "by_type": {
+            "single-session-user": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "single-session-preference": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "multi-session": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "knowledge-update": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.011097192764282227,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      }
+    },
+    "topk_graph_records": {
+      "active_only": {
+        "answer_evaluation": {
+          "total": 195,
+          "total_score": 52.199999999999996,
+          "average_score": 0.2676923076923077,
+          "errors_judge": 0,
+          "by_type": {
+            "single-session-user": {
+              "count": 50,
+              "total_score": 12.200000000000001,
+              "errors": 0,
+              "average_score": 0.24400000000000002
+            },
+            "single-session-preference": {
+              "count": 45,
+              "total_score": 10.6,
+              "errors": 0,
+              "average_score": 0.23555555555555555
+            },
+            "multi-session": {
+              "count": 50,
+              "total_score": 15.399999999999999,
+              "errors": 0,
+              "average_score": 0.308
+            },
+            "knowledge-update": {
+              "count": 50,
+              "total_score": 14.0,
+              "errors": 0,
+              "average_score": 0.28
+            }
+          }
+        },
+        "memory_hit_evaluation": {
+          "enabled": false,
+          "total": 0,
+          "hits": 0,
+          "misses": 0,
+          "hit_rate": null,
+          "by_type": {
+            "single-session-user": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "single-session-preference": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "multi-session": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            },
+            "knowledge-update": {
+              "count": 0,
+              "hits": 0,
+              "misses": 0
+            }
+          }
+        },
+        "final_llm_prompt_chars": {
+          "calls": 0,
+          "before_clamp_total": 0,
+          "after_clamp_total": 0,
+          "before_clamp_avg": 0.0,
+          "after_clamp_avg": 0.0
+        },
+        "dialogue_context_chars": {
+          "count": 195,
+          "total": 95288145,
+          "avg": 488657.1538461539
+        },
+        "timing": {
+          "total_time": 0.011097192764282227,
+          "total_items": 0,
+          "total_messages": 0,
+          "total_user_message_writes": 0
+        }
+      },
+      "with_inactive": null
+    }
+  }
+}

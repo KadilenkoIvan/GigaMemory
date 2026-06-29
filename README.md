@@ -51,6 +51,36 @@ make start
 > Слот-модель и финальная LLM настраиваются независимо через `run_config_api.json` (`slot_llm_mode: "local"|"vllm"`).  
 > Для быстрой проверки без GPU и LLM: `make smoke`.
 
+
+## Что это за проект
+
+- Память строится из сообщений пользователя в реальном времени.
+- Из важных сообщений извлекаются триплеты `subject-relation-object` и записываются в DST-граф.
+- Параллельный режим: ответ строится немедленно, запись в граф — в фоновом потоке.
+- Для поддержания актуальности памяти: TTL (время жизни фактов), семантическая дедупликация, три режима удаления.
+- При ответе формируется memory context одной из трёх стратегий и передаётся в финальную LLM.
+- Продуктовый слой: REST API сервер с 6 endpoints, визуализация графа (PNG и интерактивный HTML).
+
+## Что входит в каталог
+
+- `run.py` — единая CLI-точка запуска (pipeline test / inference interactive / inference single-turn).
+- `api.py` — FastAPI REST сервер (Этап 2); запускается через `make serve`.
+- `dst_memory/` — вся логика пайплайна (разбита по подпакетам):
+  - `core/` — pipeline, dst_manager, models, config, graph_backend
+  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в конфиге (включая тексты **финальной** LLM и real-time/parallel-write notices)
+  - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
+  - `triplets/` — extraction, conflict, deletion, negation_detector
+  - `storage/` — RAGU backend (ragu_graph_processor)
+  - `clients/` — serving, classifier, memory_gate_client, llm_client
+  - `utils/` — io_utils, dotenv_loader, run_config_loader
+- `run_config.json` — runtime-конфиг по умолчанию (для валидации/тестов).
+- `run_config_local.json` — конфиг для локального интерактивного режима.
+- `run_config_api.json` — конфиг для REST API сервера.
+- `CONFIG.md` — полное описание всех параметров конфига.
+- `PIPELINE.md` — техническая документация по архитектуре, этапам и форматам данных.
+
+
+
 ## Docker
 
 Контейнеризированный запуск — рекомендуемый способ для продакшена и для Windows (где vLLM требует WSL2, а API запускается в Docker).
@@ -168,34 +198,6 @@ flowchart TD
     LLM --> ANS[Ответ]
 ```
 
-
-
-## Что это за проект
-
-- Память строится из сообщений пользователя в реальном времени.
-- Из важных сообщений извлекаются триплеты `subject-relation-object` и записываются в DST-граф.
-- Параллельный режим: ответ строится немедленно, запись в граф — в фоновом потоке.
-- Для поддержания актуальности памяти: TTL (время жизни фактов), семантическая дедупликация, три режима удаления.
-- При ответе формируется memory context одной из трёх стратегий и передаётся в финальную LLM.
-- Продуктовый слой: REST API сервер с 6 endpoints, визуализация графа (PNG и интерактивный HTML).
-
-## Что входит в каталог
-
-- `run.py` — единая CLI-точка запуска (pipeline test / inference interactive / inference single-turn).
-- `api.py` — FastAPI REST сервер (Этап 2); запускается через `make serve`.
-- `dst_memory/` — вся логика пайплайна (разбита по подпакетам):
-  - `core/` — pipeline, dst_manager, models, config, graph_backend
-  - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в конфиге (включая тексты **финальной** LLM и real-time/parallel-write notices)
-  - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
-  - `triplets/` — extraction, conflict, deletion, negation_detector
-  - `storage/` — RAGU backend (ragu_graph_processor)
-  - `clients/` — serving, classifier, memory_gate_client, llm_client
-  - `utils/` — io_utils, dotenv_loader, run_config_loader
-- `run_config.json` — runtime-конфиг по умолчанию (для валидации/тестов).
-- `run_config_local.json` — конфиг для локального интерактивного режима.
-- `run_config_api.json` — конфиг для REST API сервера.
-- `CONFIG.md` — полное описание всех параметров конфига.
-- `PIPELINE.md` — техническая документация по архитектуре, этапам и форматам данных.
 
 ## REST API
 
@@ -409,12 +411,32 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 
 ## Ключевые ограничения
 
-- Проект зафиксирован как RAGU-only.
 - `llm_mode=local` для final LLM поддерживается, но требует достаточного VRAM/CPU RAM и корректной локальной HF-модели.
 - `llm_inline` режим автоматически включает контекст слота, даже если `slot_context_enabled=false`.
 - Heuristic-детектор покрывает явные паттерны отрицания; косвенные семантические удаления — через LLM-режимы.
 
 ## Валидация
+
+> 📊 **Полная методика, все таблицы и графики — в [validation/README.md](validation/README.md).**
+
+### Результаты (кратко)
+
+Сравнение на **LongMemEval**: одна и та же финальная LLM отвечает либо по «сырому» диалогу (baseline full-context), либо по структурированной памяти GigaMemory. Метрика — средний балл LLM-судьи (0–1).
+
+| Финальная LLM | Baseline (full-context) | GigaMemory (`relevant_slots_full`) | Прирост |
+|---------------|:---:|:---:|:---:|
+| LLaMA-3-8B   | 0.035 | **0.203** | ×5.8 |
+| Qwen2.5-7B   | 0.164 | **0.548** | ×3.3 |
+| Mistral-Nemo | 0.311 | **0.620** | ×2.0 |
+
+![Сравнение метрик с baseline](<val_images/сравнение метрик с baseline.png>)
+
+**Главное:**
+- Структурированная память превосходит подачу полного диалога для всех трёх финальных LLM.
+- Выигрыш тем больше, чем хуже модель держит длинный контекст.
+- Лучшая стратегия памяти — `relevant_slots_full` (подавать только релевантные вопросу слоты).
+
+Подробные таблицы по типам вопросов, стратегиям, вариантам графа и Memory Hit Rate — в [validation/README.md](validation/README.md).
 
 ### LongMemEval Benchmark
 
@@ -424,22 +446,22 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 
 ```
 validation/
-├── GigaMemory_full/        # Полное тестирование GigaMemory (v3)
+├── README.md               # 👉 Методика + результаты (точка входа)
+├── GigaMemory_full/        # Полное тестирование GigaMemory 
 │   ├── validate_longmemeval.py      # Основной скрипт с 4 режимами
-│   ├── run_config.json              # Базовый конфиг
-│   ├── config_full.json             # Полный пайплайн
-│   ├── config_memory_only.json      # Только память
-│   ├── config_final_llm.json        # Только финальная LLM
-│   ├── config_judge.json            # Только судья
-│   ├── README.md
-│   └── CONFIG.md
-└── baseline/               # Baseline тестирование
-    ├── validate_baseline.py
-    ├── run_config.json
-    └── README.md
+│   ├── config_*.json                # Конфиги стадий (memory_only / final_llm_only / judge_only)
+│   ├── results_judge_bundle_*/      # Итоговые validation_results.json по стратегиям
+│   └── README.md, CONFIG.md, README_CONFIG.md
+├── baseline/               # Baseline тестирование (full-context)
+│   ├── validate_baseline.py
+│   ├── run_config_full_context_*.json
+│   └── baseline_tests/              # validation_results.json по моделям
+└── metrics/                # Сводные выжимки: metrics-baseline.json, metrics-gigamemory.json
 ```
 
-### Режимы валидации (v3)
+> Сырые прогоны (векторные БД, DST-снапшоты, промежуточные ответы) весят гигабайты и в репозиторий не коммитятся — см. секцию «Что лежит в репозитории» в [validation/README.md](validation/README.md).
+
+### Режимы валидации 
 
 Скрипт `validate_longmemeval.py` поддерживает 4 режима работы:
 
