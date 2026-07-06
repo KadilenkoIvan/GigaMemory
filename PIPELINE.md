@@ -255,7 +255,7 @@ Pipeline поддерживает два backend-а для слот-модели
 
 ### 3.6 RAGU интеграция
 
-RAGU — **активный семантический слой**, а не вспомогательный модуль для визуализации (визуализация графа на pyvis/networkx читает DST state напрямую и RAGU не использует).
+RAGU используется точечно, для двух задач: эмбеддинги для **семантической дедупликации** и **semantic search** для стратегии `topk_graph_records`.
 
 - `dst_memory/storage/ragu_graph_processor.py`
   - адаптер `SentenceTransformerEmbedder` (эмбеддер `deepvk/USER-bge-m3`);
@@ -459,7 +459,7 @@ python DST_memory/run.py pipeline test --dataset-path tests/fixtures/format_exam
 | `GET /dialogue/{id}/graph/html` | Интерактивный HTML через pyvis (тёмный фон, forceAtlas2, drag & drop, hover tooltips, легенды слотов + TTL). |
 
 Визуализация повторяет логику отрисовки графа RAGU (`RAGU/scripts/visualize_knowledge_graph.py`), но реализована автономно в `api.py` — без импорта пакета RAGU. Ключевая деталь: сущности **scoped по слоту** (id вида `slot\0entity`), поэтому каждый слот образует **полностью раздельный** подграф со своим узлом «пользователь» — слоты не схлопываются в один общий узел и не пересекаются.
-| `DELETE /dialogue/{id}` | `pipeline.clear_memory(id)` — сброс DST-состояния и RAGU-графа. |
+| `DELETE /dialogue/{id}` | `pipeline.clear_memory(id)` — сброс DST-состояния диалога. |
 
 ### Параллельная запись
 
@@ -475,7 +475,6 @@ python DST_memory/run.py pipeline test --dataset-path tests/fixtures/format_exam
 ### Персистентность
 
 Если `api.session_dir` задан, после каждого `write_to_memory` состояние сохраняется в `<session_dir>/<dialogue_id>/state.json`.  
-RAGU-граф хранится в `api.ragu_storage_path` (разделяется между всеми диалогами).
 
 ---
 
@@ -600,22 +599,10 @@ python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub 
 python DST_memory/run.py --llm-mode stub --slot-use-stub --memory-gate-use-stub --no-final-llm --memory-strategy topk_graph_records --graph-top-k-records 20 pipeline test --dataset-path tests/fixtures/format_example.jsonl --output-path DST_memory/smoke_topk.json
 ```
 
----
-
-## 13. Текущие технические ограничения
-
-- **Python 3.13 + tokenizers Rust**: `encode_batch` падает с TypeError на Python 3.13. Обход: `use_fast=False` для BERT-классификатора, `backend_tokenizer.encode()` fallback в LocalHFServing. Долгосрочный фикс: `pip install tokenizers --upgrade` до версии ≥ 0.21.
-- **Python 3.13 + numpy 1.26**: `OverflowError` в `numpy.core.getlimits` при импорте matplotlib. Решение: `uv pip install "numpy>=2.0"` (или `override-dependencies = ["numpy>=2.0"]` в `pyproject.toml`).
-- **vLLM + Windows**: vLLM не поддерживает Windows нативно. Используйте WSL2 или Docker. Клиентская часть (`VLLMSlotServing`) работает на любой ОС, серверная часть (vLLM process) — только Linux/WSL2.
-- `ttl_mode=mode3` (отдельный вызов модели для TTL) не реализован — используется `mode2`.
-- Качество retrieval зависит от embedder-модели и качества триплетов.
-- Семантическая дедупликация требует инициализации embedder в `RaguGraphProcessor`; если embedder не загружен — пропускается с предупреждением.
-- REST API: RAGU-граф разделяется между всеми диалогами (один `ragu_storage_path`); для полной изоляции — запускать отдельные процессы с разными конфигами.
-- Параллельный режим (`--parallel-write`) не защищён от конкурентных POST-запросов к одному `dialogue_id` через API — в sequential режиме это гарантирует per-dialogue lock.
 
 ---
 
-## 14. Что смотреть при отладке
+## 13. Что смотреть при отладке
 
 - `run.py` — CLI и routing команд.
 - `dst_memory/core/pipeline.py` — memory strategy и answer flow.

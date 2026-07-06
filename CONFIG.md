@@ -62,8 +62,8 @@
 | `deletion_max_tokens` | int | бюджет выходных токенов для отдельного deletion-вызова (default `256`) |
 | `memory_gate_max_tokens` | int | бюджет выходных токенов для memory gate (default `200`) |
 | `prompt_language` | str | язык UI промптов для slot/triplet/gate/deletion/conflict и **финальной LLM** (`dst_memory/prompts/<ru|en>/final_llm_messages.py`): `ru` или `en` (хранилище фактов и канонические ключи слотов не меняются) |
-| `use_ragu` | bool | должен быть `true` (RAGU-only проект) |
-| `ragu_embedder_model` | str | модель эмбеддингов для RAGU |
+| `use_ragu` | bool | включает RAGU-бэкенд (эмбеддинги для семантической дедупликации и retrieval для стратегии `topk_graph_records`); должен быть `true` |
+| `ragu_embedder_model` | str | модель эмбеддингов для семантической дедупликации и стратегии `topk_graph_records` |
 | `ragu_storage_path` | str | путь к RAGU storage; в интерактивном режиме автоматически переопределяется как `<session_dir>/<dialogue_id>/ragu` если задан `session_dir` |
 | `session_dir` | str | директория сессий; каждый запуск интерактивного режима создаёт `<session_dir>/<dialogue_id>_<YYYY-MM-DD_HH-MM-SS>/`; DST state сохраняется как `state.json`, RAGU граф — в подпапке `ragu/`; пустая строка = только in-memory |
 | `parallel_write_mode` | bool | включить параллельный режим записи в граф: ответ строится немедленно из текущего графа, запись в граф идёт в фоновом потоке; аналог флага `--parallel-write` в CLI |
@@ -150,7 +150,6 @@
 | key | type | description |
 |---|---|---|
 | `session_dir` | str | директория для персистентного хранения состояний диалогов; каждый диалог → `<session_dir>/<dialogue_id>/state.json`; пустая строка = только in-memory |
-| `ragu_storage_path` | str | путь к общему RAGU-хранилищу для всех диалогов API; если пусто — используется значение из `shared.ragu_storage_path`; рекомендуется задать отдельный путь, например `api_sessions/ragu` |
 | `host` | str | хост для uvicorn (default `0.0.0.0`) |
 | `port` | int | порт для uvicorn (default `8000`) |
 

@@ -92,7 +92,7 @@ make start
   - `prompts/` — сборщики промптов; тексты в `ru/` и `en/`; язык UI задаётся `prompt_language` в конфиге (включая тексты **финальной** LLM и real-time/parallel-write notices)
   - `slots/` — онтология, нормализация, slot_select_client, slot_update_client
   - `triplets/` — extraction, conflict, deletion, negation_detector
-  - `storage/` — RAGU backend (ragu_graph_processor)
+  - `storage/` — эмбеддер и retrieval-хранилище (ragu_graph_processor)
   - `clients/` — serving, classifier, memory_gate_client, llm_client
   - `utils/` — io_utils, dotenv_loader, run_config_loader
 - `run_config.json` — runtime-конфиг по умолчанию (для валидации/тестов).
@@ -182,7 +182,7 @@ SLOT_LLM_API_URL=http://host.docker.internal:8001/v1
 
 - **`api`** — GigaMemory FastAPI-сервер; всегда запускается; healthcheck на `/health`
 - **`vllm`** — слот-модель (Qwen3.5-4B-AWQ по умолчанию); запускается только с `--profile vllm`; `api` ждёт его готовности через healthcheck перед стартом
-- **`api_sessions`** (volume) — DST-граф, RAGU storage, состояния диалогов; переживает рестарт контейнера
+- **`api_sessions`** (volume) — DST-граф и состояния диалогов; переживает рестарт контейнера
 - **`vllm_cache`** (volume) — KV-кеш vLLM; ускоряет холодный старт при перезапуске
 
 ### Пересборка после изменений кода
@@ -208,8 +208,7 @@ flowchart TD
     SP --> DEDUP
     DEDUP --> CONF[Разрешение конфликтов]
     CONF --> DST[DST state]
-    DST --> RAGU[RAGU граф]
-    RAGU --> DONE[Запись завершена]
+    DST --> DONE[Запись завершена]
 
     Q[Вопрос пользователя] --> STRAT{Стратегия памяти}
     STRAT -->|full_graph_json| FG[Полный граф JSON]
@@ -387,7 +386,7 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 - `--slot-model-path` — путь/id к Qwen-модели для слотов/триплетов (локальной или запущенной в vLLM)
 - `--slot-llm-load-quantization` (`none`|`8bit`|`4bit`) — BitsAndBytes для slot/triplet модели (только `slot_llm_mode=local`); в JSON: `shared.slot_llm_load_quantization`
 - `--importance-model-path` — путь к BERT-классификатору важности (пусто = stub, важность всегда True)
-- `--ragu-embedder-model` — модель эмбеддингов для RAGU
+- `--ragu-embedder-model` — модель эмбеддингов (семантическая дедупликация и стратегия `topk_graph_records`)
 
 **vLLM-режим (JSON config only — нет CLI-флагов):**
 - `shared.slot_llm_mode` — `"local"` (HF transformers in-process) или `"vllm"` (внешний vLLM-сервер)
@@ -401,7 +400,7 @@ uv run python DST_memory/run.py pipeline inference single-turn --dialogue-id d1 
 - `shared.relevant_slots_always_include_identity` — в режиме `relevant_slots_full` всегда передавать слот `IDENTITY` в финальную LLM (обход недобора у маленьких моделей)
 
 **Хранение и сессии:**
-- `--ragu-storage-path` — путь к RAGU storage
+- `--ragu-storage-path` — путь к retrieval-хранилищу (используется стратегией `topk_graph_records`)
 - `--session-dir` — директория сессий; каждый запуск создаёт `<session_dir>/<dialogue_id>_<datetime>/`
 - `--dialogue-id` — базовый id диалога (суффикс datetime добавляется автоматически)
 
