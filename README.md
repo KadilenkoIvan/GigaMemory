@@ -4,7 +4,7 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`DST_memory` — модуль долгосрочной памяти LLM на основе DST-графа фактов и RAGU retrieval.
+`DST_memory` — модуль долгосрочной памяти LLM на основе DST-графа фактов.
 
 ## Quick Start
 
